@@ -1,0 +1,10 @@
+extends:
+  - recommended
+
+rules:
+  struct: off
+  operation-summary: warn
+  operation-operationId: off
+  operation-4xx-response: warn
+  tag-description: off
+  info-license-strict: off

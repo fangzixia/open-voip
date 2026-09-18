@@ -1,0 +1,68 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - depguard
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - unused
+
+linters-settings:
+  depguard:
+    rules:
+      layering-biz:
+        files:
+          - "internal/layers/biz/**"
+        deny:
+          - pkg: open-voip/internal/layers/control
+            desc: L4 禁止 import L3
+          - pkg: open-voip/internal/layers/media
+            desc: L4 禁止 import L2
+          - pkg: github.com/pion
+            desc: L4 禁止 import Pion
+        allow:
+          - $gostd
+          - pkg: open-voip/internal/layers/biz
+          - pkg: open-voip/internal/ports
+          - pkg: open-voip/internal/ports/dto
+          - pkg: open-voip/internal/errs
+          - pkg: open-voip/internal/store
+          - pkg: open-voip/internal/config
+      layering-control:
+        files:
+          - "internal/layers/control/**"
+        deny:
+          - pkg: open-voip/internal/layers/biz
+            desc: L3 禁止 import L4
+          - pkg: open-voip/internal/layers/media
+            desc: L3 禁止直接 import L2 实现（应使用 ports.MediaPort）
+          - pkg: open-voip/internal/store
+            desc: L3 禁止直接 SQL
+        allow:
+          - $gostd
+          - pkg: open-voip/internal/layers/control
+          - pkg: open-voip/internal/ports
+          - pkg: open-voip/internal/ports/dto
+          - pkg: open-voip/internal/errs
+      layering-media:
+        files:
+          - "internal/layers/media/**"
+        deny:
+          - pkg: open-voip/internal/layers/biz
+          - pkg: open-voip/internal/layers/control
+          - pkg: open-voip/internal/store
+        allow:
+          - $gostd
+          - pkg: open-voip/internal/layers/media
+          - pkg: open-voip/internal/ports
+          - pkg: open-voip/internal/ports/dto
+          - pkg: open-voip/internal/errs
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck

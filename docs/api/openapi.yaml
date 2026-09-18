@@ -1,0 +1,1398 @@
+openapi: 3.1.0
+info:
+  title: Open VoIP API
+  version: 1.0.0
+  description: |
+    内网呼叫中心 REST API。WebSocket 见 ../events.md。
+    需求 ID 见各 operation 的 x-requirement-id。
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://cc.internal
+    description: 内网示例（以 config.yml public_url 为准）
+
+tags:
+  - name: Auth
+  - name: Users
+  - name: Agents
+  - name: Queues
+  - name: Skills
+  - name: IVR
+  - name: Guest
+  - name: Calls
+  - name: MediaSignaling
+  - name: CDR
+  - name: Recordings
+  - name: Reports
+  - name: Webhooks
+  - name: Config
+  - name: Audit
+  - name: Supervisor
+  - name: Platform
+  - name: AdminMaintenance
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Platform]
+      security: []
+      summary: 存活探针
+      x-requirement-id: PLAT-06
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/status:
+    get:
+      tags: [Platform]
+      summary: 运行状态摘要
+      x-requirement-id: PLAT-06,DEPLOY-08
+      x-roles: [admin, supervisor]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: 登录
+      x-requirement-id: PLAT-02
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Tokens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: 刷新 access token
+      x-requirement-id: PLAT-02
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: 登出并撤销
+      x-requirement-id: PLAT-02
+      responses:
+        "204":
+          description: No content
+
+  /api/v1/users:
+    get:
+      tags: [Users]
+      summary: 用户列表
+      x-requirement-id: ADM-01
+      x-roles: [admin]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+    post:
+      tags: [Users]
+      summary: 创建用户
+      x-requirement-id: ADM-01,AGENT-01
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreate"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /api/v1/users/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/UserId"
+    get:
+      tags: [Users]
+      x-roles: [admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    patch:
+      tags: [Users]
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserUpdate"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    delete:
+      tags: [Users]
+      x-roles: [admin]
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/users/{userId}/reset-password:
+    post:
+      tags: [Users]
+      x-requirement-id: AGENT-01
+      x-roles: [admin]
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: 新临时密码或邮件流程（实现定义）
+
+  /api/v1/agents/me:
+    get:
+      tags: [Agents]
+      summary: 当前坐席资料
+      x-roles: [agent, supervisor, admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+
+  /api/v1/agents/{agentId}/check-in:
+    post:
+      tags: [Agents]
+      summary: 签入队列
+      x-requirement-id: AGENT-02
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                queue_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSession"
+
+  /api/v1/agents/{agentId}/check-out:
+    post:
+      tags: [Agents]
+      x-requirement-id: AGENT-02
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "204":
+          description: OK
+
+  /api/v1/agents/{agentId}/state:
+    put:
+      tags: [Agents]
+      summary: 设置示闲/示忙等
+      x-requirement-id: AGENT-03,AGENT-04
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentStateUpdate"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSession"
+
+  /api/v1/queues:
+    get:
+      tags: [Queues]
+      x-requirement-id: ADM-01,QUEUE-01
+      x-roles: [admin, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueList"
+    post:
+      tags: [Queues]
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueueCreate"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Queue"
+
+  /api/v1/queues/{queueId}:
+    parameters:
+      - $ref: "#/components/parameters/QueueId"
+    get:
+      tags: [Queues]
+      x-roles: [admin, supervisor, agent]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Queue"
+    patch:
+      tags: [Queues]
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueueUpdate"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Queue"
+    delete:
+      tags: [Queues]
+      x-roles: [admin]
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/queues/{queueId}/agents:
+    put:
+      tags: [Queues]
+      summary: 绑定坐席
+      x-roles: [admin]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/skills:
+    get:
+      tags: [Skills]
+      x-requirement-id: AGENT-06,ADM-01
+      x-roles: [admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Skill"
+    post:
+      tags: [Skills]
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillCreate"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skill"
+
+  /api/v1/ivr/flows:
+    get:
+      tags: [IVR]
+      x-requirement-id: ADM-02
+      x-roles: [admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/IVRFlow"
+    post:
+      tags: [IVR]
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IVRFlowCreate"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IVRFlow"
+
+  /api/v1/ivr/flows/{flowId}/publish:
+    post:
+      tags: [IVR]
+      summary: 发布 IVR 快照
+      x-requirement-id: ADM-04,IVR-01
+      x-roles: [admin]
+      parameters:
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IVRPublishedSnapshot"
+
+  /api/v1/guest/sessions:
+    post:
+      tags: [Guest]
+      summary: 创建访客入会 token
+      x-requirement-id: ADM-05
+      x-roles: [admin, agent]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GuestSessionCreate"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuestSession"
+
+  /api/v1/calls/outbound:
+    post:
+      tags: [Calls]
+      summary: 外呼
+      x-requirement-id: CALL-01,MEDIA-09
+      x-roles: [agent]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutboundCallRequest"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+
+  /api/v1/calls/{callId}/answer:
+    post:
+      tags: [Calls]
+      x-requirement-id: QUEUE-03
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+
+  /api/v1/calls/{callId}/hangup:
+    post:
+      tags: [Calls]
+      x-roles: [agent, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "204":
+          description: OK
+
+  /api/v1/calls/{callId}/hold:
+    post:
+      tags: [Calls]
+      x-requirement-id: MEDIA-05
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                on:
+                  type: boolean
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/transfer:
+    post:
+      tags: [Calls]
+      x-requirement-id: CALL-02,VIDEO-09
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferRequest"
+      responses:
+        "200":
+          description: OK
+        "422":
+          $ref: "#/components/responses/BusinessError"
+
+  /api/v1/calls/{callId}/video/request:
+    post:
+      tags: [Calls]
+      x-requirement-id: VIDEO-06
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "202":
+          description: 已通知对端
+
+  /api/v1/calls/{callId}/legs/{legId}/offer:
+    post:
+      tags: [MediaSignaling]
+      summary: 提交 SDP Offer 或获取 Offer
+      x-requirement-id: MEDIA-01,VIDEO-01
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+        - $ref: "#/components/parameters/LegId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SDPPayload"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SDPPayload"
+
+  /api/v1/calls/{callId}/legs/{legId}/answer:
+    post:
+      tags: [MediaSignaling]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+        - $ref: "#/components/parameters/LegId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SDPPayload"
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/legs/{legId}/ice:
+    post:
+      tags: [MediaSignaling]
+      x-requirement-id: MEDIA-04
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+        - $ref: "#/components/parameters/LegId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ICECandidate"
+      responses:
+        "204":
+          description: OK
+
+  /api/v1/calls/{callId}/turn-credentials:
+    get:
+      tags: [MediaSignaling]
+      x-requirement-id: VIDEO-12,MEDIA-04b
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TURNCredentials"
+
+  /api/v1/cdr:
+    get:
+      tags: [CDR]
+      x-requirement-id: CDR-01,ADM-03
+      x-roles: [admin, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: queue_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CDRList"
+
+  /api/v1/cdr/export.csv:
+    get:
+      tags: [CDR]
+      x-requirement-id: CDR-03
+      x-roles: [admin]
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  /api/v1/recordings:
+    get:
+      tags: [Recordings]
+      x-requirement-id: ADM-03,REC-04
+      x-roles: [admin, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - name: call_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingList"
+
+  /api/v1/recordings/{recordingId}/download:
+    get:
+      tags: [Recordings]
+      x-requirement-id: REC-04
+      x-roles: [admin, supervisor]
+      parameters:
+        - name: recordingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 二进制流
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /api/v1/reports/live:
+    get:
+      tags: [Reports]
+      x-requirement-id: RPT-01
+      x-roles: [admin, supervisor]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveReport"
+
+  /api/v1/reports/historical:
+    get:
+      tags: [Reports]
+      x-requirement-id: RPT-02,RPT-03
+      x-roles: [admin]
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: queue_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoricalReport"
+
+  /api/v1/webhooks/subscriptions:
+    get:
+      tags: [Webhooks]
+      x-requirement-id: EVT-04
+      x-roles: [admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WebhookSubscription"
+    post:
+      tags: [Webhooks]
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookSubscriptionCreate"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSubscription"
+
+  /api/v1/webhooks/deliveries/{deliveryId}/retry:
+    post:
+      tags: [Webhooks]
+      x-requirement-id: EVT-04
+      x-roles: [admin]
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: 已触发重试
+
+  /api/v1/config/export:
+    get:
+      tags: [Config]
+      x-requirement-id: DEPLOY-06
+      x-roles: [admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/v1/config/import:
+    post:
+      tags: [Config]
+      x-requirement-id: DEPLOY-06
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/audit/logs:
+    get:
+      tags: [Audit]
+      x-requirement-id: PLAT-05
+      x-roles: [admin]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - name: user_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditLog"
+
+  /api/v1/supervisor/agents/{agentId}/force-check-out:
+    post:
+      tags: [Supervisor]
+      x-requirement-id: AGENT-05
+      x-roles: [supervisor, admin]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/supervisor/calls/{callId}/listen:
+    post:
+      tags: [Supervisor]
+      x-requirement-id: CALL-04
+      x-roles: [supervisor]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          description: 返回 supervisor leg 信令入口信息
+
+  /api/v1/admin/recordings/purge-expired:
+    post:
+      tags: [AdminMaintenance]
+      summary: 清理过期录音（无内置定时任务）
+      x-requirement-id: REC-05
+      x-roles: [admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted_count:
+                    type: integer
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+    AgentId:
+      name: agentId
+      in: path
+      required: true
+      schema:
+        type: string
+    QueueId:
+      name: queueId
+      in: path
+      required: true
+      schema:
+        type: string
+    CallId:
+      name: callId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    LegId:
+      name: legId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: 未认证
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BusinessError:
+      description: 业务错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    StatusResponse:
+      type: object
+      properties:
+        db_ok:
+          type: boolean
+        active_calls:
+          type: integer
+        ws_connections:
+          type: integer
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+        token_type:
+          type: string
+          default: Bearer
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, supervisor, agent]
+        created_at:
+          type: string
+          format: date-time
+
+    UserCreate:
+      type: object
+      required: [username, password, role]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [admin, supervisor, agent]
+
+    UserUpdate:
+      type: object
+      properties:
+        role:
+          type: string
+        disabled:
+          type: boolean
+
+    UserList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        extension:
+          type: string
+        video_capable:
+          type: boolean
+        skill_ids:
+          type: array
+          items:
+            type: string
+
+    AgentSession:
+      type: object
+      properties:
+        agent_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/AgentState"
+        busy_reason:
+          type: string
+        queue_ids:
+          type: array
+          items:
+            type: string
+
+    AgentState:
+      type: string
+      enum: [offline, idle, busy, ringing, on_call, acw]
+
+    AgentStateUpdate:
+      type: object
+      required: [state]
+      properties:
+        state:
+          $ref: "#/components/schemas/AgentState"
+        busy_reason:
+          type: string
+
+    Queue:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        video_enabled:
+          type: boolean
+        max_wait_sec:
+          type: integer
+        strategy:
+          type: string
+          enum: [longest_idle, round_robin]
+        overflow_policy:
+          type: string
+        recording_policy:
+          type: string
+          enum: [off, audio, video_composite]
+
+    QueueCreate:
+      allOf:
+        - $ref: "#/components/schemas/Queue"
+      required: [name]
+
+    QueueUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        video_enabled:
+          type: boolean
+        max_wait_sec:
+          type: integer
+
+    QueueList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Queue"
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    Skill:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+
+    SkillCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+
+    IVRFlow:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        draft_config:
+          type: object
+          additionalProperties: true
+
+    IVRFlowCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        draft_config:
+          type: object
+
+    IVRPublishedSnapshot:
+      type: object
+      properties:
+        flow_id:
+          type: string
+        version:
+          type: integer
+        published_at:
+          type: string
+          format: date-time
+        config:
+          type: object
+
+    GuestSessionCreate:
+      type: object
+      required: [queue_id]
+      properties:
+        queue_id:
+          type: string
+        ttl_sec:
+          type: integer
+        allowed_media:
+          type: string
+          enum: [audio, video]
+
+    GuestSession:
+      type: object
+      properties:
+        token:
+          type: string
+        guest_url:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    Call:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        state:
+          type: string
+        direction:
+          type: string
+          enum: [inbound, outbound, internal]
+        session_type:
+          type: string
+          enum: [audio, video, mixed]
+        queue_id:
+          type: string
+        agent_id:
+          type: string
+
+    OutboundCallRequest:
+      type: object
+      required: [destination]
+      properties:
+        destination:
+          type: string
+          description: 分机或 E.164
+
+    TransferRequest:
+      type: object
+      required: [mode, target]
+      properties:
+        mode:
+          type: string
+          enum: [blind, consult]
+        target:
+          type: string
+          description: agent_id 或 extension
+
+    SDPPayload:
+      type: object
+      properties:
+        sdp:
+          type: string
+        type:
+          type: string
+          enum: [offer, answer]
+
+    ICECandidate:
+      type: object
+      properties:
+        candidate:
+          type: string
+        sdp_mid:
+          type: string
+        sdp_mline_index:
+          type: integer
+
+    TURNCredentials:
+      type: object
+      properties:
+        urls:
+          type: array
+          items:
+            type: string
+        username:
+          type: string
+        credential:
+          type: string
+        ttl:
+          type: integer
+
+    CDR:
+      type: object
+      properties:
+        call_id:
+          type: string
+        direction:
+          type: string
+        caller:
+          type: string
+        callee:
+          type: string
+        queue_id:
+          type: string
+        agent_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        answered_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        duration_sec:
+          type: integer
+        wait_sec:
+          type: integer
+        result:
+          type: string
+        session_type:
+          type: string
+        recording_ids:
+          type: array
+          items:
+            type: string
+
+    CDRList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CDR"
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    Recording:
+      type: object
+      properties:
+        id:
+          type: string
+        call_id:
+          type: string
+        kind:
+          type: string
+          enum: [audio, video, composite]
+        path:
+          type: string
+        retention_until:
+          type: string
+          format: date-time
+
+    RecordingList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Recording"
+
+    LiveReport:
+      type: object
+      properties:
+        online_agents:
+          type: integer
+        active_calls:
+          type: integer
+        waiting_calls:
+          type: integer
+
+    HistoricalReport:
+      type: object
+      properties:
+        answer_rate:
+          type: number
+        avg_wait_sec:
+          type: number
+        avg_talk_sec:
+          type: number
+        abandon_rate:
+          type: number
+        video_answer_rate:
+          type: number
+
+    WebhookSubscription:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        event_filter:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+
+    WebhookSubscriptionCreate:
+      type: object
+      required: [url, event_filter]
+      properties:
+        url:
+          type: string
+          format: uri
+        secret:
+          type: string
+        event_filter:
+          type: array
+          items:
+            type: string
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        action:
+          type: string
+        resource:
+          type: string
+        created_at:
+          type: string
+          format: date-time

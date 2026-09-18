@@ -1,0 +1,43 @@
+# Open VoIP 配置示例（唯一配置源，不使用环境变量覆盖）
+
+server:
+  listen: "0.0.0.0:8080"
+  public_url: "https://cc.internal"
+
+database:
+  dsn: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip port=5432 sslmode=disable"
+
+recordings:
+  dir: "./data/recordings"
+
+jwt:
+  access_ttl_sec: 3600
+  refresh_ttl_sec: 604800
+  signing_key: "replace-with-long-random-secret"
+
+log:
+  level: info
+  format: json
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+
+static:
+  dir: "./static"
+
+ice:
+  stun_urls:
+    - "stun:stun.l.google.com:19302"
+
+turn:
+  enabled: false
+  urls: []
+  auth_secret: ""
+
+static_serve: true
+
+# 前端独立部署时使用 deploy/config.example.split.yml（static_serve: false + cors）
+cors:
+  allowed_origins: []
