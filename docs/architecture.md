@@ -1,11 +1,11 @@
 # Open VoIP 系统设计
 
-> 版本：v0.3（与需求 [requirements.md](./requirements.md) v0.2 对齐）  
+> 版本：v0.4（与需求 [requirements.md](./requirements.md) v0.3 对齐）  
 > 场景：小型公司内网、单机 All-in-One；Go 服务端 + Pion SFU + Lit/Vite 前端  
 
 本文档为 **系统设计主文档**。功能需求以 requirements 为准；本文描述架构、**四级分层**、层间契约与代码结构。
 
-**仓库布局**：设计与 API 契约位于仓库 `docs/`；可运行代码位于 `app/`（Go、前端、deploy），二者分离。
+**仓库布局**：设计与 API 契约位于仓库 `docs/`；Go 服务端位于 `app/`，Lit 前端位于仓库根目录 `frontend/`，二者分离。
 
 ---
 
@@ -77,7 +77,7 @@ flowchart TB
 | **L3** | 信令与呼叫控制层 | 单通 **Call** 的状态机与媒体编排时机 | `layers/control`：FSM、转接/三方/监听、IVR 运行时、WebRTC 信令编排 |
 | **L4** | 业务与运营层 | 组织、路由策略、话单与对外集成 | `layers/biz`：Auth/RBAC、坐席/队列/技能、ACD 选人、IVR 配置发布、CDR/报表、Webhook |
 
-**L1 与进程边界**：浏览器与 Caddy/coturn 属于接入层；Go 进程内的 `internal/app` 是 **接入适配层**（HTTP/WebSocket），只做鉴权与协议转换，不包含 ACD/FSM/SFU 算法。
+**L1 与进程边界**：浏览器与 Nginx/coturn 属于接入层；Go 进程内的 `internal/app` 是 **接入适配层**（HTTP/WebSocket），只做鉴权与协议转换，不包含 ACD/FSM/SFU 算法。
 
 ### 2.2 各层职责边界（只做什么 / 不做什么）
 
@@ -107,7 +107,7 @@ flowchart LR
 | `layers/control` → `ports`；通过注入的 **MediaPort** 调 L2 | `layers/control` → `layers/biz` |
 | `layers/media` → `ports`、Pion/SIP 库 | `layers/media` → `layers/control` / `layers/biz` / `store` |
 | `app/http`、`app/ws` → 各层 **Service 或 Port 接口** | handler 内实现 ACD/FSM/SFU |
-| **`cmd/open-voip` / `app/bootstrap` 唯一** 组装各层具体实现 | 各层 package 互相 wire |
+| **`cmd/open-voip` / `internal/app/run.go` 唯一** 组装各层具体实现 | 各层 package 互相 wire |
 
  enforcement：`app/.golangci.yml`（depguard），CI 违反分层即失败。
 
@@ -117,15 +117,19 @@ flowchart LR
 
 | Port | 调用方 | 实现方 | 说明 |
 |------|--------|--------|------|
-| **CallControlPort** | L4（Guest、外呼 API 等） | L3 | `StartInbound`、`Answer`、`Hangup`、`Transfer`、`Outbound`；L4 **不** 持有 MediaPort |
-| **ACDDispatchPort** | L3 | L4 `queue/acd` | `RequestAgent(ctx)` → agent_id；**ACD 不** import Call FSM |
+| **CallControlPort** | L4（Guest、外呼 API 等） | L3 | `StartInbound`、`Answer`、`Hangup`、`Transfer`、`CompleteTransfer`、`Outbound`；L4 **不** 持有 MediaPort |
+| **SignalingPort** | `app/http` 媒体信令 | L3 | Offer/Answer/ICE/TURN；禁止 handler 直连 MediaPort |
+| **CallPersistencePort** | L3 | `store` | Call/Leg 持久化；L3 禁止 import store |
+| **ACDDispatchPort** | L3 | L4 `queue` | `RequestAgent(ctx)` → agent_id；**ACD 不** import Call FSM |
 | **MediaPort** | L3 | L2 | Room、Track、Hold、DTMF、Recording、SIP leg |
-| **ConfigSnapshotPort** | L3 IVR/路由 | L4 | 只读已发布 queue/ivr/工作时间快照 |
-| **AgentDirectoryPort** | L3 | L4 | 分机号 → agent、video_capable |
+| **ConfigSnapshotPort** | L3 IVR/路由 | L4 | 只读队列配置与已发布 IVR 快照（队列为实时读库，IVR 为版本化快照） |
+| **AgentDirectoryPort** | L3 | L4 | 分机号 → agent、video_capable、`SetState` |
 | **RecordingPolicyPort** | L3 | L4 | 按队列返回录音策略 |
+| **RecordingStorePort** | L3 | L4 | 录音元数据落库 |
 | **CDRRecorderPort** | L3（FSM 迁移点） | L4 | 写 CDR；L3 不直接 SQL |
 | **CallEventPublisher** | L3 | `app/ws` | `call.*`、`video.*` |
 | **AgentEventPublisher** | L4 | `app/ws` | `agent.state_changed` 等 |
+| **WebhookDispatcher** | `app/ws` / L4 | L4 webhook | 关键事件 HTTP 回调 |
 
 **呼入分配（层间协作示例）**
 
@@ -139,7 +143,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph L1 [L1_Access]
-    Caddy[Caddy]
+    Nginx[Nginx]
     Fe[frontends]
     Turn[coturn]
   end
@@ -174,8 +178,8 @@ flowchart TB
 
   DB[(DB)]
 
-  Fe --> Caddy --> HTTP
-  Caddy --> WS
+  Fe --> Nginx --> HTTP
+  Nginx --> WS
   HTTP --> L4
   HTTP --> SigFacade
   WS --> CallCtl
@@ -183,7 +187,7 @@ flowchart TB
   CallCtl --> QueueACD
   CallCtl --> MediaImpl
   CallCtl --> CDRBiz
-  IVRRt --> IVRPub
+  IVRPub --> IVRRt
   SigFacade --> MediaImpl
   MediaImpl --> SFU
   MediaImpl --> SIP
@@ -257,7 +261,7 @@ flowchart TB
 
 ## 4. 代码结构（与四层对应）
 
-代码根目录为 **`app/`**（与 `docs/` 分离）：
+代码根目录 **`app/`** 为服务端；前端在仓库根目录 **`frontend/`**：
 
 ```
 app/
@@ -270,8 +274,8 @@ app/
       media/          # L2
     app/              # L1 协议适配（http/ws/run）
     store/            # GORM 持久化（主要 L4）
-  frontend/           # L1 Lit 客户端
-  deploy/             # systemd、config 示例
+  deploy/             # systemd、config 示例、Nginx
+frontend/             # L1 Lit 客户端（独立构建与托管）
 ```
 
 领域模型、MediaPort、REST/事件详见 [technical-design.md](./technical-design.md)、[events.md](./events.md)、[docs/api/](./api/)。
@@ -326,7 +330,7 @@ COMMENT ON COLUMN calls.session_type IS '媒介类型：audio / video / mixed';
 ### 5.3 评审与 CI（建议）
 
 - PR 检查清单：新增 struct / migration 是否满足 §5.1、§5.2
-- 可选：`golangci-lint` 对导出符号检查是否缺少 doc comment（如 `revive` 的 `exported` 规则）
+- 可选：`golangci-lint` 对导出符号检查是否缺少 doc comment（如 `revive` 的 `exported` 规则）。当前 CI **未默认启用** `exported`，以 PR 清单与人工评审为主。
 
 ---
 
@@ -348,4 +352,4 @@ COMMENT ON COLUMN calls.session_type IS '媒介类型：audio / video / mixed';
 |------|------|------|
 | v0.1 | 2026-09-18 | 初稿：四级分层、Port 契约、部署与目录 |
 | v0.2 | 2026-09-18 | 新增 §5 工程规范：Go 与数据库中文注释 |
-| v0.3 | 2026-09-18 | 文档体系索引；二进制+PostgreSQL；组合根改为 cmd/bootstrap |
+| v0.4 | 2026-09-18 | 组合根 `run.go`；Port 表补全；Nginx；IVR 快照方向；前端独立目录 |

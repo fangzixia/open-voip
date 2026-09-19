@@ -21,6 +21,14 @@ type InboundRequest struct {
 	GuestSessionID string
 	// SessionType 期望媒介类型。
 	SessionType SessionType
+	// Priority 入队优先级，0 为普通。
+	Priority int
+	// Caller 主叫标识（SIP FROM 或访客）。
+	Caller string
+	// SkipIVR 为 true 时即使队列绑定 IVR 也直接排队。
+	SkipIVR bool
+	// CallID 可选预分配通话 ID（SIP 呼入须先标记 PCMU 房间）。
+	CallID string
 }
 
 // OutboundRequest 坐席外呼或分机互拨请求。
@@ -29,16 +37,18 @@ type OutboundRequest struct {
 	AgentID string
 	// Destination 目标号码或分机。
 	Destination string
+	// TrunkID PSTN 中继 ID，可空（分机互拨不需要）。
+	TrunkID string
 }
 
 // TransferRequest 转接参数。
 type TransferRequest struct {
 	// Mode blind 或 consult。
-	Mode string
+	Mode string `json:"mode"`
 	// TargetAgentID 目标坐席，与 TargetQueueID 二选一。
-	TargetAgentID string
+	TargetAgentID string `json:"target_agent_id"`
 	// TargetQueueID 目标队列。
-	TargetQueueID string
+	TargetQueueID string `json:"target_queue_id"`
 }
 
 // HangupReason 挂断原因枚举字符串。

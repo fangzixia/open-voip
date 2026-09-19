@@ -16,6 +16,8 @@ type Call struct {
 	QueueID *string `gorm:"type:uuid;index;comment:关联队列 ID"`
 	// ParentCallID 咨询转等场景的父通话 ID。
 	ParentCallID *string `gorm:"type:uuid;index;comment:父通话 ID"`
+	// Priority 入队优先级，数值越大越优先。
+	Priority int `gorm:"not null;default:0;comment:优先级"`
 	// CreatedAt 创建时间。
 	CreatedAt time.Time `gorm:"comment:创建时间"`
 	// UpdatedAt 最后状态变更时间。

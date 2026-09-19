@@ -41,7 +41,10 @@
 | `call.ended` | 结束 | `call_id`, `reason`, `result` |
 | `call.hold` | 保持 | `call_id`, `leg_id` |
 | `call.unhold` | 恢复 | `call_id`, `leg_id` |
-| `call.transferring` | 转接中 | `call_id`, `target_agent_id` |
+| `call.transferring` | 转接中 | `call_id`, `target_agent_id`, `mode` |
+| `call.consulting` | 咨询转目标已接听 | `call_id`, `agent_id` |
+| `call.transferred` | 咨询转完成 | `call_id`, `from_agent_id` |
+| `call.voicemail` | 留言箱放音 | `call_id`, `message` |
 | `agent.state_changed` | 坐席状态 | `agent_id`, `state`, `busy_reason` |
 | `queue.stats` | 队列统计 | `queue_id`, `waiting`, `longest_wait_sec` |
 | `queue.position` | 排队位置 | `call_id`, `position`, `message` |
@@ -51,6 +54,10 @@
 | `video.downgraded` | 降级语音 | `call_id`, `session_type` |
 | `screen_share.started` | 屏幕共享开始 | `call_id`, `leg_id` |
 | `screen_share.stopped` | 屏幕共享结束 | `call_id`, `leg_id` |
+| `queue.overflow` | 溢出到另一队列 | `call_id`, `queue_id` |
+| `ivr.started` | IVR 开始 | `call_id`, `snapshot_id` |
+| `ivr.prompt` | IVR 提示 | `call_id`, `prompt`, `type` |
+| `call.supervisor_listen` | 班长加入监听 | `call_id`, `leg_id`, `announced` |
 | `recording.notice` | 录制告知 | `call_id`, `message` |
 | `pong` | 心跳响应 | — |
 

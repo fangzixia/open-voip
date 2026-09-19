@@ -11,7 +11,7 @@
 ## 1. 概述
 
 - **风格**：REST JSON，版本前缀 `/api/v1`  
-- **Base URL 示例**：`https://cc.internal`（以内网 `config.yml` 中 `public_url` 为准）  
+- **Base URL 示例**：`https://cc.internal`  
 - **字符编码**：UTF-8  
 - **时间**：RFC3339 UTC，除非字段说明为本地业务时区  
 
@@ -53,10 +53,14 @@ Authorization: Bearer {access_token}
 
 ### 2.4 访客
 
-访客不使用用户名密码。先调用 `POST /api/v1/guest/sessions`（管理员或系统签发）获取 **guest token**，再：
+访客不使用用户名密码。Phase 1 Demo：
 
-- REST：部分只读/入会接口  
-- WebSocket：`wss://.../api/v1/ws?token={guest_token}`  
+1. `GET /api/v1/guest/queues`（无需登录）列出队列  
+2. `POST /api/v1/guest/join` `{ "queue_id", "session_type": "audio"|"video" }` 得到 `token`、`call_id`、`leg_id`  
+3. WebSocket：`ws(s)://.../api/v1/ws?token={token}`  
+4. 坐席接听后对 `leg_id` 走 Media Signaling REST  
+
+管理员也可调用 `POST /api/v1/guest/sessions` 签发 `token` 与相对路径 `guest_url`（如 `/guest/?token=`）；绝对链接由调用方用自己的 UI 根地址拼接。  
 
 ---
 
@@ -123,9 +127,9 @@ OpenAPI 各 operation 标注 `x-roles` 供代码生成与评审。
 ## 7. 健康与状态（PLAT-06 / DEPLOY-08）
 
 - `GET /health` — 进程存活，200 即 OK  
-- `GET /api/v1/status` — `{ "db_ok": true, "active_calls": 0, "ws_connections": 0 }`  
+- `GET /api/v1/status` — `{ db_ok, active_calls, ws_connections, goroutines, heap_alloc_bytes, num_cpu }`（MON-01）
 
-**说明**：当前版本不提供 Prometheus `/metrics` 与主机 CPU/磁盘采集（见 [technical-design §2.10](../technical-design.md)）。
+Phase 2/3 补充：IVR、录音、转接/外呼、报表、Webhook、质检、DID、班长监听等路径见 OpenAPI tags `IVR` / `Recordings` / `Reports` / `Webhooks` / `Supervisor`。
 
 ---
 

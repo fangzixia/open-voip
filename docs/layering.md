@@ -19,14 +19,18 @@
 | Port | 定义 | 实现（示例路径） | 调用方 |
 |------|------|------------------|--------|
 | CallControlPort | `internal/ports/call_control.go` | `internal/layers/control/service.go` | L4 guest/outbound；app/http |
+| SignalingPort | `internal/ports/signaling.go` | `internal/layers/control/service.go` | **仅 app/http/media**（禁止直连 MediaPort） |
+| CallPersistencePort | `internal/ports/call_persist.go` | `internal/store/call_persist.go` | **仅 L3**（L3 禁止 import store） |
 | MediaPort | `internal/ports/media.go` | `internal/layers/media/service.go` | **仅 L3** |
-| ACDDispatchPort | `internal/ports/acd.go` | `internal/layers/biz/queue/acd.go` | L3 |
+| ACDDispatchPort | `internal/ports/acd.go` | `internal/layers/biz/queue/service.go` | L3 |
 | ConfigSnapshotPort | `internal/ports/config_snapshot.go` | `internal/layers/biz/configpub` | L3 ivr/runtime |
-| AgentDirectoryPort | `internal/ports/agent_directory.go` | `internal/layers/biz/agent` | L3 |
+| AgentDirectoryPort | `internal/ports/agent_directory.go` | `internal/layers/biz/agent` | L3（含 SetState 乐观锁） |
 | RecordingPolicyPort | `internal/ports/recording_policy.go` | `internal/layers/biz/queue` | L3 |
+| RecordingStorePort | `internal/ports/recording_store.go` | `internal/layers/biz/recmeta` | L3 |
 | CDRRecorderPort | `internal/ports/cdr.go` | `internal/layers/biz/cdr` | L3 |
 | CallEventPublisher | `internal/ports/events.go` | `internal/app/ws` | L3 注入 |
 | AgentEventPublisher | `internal/ports/events.go` | `internal/app/ws` | L4 注入 |
+| WebhookDispatcher | `internal/ports/webhook.go` | `internal/layers/biz/webhook` | `app/ws` / 管理 API |
 
 跨层 DTO 仅放在 `internal/ports` 或 `internal/ports/dto`，禁止 L3 引用 L4 的 GORM model。
 
@@ -40,7 +44,7 @@
 | 签入时 `CreateRoom` | Room 在 L3 Answer 后 |
 | L2 写 CDR | L3 调 `CDRRecorderPort` |
 | L2 读 IVR/队列 DB | L3 读 `ConfigSnapshotPort` |
-| handler 内 ACD 算法 | 仅在 L4 `queue/acd` |
+| handler 内 ACD 算法 | 仅在 L4 `queue` 包 |
 | L4 import `pion/*` | L3 调 `MediaPort` |
 | L4/L3 混在一个 `events` 包发 WS | `ports` 定义类型；L3/L4 分 publisher |
 
@@ -65,9 +69,11 @@
 | `internal/layers/biz` | `internal/layers/control`, `internal/layers/media`, `github.com/pion/*` |
 | `internal/layers/control` | `internal/layers/biz`, `internal/store`（SQL 仅经 Port 回调 L4） |
 | `internal/layers/media` | `internal/layers/biz`, `internal/layers/control`, `internal/store` |
+
+L2 允许 `github.com/pion/*`、`github.com/emiago/sipgo`、`github.com/icholy/digest`（见 `app/.golangci.yml`）。
 | `internal/layers/*` | 互相之间除 `ports` 外禁止 |
 
-`cmd/open-voip` 与 `internal/app/bootstrap` 不受「跨层 import」禁止（白名单）。
+`cmd/open-voip` 与 `internal/app`（组合根 `run.go`）不受「跨层 import」禁止（白名单）。
 
 ---
 
@@ -84,4 +90,4 @@
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| v0.1 | 2026-09-18 | 初稿 |
+| v0.2 | 2026-09-18 | 补充 RecordingStorePort、WebhookDispatcher |

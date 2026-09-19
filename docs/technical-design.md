@@ -1,7 +1,7 @@
 # Open VoIP 技术设计
 
-> 版本：v0.1  
-> 对齐：[requirements.md](./requirements.md) v0.2、[architecture.md](./architecture.md) v0.3  
+> 版本：v0.3  
+> 对齐：[requirements.md](./requirements.md) v0.3、[architecture.md](./architecture.md) v0.4  
 > 场景：内网单机；单进程 `open-voip` + PostgreSQL + 可选前置 TLS 反代  
 
 本文档描述 **实现级** 设计：技术选型、领域模型、Port、数据、部署与需求映射。四级分层以 [architecture.md §2](./architecture.md) 为准，本文不重复大段分层正文。
@@ -46,7 +46,7 @@
 | 服务端 | **Go 1.27.1**（`go.mod` 中 `go 1.27.1` 与 `toolchain go1.27.1`） | 统一工具链 |
 | Go 语法 | **禁止已废弃 API/写法** | CI：`go vet ./...`；`staticcheck`；Code Review 对照附录 A 禁用清单 |
 | 前端 | **原生 JavaScript（ES modules）+ Lit 3** | 轻量 Web Demo |
-| 前端构建 | **Vite 5**（不强制 TypeScript） | 产出静态资源供嵌入或 `static/` 目录 |
+| 前端构建 | **Vite 5**（不强制 TypeScript） | 产出 `frontend/dist/`，由 Nginx 托管 |
 
 ### 2.2 服务端框架与基础设施
 
@@ -58,7 +58,7 @@
 | 配置解析 | **gopkg.in/yaml.v3** + `Validate()` | 无隐式 env |
 | 日志 | **log/slog** | NFR-05；结构化字段含 `call_id` |
 | 指标 / 限流 / 定时任务 | **不引入** | 见 §2.10 |
-| 组合 | **无 DI 框架**；`cmd/open-voip/main.go` 或 `internal/app/bootstrap.go` 手写 `new` | 见 §2.11 |
+| 组合 | **无 DI 框架**；`cmd/open-voip/main.go` + `internal/app/run.go` 手写 `new` | 见 §2.11 |
 | 数据库 | **PostgreSQL 16+** | 唯一支持引擎 |
 | ORM / 迁移 | **GORM v2** + 启动 **`AutoMigrate`** | 表结构以 model 为源 |
 | 校验 | **go-playground/validator** | Admin DTO |
@@ -74,9 +74,9 @@
 | TURN | 可选同机 **coturn** 二进制；YAML 可关闭 |
 | 音频 | Opus 优先，G.711（SIP 互通） |
 | 视频 | VP8 默认，H.264 可选（Safari） |
-| 录音 | 语音直写；视频合流 **ffmpeg** 子进程 |
-| IVR 放音 | WAV/MP3 注入；TTS 可选（内网闭环以文件为主） |
-| SIP/PSTN | **emiago/sipgo**（可选）；未配置 trunk 不启动 |
+| 录音 | 语音写 **Ogg/Opus**；视频另写 **IVF/VP8**。若本机有 **ffmpeg**，停止录制时封装为 WebM（非实时混流） |
+| IVR 放音 | **PCM WAV** 注入（8/16 kHz）；无文件时播短提示音。TTS 不内置 |
+| SIP/PSTN | 进程内 **sipgo** UA（RFC 3261 UA 子集）：Digest REGISTER（Request-URI 无 userinfo）、对话 ID=Call-ID+tags、SDP answer 单 PT（RFC 3264）、3xx 跟随、480、405+Allow、RFC 3262 PRACK、RFC 4028 session timer、RFC 3325 PAI 仅中继。PCMU/PCMA RTP 与坐席 WebRTC PCMU 桥接。未配置 trunk 不启动 |
 
 ### 2.4 数据与缓存
 
@@ -88,9 +88,9 @@
 | 领域 | 选定 |
 |------|------|
 | 交付 | **单二进制** `open-voip`（API + WS + SFU） |
-| 静态前端 | Vite 构建 → `embed.FS` 或同目录 `static/` |
-| TLS | 二进制直连 TLS（YAML 证书）或前置 **nginx/Caddy 二进制**（文档示例） |
-| 容器 | **不作为一等交付**（无 Compose 清单要求） |
+| 静态前端 | Vite 构建 → 独立静态站（Nginx） |
+| TLS | 二进制直连 TLS（YAML 证书）或前置 **nginx**（文档示例） |
+| 容器 | **不交付** Docker / Compose / 镜像 |
 | API 契约 | [docs/api/openapi.yaml](./api/openapi.yaml) 手写维护 |
 
 ### 2.6 前端（Lit）
@@ -103,19 +103,19 @@
 ### 2.7 工程与质量
 
 - 分层：**depguard**（[layering.md](./layering.md)）  
-- Lint：**golangci-lint** + revive `exported`  
+- Lint：**golangci-lint** + depguard；`revive exported` **不默认启用**（architecture §5.3）  
 - CI：lint + arch + OpenAPI validate  
 
 ### 2.8 明确不引入
 
-Prometheus、限流库、cron/scheduler、wire/fx/dig、SQLite、sqlc/goose、Redis、Kafka、K8s、Docker Compose 交付。
+Prometheus、限流库、cron/scheduler、wire/fx/dig、SQLite、sqlc/goose、Redis、Kafka、K8s、Docker / Compose / 容器镜像。
 
 ### 2.9 仓库结构
 
 ```
 open-voip/
   docs/                    # 需求、架构、api/（OpenAPI），无业务代码
-  app/                     # 全部可运行代码
+  app/                     # Go 服务端
     cmd/open-voip/
     internal/
       ports/
@@ -125,10 +125,10 @@ open-voip/
       app/                 # http, ws, run（组合根）
       store/
       config/
-    frontend/
-      agent/ guest/ admin/
-      shared/
     deploy/
+  frontend/                # Lit 三端，独立构建
+    agent/ guest/ admin/
+    shared/
   app/.golangci.yml
 ```
 
@@ -136,12 +136,16 @@ open-voip/
 
 | ID | 实现方式 |
 |----|----------|
-| PLAT-06 | `GET /health` + `GET /api/v1/status`（`db_ok`, `active_calls`, `ws_connections`） |
+| PLAT-06 | `GET /health` + `GET /api/v1/status`（`db_ok`, `active_calls`, `ws_connections`, 进程内存, `recordings_dir_bytes`） |
 | PLAT-07 | 当前版本**不实现**限流 |
-| MON-01 | 不采集主机 CPU/磁盘；见 status API |
+| MON-01 | 不采集主机 CPU%；status 暴露进程内存与录音目录占用 |
 | DEPLOY-01 | PostgreSQL + 二进制 + 可选 nginx（见 §12） |
+| REC-02 | 可回放 Ogg（音频）/ IVF（视频轨）；可选 ffmpeg 封装 WebM，非实时合流 |
 | REC-05 | `POST /api/v1/admin/recordings/purge-expired`（人工或外部 cron 调用） |
 | EVT-04 重试 | 同步重试 N 次 + DB 状态；`POST .../webhooks/deliveries/{id}/retry` |
+| MEDIA-07 | sipgo UA：RFC 3261/3262/3264/3325/4028 子集、Digest REGISTER、ACL、PCMU/PCMA、PAI 仅中继；未配 trunk 不启动 |
+| ADM-04 | IVR 使用发布快照；队列/技能/工作时间为实时读库（单机可接受） |
+| IVR-02 TTS | 不内置 TTS，节点配置 WAV 文件或使用提示音 |
 
 ### 2.11 组合根（启动顺序）
 
@@ -155,7 +159,7 @@ open-voip/
 → Listen (TLS/HTTP) + UDP 媒体端口
 ```
 
-**唯一**可 import 各层 concrete 的包：`cmd/open-voip`、`internal/app/bootstrap`（若存在）。
+**唯一**可 import 各层 concrete 的包：`cmd/open-voip`、`internal/app`（`run.go` 组合根）。
 
 ---
 
@@ -328,7 +332,7 @@ type MediaPort interface {
 - SFU：选择性转发，非默认 MCU  
 - Hold：停止转发 + MOH inject  
 - TURN：YAML 开启时 HMAC 短期凭证  
-- SIP：trunk + DID 路由；未配置则模块 disabled  
+- SIP：sipgo 中继（Digest REGISTER、IP ACL、DID 路由、出局 CLI）；未启用则不监听  
 
 ---
 
@@ -399,13 +403,12 @@ type MediaPort interface {
 /opt/open-voip/
   open-voip              # 二进制
   config.yml
-  static/                # 可选
   data/recordings/
 ```
 
 ### 12.2 config.yml 块
 
-`server`, `public_url`, `database`, `recordings`, `jwt`, `ice`, `turn`, `tls`, `static`, `sip_trunks`, `log`
+`server`（`listen`）、`database`、`recordings`、`jwt`、`ice`、`turn`、`tls`、`sip_trunks`、`log`
 
 ### 12.3 systemd
 
@@ -489,7 +492,7 @@ sequenceDiagram
 
 | 风险 | 对策 |
 |------|------|
-| 单机视频 CPU | SFU 不混流；录制 ffmpeg 隔离；弱网降 480p 提示 |
+| 单机视频 CPU | SFU 不混流；录制写 Ogg/IVF，可选 ffmpeg 封装；弱网降 480p 提示 |
 | GORM AutoMigrate 生产变更 | 文档约定：大变更走维护窗口；关键索引人工复核 |
 | 无后台任务 | REC/Webhook 依赖 API + 外部 cron |
 | Webhook 拖垮请求 | 同步重试上限 + 异步 goroutine 仅单次投递链 |
@@ -504,7 +507,7 @@ sequenceDiagram
 
 ## 附录 B：建议 go.mod 直接依赖（摘要）
 
-`chi/v5`, `coder/websocket`, `gorm.io/gorm`, `gorm.io/driver/postgres`, `gopkg.in/yaml.v3`, `github.com/golang-jwt/jwt/v5`, `github.com/go-playground/validator/v10`, `pion/webrtc/v4`, `github.com/emiago/sipgo`（可选）, `golang.org/x/crypto`
+`chi/v5`, `coder/websocket`, `gorm.io/gorm`, `gorm.io/driver/postgres`, `gopkg.in/yaml.v3`, `github.com/golang-jwt/jwt/v5`, `github.com/go-playground/validator/v10`, `pion/webrtc/v4`, `github.com/emiago/sipgo`, `github.com/icholy/digest`, `github.com/google/uuid`, `golang.org/x/crypto`
 
 ---
 
@@ -512,4 +515,4 @@ sequenceDiagram
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| v0.1 | 2026-09-18 | 初稿：选型、领域、Port、数据、部署、矩阵 |
+| v0.3 | 2026-09-19 | MEDIA-07：sipgo 直连运营商中继（Digest REGISTER、ACL、PCMA 转码、外显 CLI） |

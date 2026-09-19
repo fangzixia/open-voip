@@ -14,15 +14,26 @@ import (
 
 	"gorm.io/gorm/logger"
 
-	"open-voip/internal/config"
 	apphttp "open-voip/internal/app/http"
 	"open-voip/internal/app/ws"
+	"open-voip/internal/config"
 	"open-voip/internal/layers/biz/agent"
+	"open-voip/internal/layers/biz/audit"
+	"open-voip/internal/layers/biz/auth"
 	"open-voip/internal/layers/biz/cdr"
+	"open-voip/internal/layers/biz/configio"
 	"open-voip/internal/layers/biz/configpub"
+	"open-voip/internal/layers/biz/guest"
+	"open-voip/internal/layers/biz/ivr"
 	"open-voip/internal/layers/biz/queue"
+	"open-voip/internal/layers/biz/recmeta"
+	"open-voip/internal/layers/biz/report"
+	"open-voip/internal/layers/biz/skill"
+	"open-voip/internal/layers/biz/user"
+	"open-voip/internal/layers/biz/webhook"
 	"open-voip/internal/layers/control"
 	"open-voip/internal/layers/media"
+	"open-voip/internal/ports/dto"
 	"open-voip/internal/store"
 )
 
@@ -38,11 +49,6 @@ func Run(configPath string) error {
 
 	if err := ensureDir(cfg.Recordings.Dir); err != nil {
 		return fmt.Errorf("录音目录: %w", err)
-	}
-	if cfg.StaticServe && cfg.Static.Dir != "" {
-		if err := ensureDir(cfg.Static.Dir); err != nil {
-			return fmt.Errorf("静态资源目录: %w", err)
-		}
 	}
 
 	gormLog := logger.Warn
@@ -60,34 +66,94 @@ func Run(configPath string) error {
 	if err := store.Ping(db); err != nil {
 		return fmt.Errorf("数据库 Ping: %w", err)
 	}
+	if err := store.SeedIfEmpty(db, cfg.Bootstrap, log); err != nil {
+		return err
+	}
+	if err := store.SeedDefaultDID(db, log); err != nil {
+		return err
+	}
 
-	// L2 → L3 → L4 Port 实现，依赖方向见 architecture §2.3
-	mediaSvc := media.NewService()
-	acdSvc := queue.NewACDService()
-	recordingPolicy := queue.NewRecordingPolicyService()
-	configSnap := configpub.NewSnapshotService()
-	agentDir := agent.NewDirectoryService()
-	cdrRecorder := cdr.NewRecorderService()
-	wsHub := ws.NewHub(log, cfg.WebSocketOriginPatterns())
+	mediaSvc, err := media.NewService(media.Options{
+		ICE: cfg.ICE, TURN: cfg.TURN, RecordingsDir: cfg.Recordings.Dir, SIP: cfg.SIP,
+	})
+	if err != nil {
+		return fmt.Errorf("媒体层: %w", err)
+	}
+	wsHub := ws.NewHub(log)
+	queueSvc := queue.NewService(db, wsHub, queue.PolicyDefaults{
+		Mode:          "audio",
+		NotifyMessage: cfg.Recordings.NotifyMessage,
+		RetainDays:    cfg.Recordings.RetainDays,
+	})
+	agentSvc := agent.NewService(db, wsHub)
+	authSvc := auth.NewService(db, cfg.JWT)
+	userSvc := user.NewService(db)
+	configSnap := configpub.NewSnapshotService(db)
+	cdrRecorder := cdr.NewRecorderService(db)
+	callStore := store.NewCallStore(db)
+	recMeta := recmeta.NewService(db)
+	ivrSvc := ivr.NewService(db)
+	skillSvc := skill.NewService(db)
+	reportSvc := report.NewService(db)
+	hookSvc := webhook.NewService(db, cfg.Webhook)
+	auditSvc := audit.NewService(db)
+	cfgIO := configio.NewService(db)
 
 	callControl := control.NewService(control.Deps{
 		Media:           mediaSvc,
-		ACD:             acdSvc,
+		ACD:             queueSvc,
 		Config:          configSnap,
-		Agents:          agentDir,
-		RecordingPolicy: recordingPolicy,
+		Agents:          agentSvc,
+		RecordingPolicy: queueSvc,
 		CDR:             cdrRecorder,
+		Calls:           callStore,
 		CallEvents:      wsHub,
+		Recordings:      recMeta,
+	})
+	wsHub.Configure(authSvc, callControl, agentSvc, hookSvc)
+	guestSvc := guest.NewService(db, callControl, cfg.Public.GuestBaseURL)
+
+	mediaSvc.SetSIPHangupHandler(func(ctx context.Context, callID string) {
+		_ = callControl.Hangup(ctx, callID, dto.HangupReasonNormal)
+	})
+	mediaSvc.SetInboundHandler(func(ctx context.Context, did, from, callID string) (string, string, error) {
+		qid, err := configSnap.ResolveDID(ctx, did)
+		if err != nil {
+			return "", "", err
+		}
+		id, err := callControl.StartInbound(ctx, dto.InboundRequest{
+			CallID: callID, QueueID: qid, Caller: from, SessionType: dto.SessionTypeAudio,
+		})
+		if err != nil {
+			return "", "", err
+		}
+		return id, "", nil
 	})
 
 	router := apphttp.NewRouter(apphttp.RouterDeps{
 		Config:      *cfg,
+		Auth:        authSvc,
+		Users:       userSvc,
+		Agents:      agentSvc,
+		Queues:      queueSvc,
+		Guests:      guestSvc,
+		CDR:         cdrRecorder,
 		CallControl: callControl,
+		Signaling:   callControl,
+		IVR:         ivrSvc,
+		Skills:      skillSvc,
+		Recordings:  recMeta,
+		Reports:     reportSvc,
+		Webhooks:    hookSvc,
+		Audit:       auditSvc,
+		ConfigIO:    cfgIO,
+		Snapshots:   configSnap,
 		Hub:         wsHub,
 		Status: apphttp.StatusProvider{
 			DB:            db,
 			ActiveCalls:   callControl.ActiveCalls,
 			WSConnections: wsHub.ConnectionCount,
+			RecordingsDir: cfg.Recordings.Dir,
 		},
 	})
 
@@ -97,11 +163,17 @@ func Run(configPath string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go callControl.Run(ctx)
 	go func() {
-		log.Info("open-voip 启动",
-			"listen", cfg.Server.Listen,
-			"public_url", cfg.Server.PublicURL,
-		)
+		if err := mediaSvc.ServeSIP(ctx); err != nil {
+			log.Warn("SIP 监听结束", "err", err)
+		}
+	}()
+
+	go func() {
+		log.Info("open-voip 启动", "listen", cfg.Server.Listen)
 		var serveErr error
 		if cfg.TLS.Enabled {
 			serveErr = srv.ListenAndServeTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
@@ -117,10 +189,11 @@ func Run(configPath string) error {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	cancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	return srv.Shutdown(ctx)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+	return srv.Shutdown(shutdownCtx)
 }
 
 func ensureDir(path string) error {

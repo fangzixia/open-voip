@@ -42,4 +42,10 @@ type MediaPort interface {
 	OriginateSIP(ctx context.Context, callID, legID, dial, trunkID string) error
 	// BridgeLegs 桥接两条 leg 的媒体。
 	BridgeLegs(ctx context.Context, callID, legA, legB string) error
+	// LeaveRoom 关闭指定腿的 PeerConnection，Room 可继续。
+	LeaveRoom(ctx context.Context, callID, legID string) error
+	// SendDTMF 向对端发送 RFC4733 DTMF。
+	SendDTMF(ctx context.Context, callID, legID string, digit dto.DTMFDigit) error
+	// RecordingInfo 读取录音元数据（停止后仍可查进程内缓存则可能为空）。
+	RecordingInfo(ctx context.Context, recordingID string) (RecordingMeta, error)
 }

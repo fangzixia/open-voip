@@ -1,68 +1,76 @@
-run:
-  timeout: 5m
+version: "2"
 
 linters:
+  default: none
   enable:
     - depguard
-    - govet
     - errcheck
-    - staticcheck
+    - govet
     - ineffassign
+    - staticcheck
     - unused
-
-linters-settings:
-  depguard:
+  settings:
+    depguard:
+      rules:
+        layering-biz:
+          files:
+            - internal/layers/biz/**
+          deny:
+            - pkg: open-voip/internal/layers/control
+              desc: L4 禁止 import L3
+            - pkg: open-voip/internal/layers/media
+              desc: L4 禁止 import L2
+            - pkg: github.com/pion
+              desc: L4 禁止 import Pion
+          allow:
+            - $gostd
+            - open-voip/internal/layers/biz
+            - open-voip/internal/ports
+            - open-voip/internal/ports/dto
+            - open-voip/internal/errs
+            - open-voip/internal/store
+            - open-voip/internal/config
+            - gorm.io/gorm
+            - github.com/golang-jwt/jwt
+            - github.com/google/uuid
+            - golang.org/x/crypto
+        layering-control:
+          files:
+            - internal/layers/control/**
+          deny:
+            - pkg: open-voip/internal/layers/biz
+              desc: L3 禁止 import L4
+            - pkg: open-voip/internal/layers/media
+              desc: L3 禁止直接 import L2 实现（应使用 ports.MediaPort）
+            - pkg: open-voip/internal/store
+              desc: L3 禁止直接 SQL
+          allow:
+            - $gostd
+            - open-voip/internal/layers/control
+            - open-voip/internal/ports
+            - open-voip/internal/ports/dto
+            - open-voip/internal/errs
+            - github.com/google/uuid
+        layering-media:
+          files:
+            - internal/layers/media/**
+          deny:
+            - pkg: open-voip/internal/layers/biz
+            - pkg: open-voip/internal/layers/control
+            - pkg: open-voip/internal/store
+          allow:
+            - $gostd
+            - open-voip/internal/layers/media
+            - open-voip/internal/ports
+            - open-voip/internal/ports/dto
+            - open-voip/internal/errs
+            - open-voip/internal/config
+            - github.com/pion
+            - github.com/google/uuid
+            - github.com/emiago
+            - github.com/icholy/digest
+  exclusions:
     rules:
-      layering-biz:
-        files:
-          - "internal/layers/biz/**"
-        deny:
-          - pkg: open-voip/internal/layers/control
-            desc: L4 禁止 import L3
-          - pkg: open-voip/internal/layers/media
-            desc: L4 禁止 import L2
-          - pkg: github.com/pion
-            desc: L4 禁止 import Pion
-        allow:
-          - $gostd
-          - pkg: open-voip/internal/layers/biz
-          - pkg: open-voip/internal/ports
-          - pkg: open-voip/internal/ports/dto
-          - pkg: open-voip/internal/errs
-          - pkg: open-voip/internal/store
-          - pkg: open-voip/internal/config
-      layering-control:
-        files:
-          - "internal/layers/control/**"
-        deny:
-          - pkg: open-voip/internal/layers/biz
-            desc: L3 禁止 import L4
-          - pkg: open-voip/internal/layers/media
-            desc: L3 禁止直接 import L2 实现（应使用 ports.MediaPort）
-          - pkg: open-voip/internal/store
-            desc: L3 禁止直接 SQL
-        allow:
-          - $gostd
-          - pkg: open-voip/internal/layers/control
-          - pkg: open-voip/internal/ports
-          - pkg: open-voip/internal/ports/dto
-          - pkg: open-voip/internal/errs
-      layering-media:
-        files:
-          - "internal/layers/media/**"
-        deny:
-          - pkg: open-voip/internal/layers/biz
-          - pkg: open-voip/internal/layers/control
-          - pkg: open-voip/internal/store
-        allow:
-          - $gostd
-          - pkg: open-voip/internal/layers/media
-          - pkg: open-voip/internal/ports
-          - pkg: open-voip/internal/ports/dto
-          - pkg: open-voip/internal/errs
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+      - path: _test\.go
+        linters:
+          - errcheck

@@ -1,14 +1,15 @@
 # 代码目录（app/）运行时产物
 app/bin/
 app/dist/
+app/deploy/config.yml
 app/**/*.exe
 app/**/*.test
 app/coverage.out
-app/frontend/node_modules/
-app/frontend/dist/
-app/frontend/.env
-app/static/
 app/data/
+
+frontend/node_modules/
+frontend/dist/
+frontend/.env
 
 # IDE
 .idea/

@@ -8,6 +8,8 @@ type CallEvent struct {
 	Type string
 	// CallID 通话 ID。
 	CallID string
+	// AgentID 可选，用于将振铃事件路由到指定坐席连接。
+	AgentID string
 	// Payload 业务 JSON 对象，由序列化层编码。
 	Payload map[string]any
 }

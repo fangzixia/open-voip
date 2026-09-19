@@ -10,7 +10,7 @@ import (
 
 func TestHealthEndpoint(t *testing.T) {
 	h := NewRouter(RouterDeps{
-		Config: config.Config{StaticServe: false},
+		Config: config.Config{},
 		Status: StatusProvider{},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

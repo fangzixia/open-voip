@@ -16,6 +16,10 @@ type Recording struct {
 	StartedAt time.Time `gorm:"comment:开始时间"`
 	// EndedAt 结束时间。
 	EndedAt *time.Time `gorm:"comment:结束时间"`
+	// RetainUntil 保留截止时间，过期可由 purge API 删除。
+	RetainUntil *time.Time `gorm:"index;comment:保留截止时间"`
+	// FileSize 字节数。
+	FileSize int64 `gorm:"comment:文件大小字节"`
 	// CreatedAt 元数据写入时间。
 	CreatedAt time.Time `gorm:"comment:创建时间"`
 }

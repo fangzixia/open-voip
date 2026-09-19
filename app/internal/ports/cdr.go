@@ -11,6 +11,8 @@ import (
 type CDRWriteRequest struct {
 	// CallID 通话 ID。
 	CallID string
+	// Direction inbound / outbound / internal。
+	Direction string
 	// QueueID 队列，可空。
 	QueueID string
 	// AgentID 坐席，可空。
@@ -21,7 +23,7 @@ type CDRWriteRequest struct {
 	Callee string
 	// SessionType 媒介类型。
 	SessionType dto.SessionType
-	// Result 结果码。
+	// Result 结果码 answered / abandoned / failed。
 	Result string
 	// StartedAt 开始时间。
 	StartedAt time.Time
@@ -29,6 +31,16 @@ type CDRWriteRequest struct {
 	AnsweredAt *time.Time
 	// EndedAt 结束时间。
 	EndedAt *time.Time
+	// VideoStartedAt 视频开始时间。
+	VideoStartedAt *time.Time
+	// VideoUpgradeOk 升视频是否成功。
+	VideoUpgradeOk bool
+	// ScreenShareCount 屏幕共享次数。
+	ScreenShareCount int
+	// NotifyMessage 录音告知。
+	NotifyMessage string
+	// RetainDays 录音保留天数。
+	RetainDays int
 }
 
 // CDRRecorderPort 由 L4 cdr 实现，L3 禁止直接 SQL。

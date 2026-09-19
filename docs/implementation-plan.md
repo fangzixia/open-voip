@@ -1,8 +1,8 @@
 # Open VoIP 实施计划
 
-> 版本：v0.1  
-> 对齐：[architecture.md](./architecture.md) v0.3、[technical-design.md](./technical-design.md) v0.1、[requirements.md](./requirements.md) v0.2  
-> 当前仓库状态：Phase 0 工程骨架已落地（Go 分层 + Lit 三端 + CI）
+> 版本：v0.3  
+> 对齐：[architecture.md](./architecture.md) v0.4、[technical-design.md](./technical-design.md) v0.2、[requirements.md](./requirements.md) v0.3  
+> 当前仓库状态：Phase 2/3 主路径已落地（Go 分层 + Lit 三端 + CI）。组合根为 `cmd/open-voip` + `internal/app/run.go`。
 
 本文档将设计转化为 **分阶段、可验收、依赖清晰** 的研发排期。功能验收以 requirements 需求 ID 为准；实现边界以 technical-design 折中表为准。
 
@@ -22,7 +22,7 @@
 ### 1.2 实施原则
 
 1. **自下而上组装**：`ports` → L2 最小可用 → L3 FSM → L4 业务 → `app` 适配 → 前端。
-2. **组合根唯一**：仅 `cmd/open-voip`、`internal/app/bootstrap` 串联具体实现（见 [layering.md §4](./layering.md)）。
+2. **组合根唯一**：仅 `cmd/open-voip`、`internal/app/run.go` 串联具体实现（见 [layering.md §4](./layering.md)）。
 3. **每迭代可演示**：优先打通「访客入队 → 振铃 → 接听 → 双向媒体 → 挂断 → CDR」再扩展。
 4. **验收绑 ID**：每个里程碑列出 requirements ID，便于测试用例与 PR 描述。
 5. **中文注释**：与 architecture §5 同步落地，不事后补。
@@ -69,10 +69,10 @@ flowchart TB
 | 0.3 | `internal/store`：GORM + Postgres、`AutoMigrate` 基础表骨架 | users/agents/queues 空壳 model + comment tag | 后端 |
 | 0.4 | `internal/ports/*`：接口与 DTO 占位（CallControl、Media、ACD、事件等） | 中文 doc comment 齐全 | 后端 |
 | 0.5 | `internal/layers/{biz,control,media}` 空包 + 包注释 | depguard 可扫描 | 后端 |
-| 0.6 | `internal/app/bootstrap.go` + `cmd/open-voip/main.go` | 启动读配置、连 DB、挂 chi、`GET /health` | 后端 |
+| 0.6 | `internal/app/run.go` + `cmd/open-voip/main.go` | 启动读配置、连 DB、挂 chi、`GET /health` | 后端 |
 | 0.7 | CI：golangci-lint + depguard（`app/.golangci.yml`）+ OpenAPI validate | PR 违反分层即失败 | 工程 |
 | 0.8 | 前端三入口 Vite 脚手架（agent/guest/admin）+ `shared/*` 空模块 | `npm run build` 通过 | 前端 |
-| 0.9 | 静态资源嵌入或 `static/` 服务策略定稿 | 与 §12 部署一致 | 后端 |
+| 0.9 | 前端独立目录 `frontend/`，Nginx 托管；API 不服务静态页 | 与 §12 部署一致 | 工程 |
 
 ### 3.2 验收标准
 
@@ -163,7 +163,7 @@ flowchart TB
 
 | 任务 | 说明 | 需求 ID |
 |------|------|---------|
-| systemd、`deploy/` 安装说明、数据目录持久化 | 非 Compose 一等交付 | DEPLOY-01～04, technical-design §12 |
+| systemd、`deploy/` 安装说明、数据目录持久化 | 本机二进制 + Nginx，无 Docker | DEPLOY-01～04, technical-design §12 |
 | `GET /api/v1/status`：db_ok、active_calls、ws_connections | | PLAT-06, DEPLOY-08 |
 | 并发 smoke：**≥10 路语音**（脚本或多 tab） | | NFR-04, §0.3 |
 
@@ -206,14 +206,14 @@ flowchart TB
 
 | 模块 | 需求 ID | 备注 |
 |------|---------|------|
-| SIP/PSTN 中继 | MEDIA-07, MEDIA-08 | sipgo 可选模块 |
+| SIP/PSTN 中继 | MEDIA-07, MEDIA-08 | 进程内 sipgo：Digest REGISTER、401/407、Record-Route、PCMU/PCMA 转码；未配置 trunk 不启动 |
 | Webhook 订阅与重试 | EVT-04 | 同步重试 + 管理端 retry API |
 | 质检标记 | QA-01 | qa_marks 表 |
 | 高级 IVR / 工作时间 | IVR-03 | ConfigSnapshot |
 | 三方、班长监听 | CALL-03, CALL-04 | supervisor leg |
 | 优先级队列 | QUEUE-07 | |
 | 录音自动清理 | REC-05 | purge API + 外部 cron |
-| 离线镜像部署说明 | DEPLOY-07 | 文档为主 |
+| 离线安装说明 | DEPLOY-07 | 文档为主 |
 | API 限流 | PLAT-07 | technical-design 当前不实现，若公网暴露再开 |
 
 ---
@@ -225,7 +225,7 @@ flowchart TB
 | 后端 L2 | Pion SFU、MediaPort、录音管道（Phase 2） | Sprint 1.3 起 |
 | 后端 L3 | FSM、signaling facade、与 ACD/CDR 协作 | 依赖 1.3 接口稳定 |
 | 后端 L4 | Auth、队列、ACD、CDR | Sprint 1.1 起 |
-| 后端 app | HTTP/WS、bootstrap | Sprint 1.4 起集成 |
+| 后端 app | HTTP/WS、run 组合根 | Sprint 1.4 起集成 |
 | 前端 | shared/webrtc.js、三端页面 | Sprint 1.3 后可对接 media API |
 | 运维/文档 | TLS、systemd、防火墙、备份 | Sprint 1.6～1.7 |
 
@@ -238,7 +238,7 @@ flowchart TB
 | 类型 | 内容 | 阶段 |
 |------|------|------|
 | 单元测试 | FSM 迁移、ACD 选人、IVR 节点 | 1.4 起 |
-| 集成测试 | Postgres + CallControl 流程（testcontainers 或 docker postgres） | 1.4 起 |
+| 集成测试 | 本机 Postgres + CallControl 流程（`OPEN_VOIP_TEST_DSN`） | 1.4 起 |
 | 媒体手工测试 | 内网两机 + 多 tab 并发 | 1.7 |
 | 契约测试 | OpenAPI 与 handler 路径一致 | 持续 |
 | 分层 CI | depguard | Phase 0 起 |
@@ -277,3 +277,5 @@ flowchart TB
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | v0.1 | 2026-09-18 | 初稿：Phase 0～3、Sprint 拆分、验收与分工 |
+| v0.3 | 2026-09-18 | 状态改为 Phase 2/3 已落地；组合根 run.go；SIP 为自研信令 |
+| v0.4 | 2026-09-19 | MEDIA-07 改为进程内 sipgo 直连中继（Digest REGISTER、ACL、PCMA） |

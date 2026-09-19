@@ -57,6 +57,10 @@ type RecordingPolicy struct {
 	Mode string
 	// NotifyGuest 是否需对访客播放告知音。
 	NotifyGuest bool
+	// NotifyMessage 告知文案。
+	NotifyMessage string
+	// RetainDays 保留天数。
+	RetainDays int
 }
 
 // AudioSource IVR 放音源描述。

@@ -8,6 +8,10 @@ type GuestSession struct {
 	ID string `gorm:"type:uuid;primaryKey;comment:访客会话 ID"`
 	// QueueID 目标队列。
 	QueueID string `gorm:"type:uuid;index;not null;comment:目标队列 ID"`
+	// CallID 入队后关联的通话，可空。
+	CallID *string `gorm:"type:uuid;index;comment:关联通话 ID"`
+	// AllowedMedia audio / video。
+	AllowedMedia string `gorm:"size:16;not null;default:audio;comment:允许媒介"`
 	// Token 入会 token 哈希或明文（内网 Demo 可简化）。
 	Token string `gorm:"size:128;uniqueIndex;not null;comment:入会 token"`
 	// ExpiresAt 过期时间 UTC。

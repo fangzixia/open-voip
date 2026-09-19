@@ -11,4 +11,4 @@
 | [api/](./api/) | OpenAPI（REST 对接） |
 | [events.md](./events.md) | WebSocket 事件 |
 
-应用代码见仓库 **[../app/](../app/)**。
+应用代码见 **[../app/](../app/)**（服务端）与 **[../frontend/](../frontend/)**（前端）。

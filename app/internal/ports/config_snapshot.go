@@ -17,6 +17,24 @@ type QueueSnapshot struct {
 	MaxWaitSec int
 	// IVRFlowID 绑定的 IVR 流程，可空。
 	IVRFlowID string
+	// OverflowAction hangup / voicemail / queue。
+	OverflowAction string
+	// OverflowQueueID 溢出目标队列。
+	OverflowQueueID string
+	// WaitPrompt 排队文案。
+	WaitPrompt string
+	// AnnounceRecording 是否告知录音。
+	AnnounceRecording bool
+	// SkillIDs 所需技能。
+	SkillIDs []string
+	// AfterHoursAction 非工作时间动作。
+	AfterHoursAction string
+	// ForceHangupOnCheckout 强制签出是否挂断。
+	ForceHangupOnCheckout bool
+	// ListenAnnounce 班长监听时是否向客户播放提示。
+	ListenAnnounce bool
+	// PriorityEnabled 是否允许 VIP/高优先级入队。
+	PriorityEnabled bool
 }
 
 // IVRNodeSnapshot IVR 节点简化表示（Phase 1 细化）。
@@ -35,7 +53,9 @@ type IVRSnapshot struct {
 	FlowID string
 	// Version 版本号。
 	Version int
-	// Root 根节点。
+	// PayloadJSON 节点树 JSON。
+	PayloadJSON string
+	// Root 兼容旧字段的根节点摘要。
 	Root IVRNodeSnapshot
 }
 
@@ -55,6 +75,8 @@ type ConfigSnapshotPort interface {
 	GetLatestIVR(ctx context.Context, flowID string) (IVRSnapshot, error)
 	// GetBusinessHours 读取全局或队列级工作时间。
 	GetBusinessHours(ctx context.Context, queueID string) (BusinessHours, error)
+	// ResolveDID 将 DID/外显号码解析为队列 ID。
+	ResolveDID(ctx context.Context, did string) (queueID string, err error)
 	// Now 返回用于时间判断的「当前时间」（便于测试注入）。
 	Now(ctx context.Context) time.Time
 }

@@ -1,12 +1,15 @@
 # Open VoIP
 
-内网 Web 呼叫中心。**设计文档**在 [docs/](docs/)（含 [architecture.md](docs/architecture.md)）；**全部可运行代码**在 [app/](app/)。
+内网 Web 呼叫中心。
 
 ```
 open-voip/
-  docs/          # 需求、架构、API 契约（OpenAPI）等，不含业务代码
-  app/           # Go 服务端、Lit 前端、部署示例与构建产物
+  docs/          # 需求、架构、API 契约
+  app/           # Go 服务端（REST / WS / 媒体）
+  frontend/      # Lit 坐席 / 访客 / 管理端
   .github/       # CI
 ```
 
-开发与构建说明见 **[app/README.md](app/README.md)**。
+- 后端：[app/README.md](app/README.md)
+- 前端：[frontend/README.md](frontend/README.md)
+- 内网安装：[app/deploy/INSTALL.md](app/deploy/INSTALL.md)

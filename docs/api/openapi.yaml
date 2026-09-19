@@ -10,7 +10,7 @@ info:
 
 servers:
   - url: https://cc.internal
-    description: 内网示例（以 config.yml public_url 为准）
+    description: 内网示例
 
 tags:
   - name: Auth
@@ -200,6 +200,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Agent"
+
+  /api/v1/agents:
+    get:
+      tags: [Agents]
+      summary: 坐席目录（转接/外呼）
+      x-roles: [agent, supervisor, admin]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Agent"
+
+  /api/v1/agents/{agentId}/skills:
+    get:
+      tags: [Skills]
+      x-requirement-id: AGENT-06
+      x-roles: [admin]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: OK
+    put:
+      tags: [Skills]
+      x-requirement-id: AGENT-06
+      x-roles: [admin]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                skill_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: OK
 
   /api/v1/agents/{agentId}/check-in:
     post:
@@ -433,6 +480,42 @@ paths:
               schema:
                 $ref: "#/components/schemas/GuestSession"
 
+  /api/v1/guest/queues:
+    get:
+      tags: [Guest]
+      summary: Demo 公开队列列表
+      x-requirement-id: UI-C-01
+      security: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GuestQueue"
+
+  /api/v1/guest/join:
+    post:
+      tags: [Guest]
+      summary: Demo 直链入队并创建呼入
+      x-requirement-id: QUEUE-03,UI-C-01
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GuestJoinRequest"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuestJoinResponse"
+
   /api/v1/calls/outbound:
     post:
       tags: [Calls]
@@ -520,6 +603,20 @@ paths:
         "422":
           $ref: "#/components/responses/BusinessError"
 
+  /api/v1/calls/{callId}/transfer/complete:
+    post:
+      tags: [Calls]
+      summary: 完成咨询转
+      x-requirement-id: CALL-02
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          description: OK
+        "409":
+          $ref: "#/components/responses/BusinessError"
+
   /api/v1/calls/{callId}/video/request:
     post:
       tags: [Calls]
@@ -530,6 +627,203 @@ paths:
       responses:
         "202":
           description: 已通知对端
+
+  /api/v1/calls/{callId}:
+    get:
+      tags: [Calls]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+
+  /api/v1/calls/{callId}/decline:
+    post:
+      tags: [Calls]
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "204":
+          description: OK
+
+  /api/v1/calls/{callId}/video/respond:
+    post:
+      tags: [Calls]
+      x-requirement-id: VIDEO-06
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                accept:
+                  type: boolean
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/video/downgrade:
+    post:
+      tags: [Calls]
+      x-requirement-id: VIDEO-07
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/screen-share:
+    post:
+      tags: [Calls]
+      x-requirement-id: VIDEO-08
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                on:
+                  type: boolean
+                leg_id:
+                  type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/conference:
+    post:
+      tags: [Calls]
+      x-requirement-id: CALL-03
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id]
+              properties:
+                agent_id:
+                  type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/dtmf:
+    post:
+      tags: [Calls]
+      x-requirement-id: MEDIA-06
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                leg_id:
+                  type: string
+                digit:
+                  type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/wrap-up:
+    post:
+      tags: [Calls]
+      x-requirement-id: UI-A-07
+      x-roles: [agent]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                text:
+                  type: string
+      responses:
+        "201":
+          description: Created
+
+  /api/v1/wrap-ups:
+    get:
+      tags: [Calls]
+      summary: 查询通话小结
+      x-requirement-id: UI-A-07
+      x-roles: [admin, supervisor]
+      parameters:
+        - name: call_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/calls/{callId}/qa-marks:
+    get:
+      tags: [Recordings]
+      x-requirement-id: QA-01
+      x-roles: [admin, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          description: OK
+    post:
+      tags: [Recordings]
+      x-requirement-id: QA-01
+      x-roles: [admin, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                offset_sec:
+                  type: integer
+                label:
+                  type: string
+      responses:
+        "201":
+          description: Created
+
+  /api/v1/calls/{callId}/legs/{legId}/mute:
+    post:
+      tags: [MediaSignaling]
+      x-requirement-id: MEDIA-05
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+        - $ref: "#/components/parameters/LegId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                audio:
+                  type: boolean
+                video:
+                  type: boolean
+      responses:
+        "200":
+          description: OK
 
   /api/v1/calls/{callId}/legs/{legId}/offer:
     post:
@@ -727,6 +1021,26 @@ paths:
               schema:
                 $ref: "#/components/schemas/HistoricalReport"
 
+  /api/v1/reports/agents:
+    get:
+      tags: [Reports]
+      x-requirement-id: RPT-04
+      x-roles: [admin, supervisor]
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: 坐席利用率
+
   /api/v1/webhooks/subscriptions:
     get:
       tags: [Webhooks]
@@ -841,6 +1155,35 @@ paths:
         "200":
           description: 返回 supervisor leg 信令入口信息
 
+  /api/v1/dids:
+    get:
+      tags: [Config]
+      x-requirement-id: MEDIA-08
+      x-roles: [admin]
+      responses:
+        "200":
+          description: DID 列表
+    post:
+      tags: [Config]
+      x-requirement-id: MEDIA-08
+      x-roles: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [did, queue_id]
+              properties:
+                did:
+                  type: string
+                queue_id:
+                  type: string
+                display_name:
+                  type: string
+      responses:
+        "201":
+          description: Created
+
   /api/v1/admin/recordings/purge-expired:
     post:
       tags: [AdminMaintenance]
@@ -950,6 +1293,18 @@ components:
           type: integer
         ws_connections:
           type: integer
+        goroutines:
+          type: integer
+        heap_alloc_bytes:
+          type: integer
+        sys_bytes:
+          type: integer
+        num_cpu:
+          type: integer
+        recordings_dir:
+          type: string
+        recordings_dir_bytes:
+          type: integer
 
     LoginRequest:
       type: object
@@ -980,9 +1335,19 @@ components:
           type: string
         username:
           type: string
+        display_name:
+          type: string
         role:
           type: string
           enum: [admin, supervisor, agent]
+        disabled:
+          type: boolean
+        agent_id:
+          type: string
+        extension:
+          type: string
+        video_capable:
+          type: boolean
         created_at:
           type: string
           format: date-time
@@ -998,6 +1363,13 @@ components:
         role:
           type: string
           enum: [admin, supervisor, agent]
+        display_name:
+          type: string
+        extension:
+          type: string
+          description: role=agent 时必填
+        video_capable:
+          type: boolean
 
     UserUpdate:
       type: object
@@ -1080,9 +1452,19 @@ components:
           enum: [longest_idle, round_robin]
         overflow_policy:
           type: string
+        overflow_queue_id:
+          type: string
         recording_policy:
           type: string
           enum: [off, audio, video_composite]
+        ivr_flow_id:
+          type: string
+        wait_prompt:
+          type: string
+        announce_recording:
+          type: boolean
+        priority_enabled:
+          type: boolean
 
     QueueCreate:
       allOf:
@@ -1180,6 +1562,7 @@ components:
           type: string
         guest_url:
           type: string
+          description: 相对路径（如 /guest/?token=），根地址由调用方拼接
         expires_at:
           type: string
           format: date-time
@@ -1202,6 +1585,58 @@ components:
           type: string
         agent_id:
           type: string
+        legs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CallLeg"
+
+    CallLeg:
+      type: object
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+        agent_id:
+          type: string
+
+    GuestQueue:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        video_enabled:
+          type: boolean
+
+    GuestJoinRequest:
+      type: object
+      required: [queue_id]
+      properties:
+        queue_id:
+          type: string
+        session_type:
+          type: string
+          enum: [audio, video, mixed]
+        token:
+          type: string
+        priority:
+          type: integer
+          description: VIP 优先级，队列开启 priority_enabled 时生效
+
+    GuestJoinResponse:
+      type: object
+      properties:
+        call_id:
+          type: string
+        token:
+          type: string
+        leg_id:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
 
     OutboundCallRequest:
       type: object
@@ -1213,14 +1648,15 @@ components:
 
     TransferRequest:
       type: object
-      required: [mode, target]
+      required: [mode]
       properties:
         mode:
           type: string
           enum: [blind, consult]
-        target:
+        target_agent_id:
           type: string
-          description: agent_id 或 extension
+        target_queue_id:
+          type: string
 
     SDPPayload:
       type: object

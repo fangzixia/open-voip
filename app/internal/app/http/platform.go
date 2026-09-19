@@ -2,7 +2,10 @@ package http
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
+	"path/filepath"
+	"runtime"
 
 	"gorm.io/gorm"
 )
@@ -15,12 +18,20 @@ type StatusProvider struct {
 	ActiveCalls func() int
 	// WSConnections WebSocket 连接数。
 	WSConnections func() int
+	// RecordingsDir 录音目录，供运维判断磁盘挂载。
+	RecordingsDir string
 }
 
 type statusResponse struct {
-	DbOK           bool `json:"db_ok"`
-	ActiveCalls    int  `json:"active_calls"`
-	WSConnections  int  `json:"ws_connections"`
+	DbOK          bool   `json:"db_ok"`
+	ActiveCalls   int    `json:"active_calls"`
+	WSConnections int    `json:"ws_connections"`
+	Goroutines    int    `json:"goroutines"`
+	HeapAlloc     uint64 `json:"heap_alloc_bytes"`
+	SysBytes      uint64 `json:"sys_bytes"`
+	NumCPU        int    `json:"num_cpu"`
+	RecordingsDir string `json:"recordings_dir,omitempty"`
+	RecordingsBytes int64 `json:"recordings_dir_bytes"`
 }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -29,9 +40,17 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s StatusProvider) handleStatus(w http.ResponseWriter, r *http.Request) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
 	resp := statusResponse{
 		ActiveCalls:   0,
 		WSConnections: 0,
+		Goroutines:    runtime.NumGoroutine(),
+		HeapAlloc:     mem.HeapAlloc,
+		SysBytes:      mem.Sys,
+		NumCPU:        runtime.NumCPU(),
+		RecordingsDir: s.RecordingsDir,
+		RecordingsBytes: dirSize(s.RecordingsDir),
 	}
 	if s.ActiveCalls != nil {
 		resp.ActiveCalls = s.ActiveCalls()
@@ -48,4 +67,23 @@ func (s StatusProvider) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func dirSize(root string) int64 {
+	if root == "" {
+		return 0
+	}
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, e := d.Info()
+		if e != nil {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
 }

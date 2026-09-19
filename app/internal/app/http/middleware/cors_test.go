@@ -7,7 +7,7 @@ import (
 )
 
 func TestCORSAllowsPreflight(t *testing.T) {
-	h := CORS([]string{"https://ui.example.com"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := CORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -25,15 +25,20 @@ func TestCORSAllowsPreflight(t *testing.T) {
 	}
 }
 
-func TestCORSRejectsUnknownOriginPreflight(t *testing.T) {
-	h := CORS([]string{"https://ui.example.com"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+func TestCORSAllowsAnyOrigin(t *testing.T) {
+	h := CORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 
-	req := httptest.NewRequest(http.MethodOptions, "/api/v1/x", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	req.Header.Set("Origin", "https://evil.example.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d", rec.Code)
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://evil.example.com" {
+		t.Fatalf("allow-origin=%q", rec.Header().Get("Access-Control-Allow-Origin"))
 	}
 }

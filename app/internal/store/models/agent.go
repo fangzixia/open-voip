@@ -82,3 +82,14 @@ type AgentStateLog struct {
 
 // TableName 指定表名。
 func (AgentStateLog) TableName() string { return "agent_state_log" }
+
+// AgentSessionQueue 签入会话所选队列。
+type AgentSessionQueue struct {
+	// AgentID 坐席 ID。
+	AgentID string `gorm:"type:uuid;primaryKey;comment:坐席 ID"`
+	// QueueID 队列 ID。
+	QueueID string `gorm:"type:uuid;primaryKey;index;comment:签入队列 ID"`
+}
+
+// TableName 指定表名。
+func (AgentSessionQueue) TableName() string { return "agent_session_queues" }

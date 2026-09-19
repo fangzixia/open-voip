@@ -1,14 +1,15 @@
-# Open VoIP 配置示例（唯一配置源，不使用环境变量覆盖）
+# Open VoIP 配置示例（API 进程，不托管前端）
 
 server:
   listen: "0.0.0.0:8080"
-  public_url: "https://cc.internal"
 
 database:
   dsn: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip port=5432 sslmode=disable"
 
 recordings:
   dir: "./data/recordings"
+  retain_days: 90
+  notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
 
 jwt:
   access_ttl_sec: 3600
@@ -24,20 +25,56 @@ tls:
   cert_file: ""
   key_file: ""
 
-static:
-  dir: "./static"
-
 ice:
   stun_urls:
     - "stun:stun.l.google.com:19302"
+  udp_port_min: 10000
+  udp_port_max: 20000
+
+bootstrap:
+  admin_password: "changeme"
+  agent_password: "changeme"
 
 turn:
   enabled: false
   urls: []
   auth_secret: ""
 
-static_serve: true
+webhook:
+  max_retries: 3
+  timeout_sec: 5
 
-# 前端独立部署时使用 deploy/config.example.split.yml（static_serve: false + cors）
-cors:
-  allowed_origins: []
+public:
+  guest_base_url: ""
+
+sip:
+  enabled: false
+  listen: "0.0.0.0:5060"
+  user_agent: "open-voip"
+  local_domain: ""
+  external_ip: "127.0.0.1" # NAT/公网地址；运营商中继必须填固定公网 IP
+  rtp_port_min: 20000
+  rtp_port_max: 20100
+  transport: udp           # udp | tls（tls 需 tls_cert_file / tls_key_file）
+  session_expires_sec: 0   # 0 不发送；非 0 须 ≥ 90（RFC 4028），UAC 会按 refresher 发 UPDATE/re-INVITE
+  local_registrar: false   # 本机 MicroSIP 演示才开；公网中继必须 false
+  registrar_password: ""   # local_registrar 时空则默认为 changeme（Digest）
+  tls_cert_file: ""
+  tls_key_file: ""
+  trunks: []
+  # 本机 MicroSIP：enabled/local_registrar true，allowed_cidrs 含 127.0.0.1/32。
+  # 运营商中继：register+username/password，from_user 为报备 DID，allowed_cidrs 为 SBC IP。
+  # - id: primary
+  #   host: "sip.carrier.example"
+  #   port: 5060
+  #   username: ""
+  #   password: ""
+  #   realm: ""
+  #   register: true
+  #   expire_sec: 300
+  #   from_user: "021xxxxxxxx"
+  #   codecs: ["PCMU", "PCMA"]
+  #   allowed_cidrs: ["1.2.3.4/32"]
+  #   strip_prefix: ""
+  #   prefix: ""
+
