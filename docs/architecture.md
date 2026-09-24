@@ -1,17 +1,19 @@
 # Open VoIP 系统设计
 
+> 2026-09-22：当前交付为 open-call + open-switch 双服务，SIP 中继和 SIP 坐席均在目标范围。新增边界与实际验收状态见 [双服务与 SIP 上线验收](sip-production-acceptance.md)。历史阶段完成度不能作为生产认证。
+
 > 版本：v0.4（与需求 [requirements.md](./requirements.md) v0.3 对齐）  
 > 场景：小型公司内网、单机 All-in-One；Go 服务端 + Pion SFU + Lit/Vite 前端  
 
 本文档为 **系统设计主文档**。功能需求以 requirements 为准；本文描述架构、**四级分层**、层间契约与代码结构。
 
-**仓库布局**：设计与 API 契约位于仓库 `docs/`；Go 服务端位于 `app/`，Lit 前端位于仓库根目录 `frontend/`，二者分离。
+**仓库布局**：设计与 API 契约位于 `docs/`（跨服务对接见 [open-switch对接说明.md](./open-switch对接说明.md)）；**open-switch**（软交换）与 **open-call**（呼叫中心 + BFF）为两个独立 Go 工程；Lit 前端位于 `open-call-web/`。
 
 ---
 
 ## 1. 系统概述
 
-Open VoIP 是面向内网的 Web 呼叫中心：语音/视频坐席、访客排队、IVR、录音与 CDR、可选 PSTN。服务端默认 **单进程**（`open-voip`）承载业务与控制逻辑，**Pion SFU** 处理 WebRTC 媒体；TLS 可由二进制或前置反代终结，**coturn** 在跨网段场景可选启用。
+Open VoIP 是面向内网的 Web 呼叫中心：语音/视频坐席、访客排队、IVR、录音与 CDR、可选 PSTN。默认部署为 **open-call**（业务 + 对浏览器 API）与 **open-switch**（媒体 + 呼叫 FSM + Switch API）两进程，经 HTTP 对接；**Pion SFU** 在 open-switch 内处理 WebRTC 媒体。
 
 **相关文档**
 
@@ -23,7 +25,7 @@ Open VoIP 是面向内网的 Web 呼叫中心：语音/视频坐席、访客排�
 | [implementation-plan.md](./implementation-plan.md) | 分阶段实施与 Sprint |
 | [docs/api/](./api/) | 独立 REST 对接（OpenAPI） |
 
-**技术栈摘要**（细则见 [technical-design §2](./technical-design.md)）：Go 1.27.1、PostgreSQL + GORM AutoMigrate、Lit 3 + Vite、单一 `config.yml`、单二进制交付。
+**技术栈摘要**（细则见 [technical-design §2](./technical-design.md)）：Go 1.27.1、PostgreSQL + 启动 embed SQL 迁移、Lit 3 + Vite、每个服务独立 `config.yml`、两个独立二进制交付。
 
 设计目标：
 
@@ -72,7 +74,7 @@ flowchart TB
 
 | 层级 | 名称 | 唯一职责 | 典型组件 |
 |------|------|----------|----------|
-| **L1** | 接入层 | 用户与网络如何进入系统 | `frontend/*`（Lit）、`deploy/` 安装与 systemd、可选 coturn、防火墙 UDP 端口 |
+| **L1** | 接入层 | 用户与网络如何进入系统 | `open-call-web/*`（Lit）、`deploy/` 安装与 systemd、可选 coturn、防火墙 UDP 端口 |
 | **L2** | 媒体层 | 音视频与电信媒体的传输与处理 | `layers/media`：SFU、SRTP、Hold/mute、DTMF、IVR 放音轨、SIP、录音写盘 |
 | **L3** | 信令与呼叫控制层 | 单通 **Call** 的状态机与媒体编排时机 | `layers/control`：FSM、转接/三方/监听、IVR 运行时、WebRTC 信令编排 |
 | **L4** | 业务与运营层 | 组织、路由策略、话单与对外集成 | `layers/biz`：Auth/RBAC、坐席/队列/技能、ACD 选人、IVR 配置发布、CDR/报表、Webhook |
@@ -107,7 +109,7 @@ flowchart LR
 | `layers/control` → `ports`；通过注入的 **MediaPort** 调 L2 | `layers/control` → `layers/biz` |
 | `layers/media` → `ports`、Pion/SIP 库 | `layers/media` → `layers/control` / `layers/biz` / `store` |
 | `app/http`、`app/ws` → 各层 **Service 或 Port 接口** | handler 内实现 ACD/FSM/SFU |
-| **`cmd/open-voip` / `internal/app/run.go` 唯一** 组装各层具体实现 | 各层 package 互相 wire |
+| **各服务 `cmd/open-call` / `cmd/open-switch` / `internal/app/run.go` 唯一** 组装各层具体实现 | 各层 package 互相 wire |
 
  enforcement：`app/.golangci.yml`（depguard），CI 违反分层即失败。
 
@@ -261,11 +263,11 @@ flowchart TB
 
 ## 4. 代码结构（与四层对应）
 
-代码根目录 **`app/`** 为服务端；前端在仓库根目录 **`frontend/`**：
+服务端为 **`open-call/`** 与 **`open-switch/`**；前端在仓库根目录 **`open-call-web/`**：
 
 ```
 app/
-  cmd/open-voip/      # 组合根入口
+  cmd/open-call/ 或 cmd/open-switch/      # 组合根入口
   internal/
     ports/            # 层间接口 + 跨层 DTO
     layers/
@@ -275,7 +277,7 @@ app/
     app/              # L1 协议适配（http/ws/run）
     store/            # GORM 持久化（主要 L4）
   deploy/             # systemd、config 示例、Nginx
-frontend/             # L1 Lit 客户端（独立构建与托管）
+open-call-web/        # L1 Lit 客户端（独立构建与托管）
 ```
 
 领域模型、MediaPort、REST/事件详见 [technical-design.md](./technical-design.md)、[events.md](./events.md)、[docs/api/](./api/)。
@@ -312,7 +314,7 @@ type Call struct {
 
 ### 5.2 数据库（表与字段）
 
-表结构以 **GORM model + AutoMigrate** 为主（见 [technical-design §8](./technical-design.md)）。中文说明做法：
+表结构以 **embed SQL + 各服务独立迁移记录表** 为主（`oc_schema_migrations` / `os_schema_migrations`，见 [technical-design §8.2](./technical-design.md)）；GORM model 仅映射。中文说明做法：
 
 | 引擎 | 做法 |
 |------|------|

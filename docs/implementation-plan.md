@@ -1,8 +1,10 @@
 # Open VoIP 实施计划
 
+> 2026-09-22：当前交付为 open-call + open-switch 双服务，SIP 中继和 SIP 坐席均在目标范围。新增边界与实际验收状态见 [双服务与 SIP 上线验收](sip-production-acceptance.md)。历史阶段完成度不能作为生产认证。
+
 > 版本：v0.3  
 > 对齐：[architecture.md](./architecture.md) v0.4、[technical-design.md](./technical-design.md) v0.2、[requirements.md](./requirements.md) v0.3  
-> 当前仓库状态：Phase 2/3 主路径已落地（Go 分层 + Lit 三端 + CI）。组合根为 `cmd/open-voip` + `internal/app/run.go`。
+> 当前仓库状态：Phase 2/3 主路径已落地（Go 分层 + Lit 三端 + CI）。组合根为 各服务 `cmd/open-call` / `cmd/open-switch` + `internal/app/run.go`。
 
 本文档将设计转化为 **分阶段、可验收、依赖清晰** 的研发排期。功能验收以 requirements 需求 ID 为准；实现边界以 technical-design 折中表为准。
 
@@ -22,7 +24,7 @@
 ### 1.2 实施原则
 
 1. **自下而上组装**：`ports` → L2 最小可用 → L3 FSM → L4 业务 → `app` 适配 → 前端。
-2. **组合根唯一**：仅 `cmd/open-voip`、`internal/app/run.go` 串联具体实现（见 [layering.md §4](./layering.md)）。
+2. **组合根唯一**：仅 各服务 `cmd/open-call` / `cmd/open-switch`、`internal/app/run.go` 串联具体实现（见 [layering.md §4](./layering.md)）。
 3. **每迭代可演示**：优先打通「访客入队 → 振铃 → 接听 → 双向媒体 → 挂断 → CDR」再扩展。
 4. **验收绑 ID**：每个里程碑列出 requirements ID，便于测试用例与 PR 描述。
 5. **中文注释**：与 architecture §5 同步落地，不事后补。
@@ -69,10 +71,10 @@ flowchart TB
 | 0.3 | `internal/store`：GORM + Postgres、`AutoMigrate` 基础表骨架 | users/agents/queues 空壳 model + comment tag | 后端 |
 | 0.4 | `internal/ports/*`：接口与 DTO 占位（CallControl、Media、ACD、事件等） | 中文 doc comment 齐全 | 后端 |
 | 0.5 | `internal/layers/{biz,control,media}` 空包 + 包注释 | depguard 可扫描 | 后端 |
-| 0.6 | `internal/app/run.go` + `cmd/open-voip/main.go` | 启动读配置、连 DB、挂 chi、`GET /health` | 后端 |
+| 0.6 | `internal/app/run.go` + 各服务的 `cmd/open-call/main.go` / `cmd/open-switch/main.go` | 启动读配置、连 DB、挂 chi、`GET /health` | 后端 |
 | 0.7 | CI：golangci-lint + depguard（`app/.golangci.yml`）+ OpenAPI validate | PR 违反分层即失败 | 工程 |
 | 0.8 | 前端三入口 Vite 脚手架（agent/guest/admin）+ `shared/*` 空模块 | `npm run build` 通过 | 前端 |
-| 0.9 | 前端独立目录 `frontend/`，Nginx 托管；API 不服务静态页 | 与 §12 部署一致 | 工程 |
+| 0.9 | 前端独立目录 `open-call-web/`，Nginx 托管；API 不服务静态页 | 与 §12 部署一致 | 工程 |
 
 ### 3.2 验收标准
 

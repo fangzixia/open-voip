@@ -1,0 +1,58 @@
+# open-call 配置示例（呼叫中心：/api/v1 + /platform/v1 + BFF）
+# 通话控制经 BFF 代理至 open-switch；integration.secret 须与 open-switch 一致。
+
+server:
+  # 对浏览器/坐席客户端暴露的 API（含 WebSocket）。
+  listen: "0.0.0.0:8080"
+
+integration:
+  secret: "change_me_integration"
+  # open-switch Switch API 根地址（BFF 与 guest/switchapi 客户端使用）。
+  switch_base_url: "http://127.0.0.1:8082"
+
+database:
+  # 业务库：用户/坐席/队列/CDR 元数据等；勿与 open-switch 话务库混用。
+  dsn: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_call port=5432 sslmode=disable"
+
+recordings:
+  # 录音元数据与策略；文件实体在 open-switch 的 recordings.dir。
+  retain_days: 90
+  notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
+
+jwt:
+  access_ttl_sec: 3600
+  refresh_ttl_sec: 604800
+  # 示例仅用于通过配置校验，部署前必须替换为随机生成的密钥。
+  signing_key: "example-only-32-byte-signing-key-change-me"
+
+log:
+  level: info
+  format: json
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+
+bootstrap:
+  # 只允许首次本机演示显式开启；生产环境保持 false 并通过受控初始化创建管理员。
+  enabled: false
+  admin_password: "StrongAdmin123"
+  agent_password: "StrongAgent123"
+
+webhook:
+  max_retries: 3
+  timeout_sec: 5
+
+public:
+  # 访客入会页根 URL，用于生成 guest 链接（按实际前端域名填写）。
+  guest_base_url: "https://cc.example.com/guest"
+  # 生产只允许已签发 token 入会。
+  allow_direct_join: false
+
+security:
+  allowed_origins:
+    - "https://cc.example.com"
+  login_requests_per_min: 10
+  guest_requests_per_min: 30
+  admin_requests_per_min: 120

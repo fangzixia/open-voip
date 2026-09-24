@@ -1,0 +1,77 @@
+# open-switch 配置示例（软交换：Switch API + 媒体/SIP）
+# 与 open-call 分进程、分库部署；integration.secret 须与 open-call 一致。
+
+server:
+  # Switch API（/switch/v1）；建议仅内网监听，由 open-call BFF 代理终端流量。
+  listen: "127.0.0.1:8082"
+
+integration:
+  secret: "change_me_integration"
+  # open-call 的 Platform API 根地址（open-switch 回调 ACD/CDR/配置等）。
+  platform_base_url: "http://127.0.0.1:8080"
+
+database:
+  # 软交换库：仅存 calls/legs 等运行时话务；勿与 open-call 业务库混用。
+  dsn: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_switch port=5432 sslmode=disable"
+
+recordings:
+  # 录音/录像文件落盘目录（本进程写入）。
+  dir: "./data/recordings"
+  retain_days: 90
+  notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
+
+log:
+  level: info
+  format: json
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+
+ice:
+  # 内网可留空；跨 NAT 配置自己的 STUN/TURN。
+  stun_urls: []
+  udp_port_min: 10000
+  udp_port_max: 20000
+
+turn:
+  enabled: false
+  urls: []
+  auth_secret: ""
+
+sip:
+  enabled: false
+  listen: "0.0.0.0:5060"
+  user_agent: "open-switch"
+  local_domain: ""
+  external_ip: "127.0.0.1"
+  rtp_port_min: 20002
+  rtp_port_max: 20100
+  transport: udp
+  session_expires_sec: 0
+  local_registrar: false
+  # 每个 SIP 坐席独立凭证，用户名与业务分机号一致。
+  devices: []
+  # devices:
+  #   - username: "1001"
+  #     password: "REPLACE-WITH-UNIQUE-RANDOM-PASSWORD"
+  #     allowed_cidrs: ["192.168.10.0/24"]
+  tls_cert_file: ""
+  tls_key_file: ""
+  trunks: []
+  # 本机 MicroSIP：enabled/local_registrar true，allowed_cidrs 含 127.0.0.1/32。
+  # 运营商中继：register+username/password，from_user 为报备 DID，allowed_cidrs 为 SBC IP。
+  # - id: primary
+  #   host: "sip.carrier.example"
+  #   port: 5060
+  #   username: ""
+  #   password: ""
+  #   realm: ""
+  #   register: true
+  #   expire_sec: 300
+  #   from_user: "021xxxxxxxx"
+  #   codecs: ["PCMU", "PCMA"]
+  #   allowed_cidrs: ["1.2.3.4/32"]
+  #   strip_prefix: ""
+  #   prefix: ""

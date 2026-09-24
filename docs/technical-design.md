@@ -1,8 +1,10 @@
 # Open VoIP 技术设计
 
+> 2026-09-22：当前交付为 open-call + open-switch 双服务，SIP 中继和 SIP 坐席均在目标范围。新增边界与实际验收状态见 [双服务与 SIP 上线验收](sip-production-acceptance.md)。历史阶段完成度不能作为生产认证。
+
 > 版本：v0.3  
 > 对齐：[requirements.md](./requirements.md) v0.3、[architecture.md](./architecture.md) v0.4  
-> 场景：内网单机；单进程 `open-voip` + PostgreSQL + 可选前置 TLS 反代  
+> 场景：内网单机；双进程 `open-call` + `open-switch` + PostgreSQL + 可选前置 TLS 反代
 
 本文档描述 **实现级** 设计：技术选型、领域模型、Port、数据、部署与需求映射。四级分层以 [architecture.md §2](./architecture.md) 为准，本文不重复大段分层正文。
 
@@ -30,7 +32,7 @@
 ### 1.3 全局约束
 
 - 全链路主键 **`call_id`**（UUID）；媒体 **Room ID = call_id**（VIDEO-11）  
-- 单进程承载 L2/L3/L4 + `internal/app` 适配层  
+- open-switch 承载 L2/L3，open-call 承载 L4；各自具有 `internal/app` 适配层，跨进程仅通过 HTTP Port
 - Out of Scope 见 requirements §17  
 
 ---
@@ -46,7 +48,7 @@
 | 服务端 | **Go 1.27.1**（`go.mod` 中 `go 1.27.1` 与 `toolchain go1.27.1`） | 统一工具链 |
 | Go 语法 | **禁止已废弃 API/写法** | CI：`go vet ./...`；`staticcheck`；Code Review 对照附录 A 禁用清单 |
 | 前端 | **原生 JavaScript（ES modules）+ Lit 3** | 轻量 Web Demo |
-| 前端构建 | **Vite 5**（不强制 TypeScript） | 产出 `frontend/dist/`，由 Nginx 托管 |
+| 前端构建 | **Vite 5**（不强制 TypeScript） | 产出 `open-call-web/dist/`，由 Nginx 托管 |
 
 ### 2.2 服务端框架与基础设施
 
@@ -58,9 +60,9 @@
 | 配置解析 | **gopkg.in/yaml.v3** + `Validate()` | 无隐式 env |
 | 日志 | **log/slog** | NFR-05；结构化字段含 `call_id` |
 | 指标 / 限流 / 定时任务 | **不引入** | 见 §2.10 |
-| 组合 | **无 DI 框架**；`cmd/open-voip/main.go` + `internal/app/run.go` 手写 `new` | 见 §2.11 |
+| 组合 | **无 DI 框架**；各服务的 `cmd/open-call/main.go` / `cmd/open-switch/main.go` + `internal/app/run.go` 手写 `new` | 见 §2.11 |
 | 数据库 | **PostgreSQL 16+** | 唯一支持引擎 |
-| ORM / 迁移 | **GORM v2** + 启动 **`AutoMigrate`** | 表结构以 model 为源 |
+| ORM / 迁移 | **GORM v2** + 启动 **embed SQL**（`internal/store/migrate/sql`） | 表结构以 SQL 为源；model 仅 ORM |
 | 校验 | **go-playground/validator** | Admin DTO |
 | JWT | **golang-jwt/jwt/v5** + `jwt_revocations` 表 | PLAT-02 |
 | 密码 | **argon2id** | 凭证存储 |
@@ -87,7 +89,7 @@
 
 | 领域 | 选定 |
 |------|------|
-| 交付 | **单二进制** `open-voip`（API + WS + SFU） |
+| 交付 | **两个二进制**：`open-call`（业务 API + WS + BFF），`open-switch`（呼叫控制 + SIP/WebRTC + 录制） |
 | 静态前端 | Vite 构建 → 独立静态站（Nginx） |
 | TLS | 二进制直连 TLS（YAML 证书）或前置 **nginx**（文档示例） |
 | 容器 | **不交付** Docker / Compose / 镜像 |
@@ -96,9 +98,9 @@
 ### 2.6 前端（Lit）
 
 - 组件：**Lit 3**；路由：`history.pushState` 或 `@lit-labs/router`  
-- REST：`fetch` + `frontend/shared/api.js`  
-- 实时：`frontend/shared/ws.js`  
-- WebRTC：`frontend/shared/webrtc.js`  
+- REST：`fetch` + `open-call-web/shared/api.js`
+- 实时：`open-call-web/shared/ws.js`
+- WebRTC：`open-call-web/shared/webrtc.js`
 
 ### 2.7 工程与质量
 
@@ -116,7 +118,7 @@ Prometheus、限流库、cron/scheduler、wire/fx/dig、SQLite、sqlc/goose、Re
 open-voip/
   docs/                    # 需求、架构、api/（OpenAPI），无业务代码
   app/                     # Go 服务端
-    cmd/open-voip/
+    cmd/open-call/ 或 cmd/open-switch/
     internal/
       ports/
       layers/biz/          # L4
@@ -126,7 +128,7 @@ open-voip/
       store/
       config/
     deploy/
-  frontend/                # Lit 三端，独立构建
+  open-call-web/           # Lit 三端，独立构建
     agent/ guest/ admin/
     shared/
   app/.golangci.yml
@@ -151,7 +153,7 @@ open-voip/
 
 ```
 读 config.yml → 校验
-→ gorm.Open(Postgres) → AutoMigrate(models...)
+→ gorm.Open(Postgres) → migrate.Migrate()（embed SQL）
 → NewMediaService → 实现 MediaPort
 → NewControlService(ports..., mediaPort)
 → NewBizServices(db, ports...)
@@ -159,7 +161,7 @@ open-voip/
 → Listen (TLS/HTTP) + UDP 媒体端口
 ```
 
-**唯一**可 import 各层 concrete 的包：`cmd/open-voip`、`internal/app`（`run.go` 组合根）。
+**唯一**可 import 各层 concrete 的包：各服务 `cmd/open-call` / `cmd/open-switch`、`internal/app`（`run.go` 组合根）。
 
 ---
 
@@ -353,10 +355,14 @@ type MediaPort interface {
 | webhook_subscriptions, webhook_deliveries | L4 | Webhook |
 | audit_logs, jwt_revocations | L4 | 审计与撤销 |
 
-### 8.2 AutoMigrate
+### 8.2 SQL 迁移（embed）
 
-启动顺序：基础表 → 外键依赖表；索引在 model tag 声明。  
-中文注释：GORM `comment` tag；可选运维脚本 `COMMENT ON`（见 architecture §5.2）。
+- **open-call**：[`open-call/internal/store/migrate/sql/`](../open-call/internal/store/migrate/sql/)，业务表前缀 **`oc_`**。
+- **open-switch**：[`open-switch/internal/store/migrate/sql/`](../open-switch/internal/store/migrate/sql/)，运行时表前缀 **`os_`**。
+- 进程启动时执行未应用版本，open-call 记录在 **`oc_schema_migrations`**，open-switch 记录在 **`os_schema_migrations`**（`version` / `name` / `applied_at`）。版本号在两个服务内独立递增；本机共库联调不会互相跳过迁移。
+- 变更 schema：**新增** `NNNNNN_description.sql`，勿再依赖 GORM `AutoMigrate`。
+- 中文 COMMENT：每个 migration 须对**每张表、每个字段**执行 `COMMENT ON`（与 model 语义一致，见 architecture §5.2）。
+- **已有旧库**（无前缀表或 AutoMigrate 时代）：需人工 `RENAME`/导数据后对齐 `oc_`/`os_`，或空库重建。
 
 ### 8.3 索引要点
 
@@ -380,7 +386,7 @@ type MediaPort interface {
 
 ## 10. 前端架构
 
-- 三入口 Vite：`frontend/agent`, `guest`, `admin`  
+- 三入口 Vite：`open-call-web/agent`, `guest`, `admin`
 - `shared/api.js`, `ws.js`, `webrtc.js`  
 - 第三方对接不依赖 Demo 代码，以 docs/api 为准  
 
@@ -400,24 +406,31 @@ type MediaPort interface {
 ### 12.1 目录布局
 
 ```
-/opt/open-voip/
-  open-voip              # 二进制
+/opt/open-call/          # 业务控制面，不存储媒体文件
+  open-call
+  config.yml
+/opt/open-switch/        # SIP、RTP、WebRTC 与录音文件
+  open-switch
   config.yml
   data/recordings/
 ```
 
 ### 12.2 config.yml 块
 
-`server`（`listen`）、`database`、`recordings`、`jwt`、`ice`、`turn`、`tls`、`sip_trunks`、`log`
+open-call：`server`、`database`、`recordings`（仅策略）、`jwt`、`integration`、`webhook`、`public`、`security`、`bootstrap`、`tls`、`log`。
+
+open-switch：`server`、`database`、`recordings`（文件目录）、`integration`、`ice`、`turn`、`sip`、`sip_trunks`、`tls`、`log`。SIP 设备密码、Contact、RTP 端口与会议混音配置不得出现在 open-call。
 
 ### 12.3 systemd
 
-`deploy/open-voip.service` 示例：`ExecStart=/opt/open-voip/open-voip -config /opt/open-voip/config.yml`
+分别使用 `open-call/deploy/open-call.service` 与 `open-switch/deploy/open-switch.service`；运行目录为 `/opt/open-call` 和 `/opt/open-switch`，不可复用原单体的 ExecStart。
 
 ### 12.4 前置条件
 
-- PostgreSQL 已建库；防火墙：HTTPS + UDP 媒体端口段  
+- PostgreSQL 已建库；防火墙：open-call HTTPS、open-switch 内网 API、SIP 与 UDP 媒体端口段
 - 备份：`pg_dump` + 录音目录 rsync  
+
+open-call 可运行多个实例；登录会话、访客令牌、Webhook 投递租约和配置均由 PostgreSQL 协调。Webhook worker 先持久化任务，再通过 `SKIP LOCKED` 领取并指数退避，超过上限进入死信。配置 JSON 用于同版本业务配置迁移，完整灾备仍使用 PostgreSQL 备份。
 
 ### 12.5 容量（DEPLOY-05）
 
@@ -493,7 +506,7 @@ sequenceDiagram
 | 风险 | 对策 |
 |------|------|
 | 单机视频 CPU | SFU 不混流；录制写 Ogg/IVF，可选 ffmpeg 封装；弱网降 480p 提示 |
-| GORM AutoMigrate 生产变更 | 文档约定：大变更走维护窗口；关键索引人工复核 |
+| SQL 迁移生产变更 | 新增版本化 `.sql`；大变更走维护窗口；关键索引人工复核 |
 | 无后台任务 | REC/Webhook 依赖 API + 外部 cron |
 | Webhook 拖垮请求 | 同步重试上限 + 异步 goroutine 仅单次投递链 |
 

@@ -36,6 +36,25 @@ security:
   - bearerAuth: []
 
 paths:
+  /api/v1/agents/me/calls:
+    get:
+      tags: [Agents]
+      summary: 当前坐席活跃通话快照（重连恢复）
+      operationId: getMyActiveCalls
+      responses:
+        "200":
+          description: items 中包含当前坐席所属的活跃通话
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+        "403":
+          description: 当前用户不是坐席
   /health:
     get:
       tags: [Platform]
@@ -45,6 +64,17 @@ paths:
       responses:
         "200":
           description: OK
+
+  /health/ready:
+    get:
+      tags: [Platform]
+      security: []
+      summary: 就绪探针，检查 PostgreSQL 与 open-switch
+      responses:
+        "200":
+          description: 依赖均可用
+        "503":
+          description: 至少一个关键依赖不可用
 
   /api/v1/status:
     get:
@@ -755,6 +785,14 @@ paths:
                   type: string
                 text:
                   type: string
+                disposition_code:
+                  type: string
+                tags:
+                  type: array
+                  items: {type: string}
+                complete:
+                  type: boolean
+                  description: 完成 ACW 后将坐席恢复为空闲
       responses:
         "201":
           description: Created
@@ -800,9 +838,48 @@ paths:
                   type: integer
                 label:
                   type: string
+                score:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
       responses:
         "201":
           description: Created
+
+  /api/v1/calls/{callId}/qa-marks/{markId}:
+    patch:
+      tags: [Recordings]
+      x-roles: [admin, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+        - name: markId
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [offset_sec, label]
+              properties:
+                offset_sec: {type: integer, minimum: 0}
+                label: {type: string}
+                score: {type: integer, minimum: 0, maximum: 100}
+      responses:
+        "200": {description: Updated}
+    delete:
+      tags: [Recordings]
+      x-roles: [admin, supervisor]
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+        - name: markId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204": {description: Deleted}
 
   /api/v1/calls/{callId}/legs/{legId}/mute:
     post:
@@ -1200,6 +1277,168 @@ paths:
                   deleted_count:
                     type: integer
 
+  /api/v1/auth/change-password:
+    post:
+      tags: [Auth]
+      summary: 修改本人密码并撤销全部现有会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string}
+                new_password: {type: string, minLength: 12}
+      responses:
+        "204": {description: Password changed}
+
+  /api/v1/auth/sessions:
+    get:
+      tags: [Auth]
+      summary: 列出本人登录会话
+      responses:
+        "200": {description: OK}
+
+  /api/v1/auth/sessions/{sessionId}:
+    delete:
+      tags: [Auth]
+      summary: 撤销本人指定登录会话
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204": {description: Revoked}
+
+  /api/v1/skills/{skillId}:
+    patch:
+      tags: [Skills]
+      x-roles: [admin]
+      parameters:
+        - name: skillId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Updated}
+    delete:
+      tags: [Skills]
+      x-roles: [admin]
+      parameters:
+        - name: skillId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204": {description: Deleted when unreferenced}
+
+  /api/v1/ivr/flows/{flowId}:
+    get:
+      tags: [IVR]
+      x-roles: [admin]
+      parameters:
+        - name: flowId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Draft and current version}
+    patch:
+      tags: [IVR]
+      x-roles: [admin]
+      parameters:
+        - name: flowId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Updated}
+    delete:
+      tags: [IVR]
+      x-roles: [admin]
+      parameters:
+        - name: flowId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204": {description: Deleted when unreferenced}
+
+  /api/v1/ivr/flows/{flowId}/versions:
+    get:
+      tags: [IVR]
+      x-roles: [admin]
+      parameters:
+        - name: flowId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Immutable published versions}
+
+  /api/v1/ivr/flows/{flowId}/rollback:
+    post:
+      tags: [IVR]
+      x-roles: [admin]
+      parameters:
+        - name: flowId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: A new version copied from the selected version}
+
+  /api/v1/webhooks/subscriptions/{subscriptionId}:
+    patch:
+      tags: [Webhooks]
+      x-roles: [admin]
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Updated, optionally returns a rotated secret once}
+    delete:
+      tags: [Webhooks]
+      x-roles: [admin]
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204": {description: Deleted}
+
+  /api/v1/webhooks/deliveries:
+    get:
+      tags: [Webhooks]
+      x-roles: [admin]
+      parameters:
+        - name: status
+          in: query
+          schema: {type: string, enum: [pending, processing, success, dead_letter]}
+        - name: event_type
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {description: Delivery history and dead letters}
+
+  /api/v1/dids/{didId}:
+    delete:
+      tags: [DID]
+      x-roles: [admin]
+      parameters:
+        - name: didId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204": {description: Deleted}
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1331,6 +1570,13 @@ components:
     User:
       type: object
       properties:
+        terminal_type:
+          type: string
+          enum: [webrtc, sip]
+          description: SIP 终端只支持语音，修改绑定前必须签出
+        sip_username:
+          type: string
+          description: SIP 终端须与 extension 相同，凭证由交换服务配置
         id:
           type: string
         username:
@@ -1356,6 +1602,13 @@ components:
       type: object
       required: [username, password, role]
       properties:
+        terminal_type:
+          type: string
+          enum: [webrtc, sip]
+          description: SIP 终端只支持语音，修改绑定前必须签出
+        sip_username:
+          type: string
+          description: SIP 终端须与 extension 相同，凭证由交换服务配置
         username:
           type: string
         password:
@@ -1374,6 +1627,13 @@ components:
     UserUpdate:
       type: object
       properties:
+        terminal_type:
+          type: string
+          enum: [webrtc, sip]
+          description: SIP 终端只支持语音，修改绑定前必须签出
+        sip_username:
+          type: string
+          description: SIP 终端须与 extension 相同，凭证由交换服务配置
         role:
           type: string
         disabled:
@@ -1396,6 +1656,13 @@ components:
     Agent:
       type: object
       properties:
+        terminal_type:
+          type: string
+          enum: [webrtc, sip]
+          description: SIP 终端只支持语音，修改绑定前必须签出
+        sip_username:
+          type: string
+          description: SIP 终端须与 extension 相同，凭证由交换服务配置
         id:
           type: string
         user_id:

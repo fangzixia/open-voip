@@ -1,15 +1,26 @@
-# 代码目录（app/）运行时产物
-app/bin/
-app/dist/
-app/deploy/config.yml
-app/**/*.exe
-app/**/*.test
-app/coverage.out
-app/data/
+# 代码目录运行时产物
+.gocache/
+.codex-go-cache/
+.local-test/
+open-call/bin/
+open-call/dist/
+open-call/deploy/config.yml
+open-call/**/*.exe
+open-call/**/*.test
+open-call/coverage.out
+open-call/data/
 
-frontend/node_modules/
-frontend/dist/
-frontend/.env
+open-switch/bin/
+open-switch/dist/
+open-switch/deploy/config.yml
+open-switch/**/*.exe
+open-switch/**/*.test
+open-switch/coverage.out
+open-switch/data/
+
+open-call-web/node_modules/
+open-call-web/dist/
+open-call-web/.env
 
 # IDE
 .idea/

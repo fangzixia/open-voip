@@ -1,0 +1,40 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    depguard:
+      rules:
+        layering-biz:
+          files:
+            - internal/layers/biz/**
+          deny:
+            - pkg: github.com/pion
+              desc: open-call 禁止 Pion（媒体在 open-switch）
+            - pkg: github.com/emiago
+            - pkg: github.com/icholy/digest
+          allow:
+            - $gostd
+            - open-call/internal/layers/biz
+            - open-call/internal/ports
+            - open-call/internal/ports/dto
+            - open-call/internal/errs
+            - open-call/internal/store
+            - open-call/internal/config
+            - open-call/internal/integration/switchapi
+            - gorm.io/gorm
+            - github.com/golang-jwt/jwt
+            - github.com/google/uuid
+            - golang.org/x/crypto
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

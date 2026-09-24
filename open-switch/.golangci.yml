@@ -1,0 +1,76 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    depguard:
+      rules:
+        layering-biz:
+          files:
+            - internal/layers/biz/**
+          deny:
+            - pkg: open-switch/internal/layers/control
+              desc: L4 禁止 import L3
+            - pkg: open-switch/internal/layers/media
+              desc: L4 禁止 import L2
+            - pkg: github.com/pion
+              desc: L4 禁止 import Pion
+          allow:
+            - $gostd
+            - open-switch/internal/layers/biz
+            - open-switch/internal/ports
+            - open-switch/internal/ports/dto
+            - open-switch/internal/errs
+            - open-switch/internal/store
+            - open-switch/internal/config
+            - gorm.io/gorm
+            - github.com/golang-jwt/jwt
+            - github.com/google/uuid
+            - golang.org/x/crypto
+        layering-control:
+          files:
+            - internal/layers/control/**
+          deny:
+            - pkg: open-switch/internal/layers/biz
+              desc: L3 禁止 import L4
+            - pkg: open-switch/internal/layers/media
+              desc: L3 禁止直接 import L2 实现（应使用 ports.MediaPort）
+            - pkg: open-switch/internal/store
+              desc: L3 禁止直接 SQL
+          allow:
+            - $gostd
+            - open-switch/internal/layers/control
+            - open-switch/internal/ports
+            - open-switch/internal/ports/dto
+            - open-switch/internal/errs
+            - github.com/google/uuid
+        layering-media:
+          files:
+            - internal/layers/media/**
+          deny:
+            - pkg: open-switch/internal/layers/biz
+            - pkg: open-switch/internal/layers/control
+            - pkg: open-switch/internal/store
+          allow:
+            - $gostd
+            - open-switch/internal/layers/media
+            - open-switch/internal/ports
+            - open-switch/internal/ports/dto
+            - open-switch/internal/errs
+            - open-switch/internal/config
+            - github.com/pion
+            - github.com/google/uuid
+            - github.com/emiago
+            - github.com/icholy/digest
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

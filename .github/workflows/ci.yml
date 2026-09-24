@@ -5,20 +5,19 @@ on:
     branches: [main, master]
   pull_request:
 
-defaults:
-  run:
-    working-directory: app
-
 jobs:
-  go:
+  open-switch:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: open-switch
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: openvoip
           POSTGRES_PASSWORD: change_me
-          POSTGRES_DB: openvoip
+          POSTGRES_DB: openvoip_switch
         ports:
           - 5432:5432
         options: >-
@@ -31,19 +30,57 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.1"
-      - name: Go test
+      - name: Go test & build
         env:
-          OPEN_VOIP_TEST_DSN: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip port=5432 sslmode=disable"
+          OPEN_VOIP_TEST_DSN: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_switch port=5432 sslmode=disable"
         run: |
           go mod download
           go vet ./...
-          go test ./...
-          go build -o /dev/null ./cmd/open-voip
+          go test -race ./...
+          go build -o /dev/null ./cmd/open-switch
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.13.2
-          working-directory: app
+          working-directory: open-switch
+
+  open-call:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: open-call
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: openvoip
+          POSTGRES_PASSWORD: change_me
+          POSTGRES_DB: openvoip_call
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openvoip"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+      - name: Go test & build
+        env:
+          OPEN_VOIP_TEST_DSN: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_call port=5432 sslmode=disable"
+        run: |
+          go mod download
+          go vet ./...
+          go test -race ./...
+          go build -o /dev/null ./cmd/open-call
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2
+          working-directory: open-call
 
   openapi:
     runs-on: ubuntu-latest
@@ -57,11 +94,11 @@ jobs:
           node-version: "20"
       - run: npx --yes @redocly/cli@1 lint docs/api/openapi.yaml --config docs/api/redocly.yaml
 
-  frontend:
+  open-call-web:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend
+        working-directory: open-call-web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

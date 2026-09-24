@@ -1,0 +1,21 @@
+[Unit]
+Description=Open Switch call control and SIP media
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openvoip
+Group=openvoip
+WorkingDirectory=/opt/open-switch
+ExecStart=/opt/open-switch/open-switch -config /opt/open-switch/config.yml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65535
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

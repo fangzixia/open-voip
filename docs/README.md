@@ -11,4 +11,6 @@
 | [api/](./api/) | OpenAPI（REST 对接） |
 | [events.md](./events.md) | WebSocket 事件 |
 
-应用代码见 **[../app/](../app/)**（服务端）与 **[../frontend/](../frontend/)**（前端）。
+应用代码见 **[../open-call/](../open-call/)**、**[../open-switch/](../open-switch/)** 与 **[../open-call-web/](../open-call-web/)**（前端）。
+
+- 双服务边界、SIP 中继与坐席配置、上线验收：[SIP 上线验收](sip-production-acceptance.md)。
