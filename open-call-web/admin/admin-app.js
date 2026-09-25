@@ -1,9 +1,10 @@
+import { bindApiFeedback } from "../shared/http-client.js";
+import { formatDateTime } from "../shared/datetime.js";
 import { LitElement, html } from "lit";
 import {
   addQaMark,
   bindQueueAgents,
   bindAgentSkills,
-  createIvrFlow,
   createQueue,
   createSkill,
   createUser,
@@ -28,23 +29,26 @@ import {
   listWebhooks,
   listWrapUps,
   login,
+  logout,
   patchQueue,
-  publishIvr,
   upsertDid,
 } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAccessToken } from "../shared/auth-store.js";
+import { callResultLabel, sessionTypeLabel } from "../shared/call-enums.js";
+import { renderAppShell, renderFeedback, renderLoginLayout } from "../shared/components/ui.js";
 import { shellStyles } from "../shared/shell-styles.js";
+import "./ivr-editor.js";
 
 const NAV = [
-  { id: "overview", label: "总览" },
-  { id: "queues", label: "队列" },
-  { id: "agents", label: "坐席" },
-  { id: "dids", label: "DID" },
-  { id: "cdr", label: "CDR" },
-  { id: "recordings", label: "录音" },
-  { id: "ivr", label: "IVR" },
-  { id: "webhooks", label: "Webhook" },
-  { id: "audit", label: "审计" },
+  { id: "overview", label: "总览", group: "功能导航" },
+  { id: "queues", label: "队列", group: "话务管理" },
+  { id: "agents", label: "坐席", group: "话务管理" },
+  { id: "dids", label: "呼入号码", group: "话务管理" },
+  { id: "cdr", label: "通话记录", group: "话务管理" },
+  { id: "recordings", label: "录音", group: "话务管理" },
+  { id: "ivr", label: "IVR", group: "流程管理" },
+  { id: "webhooks", label: "Webhook", group: "流程管理" },
+  { id: "audit", label: "审计", group: "系统设置" },
 ];
 
 function agentTag(state) {
@@ -88,6 +92,7 @@ export class AdminApp extends LitElement {
     skillName: { type: String },
     wrapUps: { type: Array },
     playUrl: { type: String },
+    playType: { type: String },
     bindAgentId: { type: String },
     bindSkillId: { type: String },
     nav: { type: String },
@@ -142,6 +147,7 @@ export class AdminApp extends LitElement {
     this.skillName = "通用";
     this.wrapUps = [];
     this.playUrl = "";
+    this.playType = "";
     this.bindAgentId = "";
     this.bindSkillId = "";
     this.nav = "overview";
@@ -152,6 +158,7 @@ export class AdminApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._unbindApi = bindApiFeedback(this, () => { this.authed = false; });
     this.#tickClock();
     this.#clockTimer = setInterval(() => this.#tickClock(), 1000);
     if (this.authed) this.#load();
@@ -159,11 +166,12 @@ export class AdminApp extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._unbindApi?.();
     clearInterval(this.#clockTimer);
   }
 
   #tickClock() {
-    this.clock = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    this.clock = formatDateTime();
   }
 
   async #login(ev) {
@@ -178,29 +186,26 @@ export class AdminApp extends LitElement {
     }
   }
 
+  async #logout() {
+    try { await logout(); } catch (e) { this.error = e.message; }
+    finally { clearAccessToken(); this.authed = false; }
+  }
+
+  /** 加载管理端总览所需的队列、坐席、话单和配置数据。 */
   async #load() {
-    try {
-      this.status = await fetchStatus();
-      this.users = (await listUsers()).items || [];
-      this.queues = (await listQueues()).items || [];
-      this.cdr = (await listCdr()).items || [];
-      this.live = await fetchLiveReport();
-      this.hist = await fetchHistoricalReport();
-      this.recs = (await listRecordings()).items || [];
-      this.audit = (await listAudit()).items || [];
-      this.ivrs = (await listIvr()) || [];
-      this.hooks = (await listWebhooks()) || [];
-      this.agents = (await listAgents()).items || [];
-      this.utils = (await fetchAgentUtil()).items || [];
-      const dids = await listDids();
-      this.dids = Array.isArray(dids) ? dids : [];
-      const skills = await listSkills();
-      this.skills = Array.isArray(skills) ? skills : skills.items || [];
-      this.wrapUps = (await listWrapUps()).items || [];
-      this.error = "";
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    this.error = "";
+    const jobs = [
+      ["status", fetchStatus], ["users", listUsers, "items"], ["queues", listQueues, "items"],
+      ["cdr", listCdr, "items"], ["live", fetchLiveReport], ["hist", fetchHistoricalReport],
+      ["recs", listRecordings, "items"], ["audit", listAudit, "items"], ["ivrs", listIvr],
+      ["hooks", listWebhooks], ["agents", listAgents, "items"], ["utils", fetchAgentUtil, "items"],
+      ["dids", listDids], ["skills", listSkills], ["wrapUps", listWrapUps, "items"],
+    ];
+    await Promise.allSettled(jobs.map(async ([key, load, field]) => {
+      const result = await load();
+      if (!this.authed) return;
+      this[key] = field ? result?.[field] || [] : result;
+    }));
   }
 
   async #createUser(ev) {
@@ -227,43 +232,6 @@ export class AdminApp extends LitElement {
     const ids = this.users.filter((u) => u.agent_id).map((u) => u.agent_id);
     try {
       await bindQueueAgents(queueId, ids);
-      await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  async #ivrDemo() {
-    try {
-      const audio = this.queues.find((q) => !q.video_enabled);
-      const video = this.queues.find((q) => q.video_enabled);
-      const flow = await createIvrFlow("主菜单", {
-        start: "menu",
-        nodes: {
-          menu: {
-            type: "menu",
-            prompt: "按1语音，按2视频",
-            timeout_sec: 8,
-            choices: { 1: "qa", 2: "qv" },
-            default: "qa",
-          },
-          qa: { type: "route_queue", queue_id: audio?.id, session_type: "audio" },
-          qv: { type: "route_queue", queue_id: video?.id || audio?.id, session_type: "video" },
-        },
-      });
-      await publishIvr(flow.id);
-      if (audio) {
-        await patchQueue(audio.id, {
-          name: audio.name,
-          video_enabled: audio.video_enabled,
-          max_wait_sec: audio.max_wait_sec,
-          strategy: audio.strategy,
-          ivr_flow_id: flow.id,
-          overflow_policy: audio.overflow_policy || "hangup",
-          recording_policy: audio.recording_policy || "audio",
-          announce_recording: audio.announce_recording,
-        });
-      }
       await this.#load();
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e);
@@ -303,6 +271,16 @@ export class AdminApp extends LitElement {
       const blob = await fetchRecordingBlob(id);
       if (this.playUrl) URL.revokeObjectURL(this.playUrl);
       this.playUrl = URL.createObjectURL(blob);
+      this.playType = blob.type;
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async #downloadRec(id, format = "") {
+    try {
+      await downloadRecording(id, format);
+      this.error = "";
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e);
     }
@@ -347,6 +325,7 @@ export class AdminApp extends LitElement {
     }
   }
 
+  /** 根据当前筛选条件生成页面显示的话单集合。 */
   #filteredCdr() {
     return (this.cdr || []).filter((c) => {
       const callerOk = !this.cdrCaller || String(c.caller || "").includes(this.cdrCaller);
@@ -369,65 +348,48 @@ export class AdminApp extends LitElement {
 
   render() {
     if (!this.authed) {
-      return html`
-        <div class="login-page">
-          <header class="topbar">
-            <div class="brand"><span class="brand-mark">OV</span><span>Open VoIP</span><span class="brand-sub">管理控台</span></div>
-          </header>
-          <div class="login-wrap">
-            <form class="login-card" @submit=${(e) => this.#login(e)}>
-              <h2>管理员登录</h2>
-              <p class="hint">演示账号 admin / changeme</p>
-              <div class="field">
-                <label>用户名</label>
-                <input .value=${this.username} @input=${(e) => (this.username = e.target.value)} />
-              </div>
-              <div class="field">
-                <label>密码</label>
-                <input type="password" .value=${this.password} @input=${(e) => (this.password = e.target.value)} />
-              </div>
-              <button type="submit">登录</button>
-              ${this.error ? html`<p class="error" style="margin-top:12px">${this.error}</p>` : ""}
-            </form>
+      return renderLoginLayout({
+        subtitle: "管理控台",
+        title: "管理员登录",
+        hint: "请使用部署时配置的管理员账号登录",
+        onSubmit: (event) => this.#login(event),
+        error: this.error,
+        fields: html`
+          <div class="field">
+            <label for="admin-username">用户名</label>
+            <input id="admin-username" autocomplete="username" .value=${this.username} @input=${(e) => (this.username = e.target.value)} />
           </div>
-        </div>
-      `;
+          <div class="field">
+            <label for="admin-password">密码</label>
+            <input id="admin-password" type="password" autocomplete="current-password" .value=${this.password} @input=${(e) => (this.password = e.target.value)} />
+          </div>
+        `,
+      });
     }
-    return html`
-      <div class="layout">
-        <header class="topbar">
-          <div class="brand">
-            <span class="brand-mark">OV</span>
-            <span>Open VoIP</span>
-            <span class="brand-sub">管理控台</span>
-          </div>
-          <span class="spacer"></span>
+    return renderAppShell({
+      subtitle: "管理控台",
+      navItems: NAV,
+      activeNav: this.nav,
+      onNavigate: (id) => (this.nav = id),
+      breadcrumb: this.#crumb(),
+      topbar: html`
           <span class="topbar-meta">${this.clock}</span>
           <span class="topbar-meta">管理员</span>
-          <button @click=${() => { clearAccessToken(); this.authed = false; }}>退出</button>
-        </header>
-        <div class="layout-body">
-          <aside class="sidebar">
-            ${NAV.map(
-              (n) => html`<button class="nav-item ${this.nav === n.id ? "active" : ""}" @click=${() => (this.nav = n.id)}>${n.label}</button>`,
-            )}
-          </aside>
-          <div class="content">
-            <div class="breadcrumb">管理控台 / <strong>${this.#crumb()}</strong></div>
-            ${this.error ? html`<p class="error">${this.error}</p>` : ""}
-            ${this.nav === "overview" ? this.#overview() : ""}
-            ${this.nav === "queues" ? this.#queues() : ""}
-            ${this.nav === "agents" ? this.#agents() : ""}
-            ${this.nav === "dids" ? this.#dids() : ""}
-            ${this.nav === "cdr" ? this.#cdrPage() : ""}
-            ${this.nav === "recordings" ? this.#recs() : ""}
-            ${this.nav === "ivr" ? this.#ivr() : ""}
-            ${this.nav === "webhooks" ? this.#hooks() : ""}
-            ${this.nav === "audit" ? this.#audit() : ""}
-          </div>
-        </div>
-      </div>
-    `;
+          <button @click=${() => this.#logout()}>退出</button>
+      `,
+      content: html`
+        ${renderFeedback({ error: this.error })}
+        ${this.nav === "overview" ? this.#overview() : ""}
+        ${this.nav === "queues" ? this.#queues() : ""}
+        ${this.nav === "agents" ? this.#agents() : ""}
+        ${this.nav === "dids" ? this.#dids() : ""}
+        ${this.nav === "cdr" ? this.#cdrPage() : ""}
+        ${this.nav === "recordings" ? this.#recs() : ""}
+        ${this.nav === "ivr" ? this.#ivr() : ""}
+        ${this.nav === "webhooks" ? this.#hooks() : ""}
+        ${this.nav === "audit" ? this.#audit() : ""}
+      `,
+    });
   }
 
   #overview() {
@@ -448,7 +410,7 @@ export class AdminApp extends LitElement {
               <td>${q.name}</td>
               <td>${q.waiting}</td>
               <td>${this.#idleAgents()}</td>
-              <td>${this.queues.find((x) => x.name === q.name)?.strategy || "—"}</td>
+              <td>${strategyLabel(this.queues.find((x) => x.name === q.name)?.strategy)}</td>
               <td><button class="ghost" @click=${() => (this.nav = "queues")}>查看</button></td>
             </tr>`)}
             ${!(this.live?.queues || []).length ? html`<tr><td colspan="5" class="muted">暂无队列数据</td></tr>` : ""}
@@ -486,10 +448,12 @@ export class AdminApp extends LitElement {
           <label>结果</label>
           <select .value=${this.cdrResult} @change=${(e) => (this.cdrResult = e.target.value)}>
             <option value="">全部</option>
-            <option value="answered">answered</option>
-            <option value="abandoned">abandoned</option>
-            <option value="no_answer">no_answer</option>
-            <option value="failed">failed</option>
+            <option value="answered">已接通</option>
+            <option value="abandoned">已放弃</option>
+            <option value="no_answer">未接听</option>
+            <option value="failed">失败</option>
+            <option value="timeout">超时</option>
+            <option value="queued">排队中</option>
           </select>
         </div>
         <button @click=${() => this.requestUpdate()}>查询</button>
@@ -507,8 +471,8 @@ export class AdminApp extends LitElement {
           (c) => html`<tr>
             <td>${c.call_id}</td>
             <td>${c.caller || "—"}</td>
-            <td>${c.result}</td>
-            <td>${c.session_type}</td>
+            <td>${callResultLabel(c.result)}</td>
+            <td>${sessionTypeLabel(c.session_type)}</td>
             <td>${c.started_at || ""}</td>
             <td>${c.duration_sec ?? 0}s</td>
           </tr>`,
@@ -583,8 +547,8 @@ export class AdminApp extends LitElement {
               <td>${q.name}</td>
               <td>${q.video_enabled ? "是" : "否"}</td>
               <td>${q.priority_enabled ? "是" : "否"}</td>
-              <td>${q.strategy}</td>
-              <td>${q.overflow_policy || "-"}</td>
+              <td>${strategyLabel(q.strategy)}</td>
+              <td>${overflowPolicyLabel(q.overflow_policy)}</td>
               <td>
                 <button class="secondary" @click=${() => this.#bindAll(q.id)}>绑定全部坐席</button>
                 <button class="secondary" @click=${() => this.#toggleVip(q)}>VIP</button>
@@ -608,9 +572,9 @@ export class AdminApp extends LitElement {
             <div class="field">
               <label>角色</label>
               <select .value=${this.newUser.role} @change=${(e) => (this.newUser = { ...this.newUser, role: e.target.value })}>
-                <option value="agent">agent</option>
-                <option value="admin">admin</option>
-                <option value="supervisor">supervisor</option>
+                <option value="agent">坐席</option>
+                <option value="admin">管理员</option>
+                <option value="supervisor">班长</option>
               </select>
             </div>
             <div class="field"><label>分机</label><input .value=${this.newUser.extension} @input=${(e) => (this.newUser = { ...this.newUser, extension: e.target.value })} /></div>
@@ -625,7 +589,7 @@ export class AdminApp extends LitElement {
         <h3>用户</h3>
         <table>
           <tr><th>用户</th><th>角色</th><th>分机</th><th>坐席 ID</th></tr>
-          ${this.users.map((u) => html`<tr><td>${u.username}</td><td>${u.role}</td><td>${u.extension || ""}</td><td>${u.agent_id || ""}</td></tr>`)}
+          ${this.users.map((u) => html`<tr><td>${u.username}</td><td>${roleLabel(u.role)}</td><td>${u.extension || ""}</td><td>${u.agent_id || ""}</td></tr>`)}
         </table>
         <div class="pager">共 ${this.users.length} 条</div>
       </div>
@@ -648,7 +612,7 @@ export class AdminApp extends LitElement {
           <tr><th>坐席</th><th>空闲</th><th>通话</th><th>示忙</th><th>利用率</th></tr>
           ${this.utils.map((u) => html`<tr><td>${u.agent_id}</td><td>${Math.round(u.idle_sec)}s</td><td>${Math.round(u.on_call_sec)}s</td><td>${Math.round(u.busy_sec)}s</td><td>${((u.utilization || 0) * 100).toFixed(0)}%</td></tr>`)}
         </table>
-        <h4 style="margin-top:16px">历史报表</h4>
+        <h4 class="section-spaced">历史报表</h4>
         <pre>${JSON.stringify(this.hist, null, 2)}</pre>
       </div>
     `;
@@ -657,7 +621,7 @@ export class AdminApp extends LitElement {
   #dids() {
     return html`
       <div class="panel">
-        <h3>DID / 外显</h3>
+        <h3>呼入号码 / 外显号码</h3>
         <form @submit=${(e) => this.#saveDid(e)}>
           <div class="form-inline">
             <div class="field"><label>DID</label><input .value=${this.didForm.did} @input=${(e) => (this.didForm = { ...this.didForm, did: e.target.value })} /></div>
@@ -684,7 +648,7 @@ export class AdminApp extends LitElement {
     const rows = this.#filteredCdr();
     return html`
       <div class="panel">
-        <h3>CDR</h3>
+        <h3>通话记录</h3>
         ${this.#cdrQuery()}
         ${this.#cdrTable(rows)}
       </div>
@@ -715,33 +679,32 @@ export class AdminApp extends LitElement {
         <table>
           <tr><th>ID</th><th>通话</th><th>类型</th><th>大小</th><th>操作</th></tr>
           ${this.recs.map((r) => html`<tr>
-            <td>${r.id}</td><td>${r.call_id}</td><td>${r.media_type}</td><td>${r.file_size}</td>
+            <td>${r.id}</td><td>${r.call_id}</td>
+            <td>${r.media_type === "video_composite"
+              ? ["mp4", "webm"].includes(r.format) ? `视频 · ${r.format.toUpperCase()}` : "旧版音视频分离"
+              : `音频 · ${(r.format || "ogg").toUpperCase()}`}</td>
+            <td>${r.file_size}</td>
             <td>
-              <button class="secondary" @click=${() => downloadRecording(r.id)}>下载</button>
+              ${r.media_type === "video_composite" && ["mp4", "webm"].includes(r.format)
+                ? html`<button class="secondary" @click=${() => this.#downloadRec(r.id, "mp4")}>下载 MP4</button>
+                       <button class="secondary" @click=${() => this.#downloadRec(r.id, "webm")}>下载 WebM</button>`
+                : html`<button class="secondary" @click=${() => this.#downloadRec(r.id)}>下载</button>`}
               <button class="secondary" @click=${() => this.#playRec(r.id)}>回放</button>
             </td>
           </tr>`)}
         </table>
         <div class="pager">共 ${this.recs.length} 条</div>
-        ${this.playUrl ? html`<audio controls autoplay src=${this.playUrl}></audio><video controls src=${this.playUrl}></video>` : ""}
+        ${this.playUrl
+          ? this.playType.startsWith("video/")
+            ? html`<video controls autoplay playsinline src=${this.playUrl}></video>`
+            : html`<audio controls autoplay src=${this.playUrl}></audio>`
+          : ""}
       </div>
     `;
   }
 
   #ivr() {
-    const rows = Array.isArray(this.ivrs) ? this.ivrs : [];
-    return html`
-      <div class="panel">
-        <h3>IVR</h3>
-        <div class="toolbar"><button class="secondary" @click=${() => this.#ivrDemo()}>发布示例 IVR（1语音/2视频）</button></div>
-        <table>
-          <tr><th>ID</th><th>名称</th><th>状态</th></tr>
-          ${rows.map((f) => html`<tr><td>${f.id || ""}</td><td>${f.name || ""}</td><td>${f.published ? "已发布" : "草稿"}</td></tr>`)}
-          ${!rows.length ? html`<tr><td colspan="3" class="muted">暂无流程，可发布示例</td></tr>` : ""}
-        </table>
-        <pre>${JSON.stringify(this.ivrs, null, 2)}</pre>
-      </div>
-    `;
+    return html`<ivr-flow-editor .flows=${this.ivrs} .queues=${this.queues} @ivr-changed=${() => this.#load()}></ivr-flow-editor>`;
   }
 
   #hooks() {
@@ -750,7 +713,7 @@ export class AdminApp extends LitElement {
       <div class="panel">
         <h3>Webhook</h3>
         <div class="form-inline">
-          <div class="field" style="min-width:320px">
+          <div class="field field-wide">
             <label>回调 URL</label>
             <input .value=${this.hookUrl} @input=${(e) => (this.hookUrl = e.target.value)} />
           </div>
@@ -776,6 +739,32 @@ export class AdminApp extends LitElement {
         <div class="pager">共 ${this.audit.length} 条</div>
       </div>
     `;
+  }
+}
+
+function strategyLabel(strategy) {
+  switch (strategy) {
+    case "longest_idle": return "最长空闲优先";
+    case "round_robin": return "轮询分配";
+    default: return strategy ? "未知策略" : "—";
+  }
+}
+
+function overflowPolicyLabel(policy) {
+  switch (policy) {
+    case "hangup": return "超时结束";
+    case "queue": return "溢出到另一队列";
+    case "voicemail": return "留言结束";
+    default: return policy ? "未知溢出策略" : "—";
+  }
+}
+
+function roleLabel(role) {
+  switch (role) {
+    case "agent": return "坐席";
+    case "admin": return "管理员";
+    case "supervisor": return "班长";
+    default: return role ? "未知角色" : "—";
   }
 }
 

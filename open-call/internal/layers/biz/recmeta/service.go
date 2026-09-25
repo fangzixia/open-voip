@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type Item struct {
 	ID        string     `json:"id"`
 	CallID    string     `json:"call_id"`
 	MediaType string     `json:"media_type"`
+	Format    string     `json:"format"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 	FileSize  int64      `json:"file_size"`
@@ -62,7 +64,7 @@ type QAMarkDTO struct {
 type Service struct {
 	db    *gorm.DB
 	files interface {
-		OpenRecording(context.Context, string, string, string) (io.ReadCloser, error)
+		OpenRecordingAs(context.Context, string, string, string, string) (io.ReadCloser, error)
 		DeleteRecording(context.Context, string, string, string) error
 	}
 }
@@ -70,16 +72,16 @@ type Service struct {
 // NewService 创建录音元数据服务。
 func NewService(db *gorm.DB) *Service { return &Service{db: db} }
 func (s *Service) SetFiles(files interface {
-	OpenRecording(context.Context, string, string, string) (io.ReadCloser, error)
+	OpenRecordingAs(context.Context, string, string, string, string) (io.ReadCloser, error)
 	DeleteRecording(context.Context, string, string, string) error
 }) {
 	s.files = files
 }
-func (s *Service) Open(ctx context.Context, row models.Recording) (io.ReadCloser, error) {
+func (s *Service) Open(ctx context.Context, row models.Recording, format string) (io.ReadCloser, error) {
 	if s.files == nil {
 		return nil, errs.NotImplemented("录音文件服务未配置")
 	}
-	return s.files.OpenRecording(ctx, row.CallID, row.ID, row.FilePath)
+	return s.files.OpenRecordingAs(ctx, row.CallID, row.ID, row.FilePath, format)
 }
 
 var _ ports.RecordingStorePort = (*Service)(nil)
@@ -121,7 +123,9 @@ func (s *Service) List(ctx context.Context, page, pageSize int, callID string) (
 	}
 	items := make([]Item, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, Item{ID: r.ID, CallID: r.CallID, MediaType: r.MediaType, StartedAt: r.StartedAt, EndedAt: r.EndedAt, FileSize: r.FileSize})
+		items = append(items, Item{ID: r.ID, CallID: r.CallID, MediaType: r.MediaType,
+			Format:    strings.TrimPrefix(strings.ToLower(filepath.Ext(r.FilePath)), "."),
+			StartedAt: r.StartedAt, EndedAt: r.EndedAt, FileSize: r.FileSize})
 	}
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }

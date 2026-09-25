@@ -177,6 +177,7 @@ func (f *fakeMedia) RequestRenegotiation(context.Context, string, string, bool) 
 func (f *fakeMedia) InjectAudio(context.Context, string, string, dto.AudioSource) error {
 	return nil
 }
+func (f *fakeMedia) StopInjectedAudio(context.Context, string) error { return nil }
 func (f *fakeMedia) SubscribeDTMF(context.Context, string, string, ports.DTMFHandler) error {
 	return nil
 }
@@ -247,6 +248,22 @@ func newTestService(agent string) (*Service, *fakeMedia, *fakeAgents, *fakeEvent
 		CallEvents:      ev,
 	})
 	return svc, media, agents, ev
+}
+
+func TestQueuedCustomerCanJoinWaitingMedia(t *testing.T) {
+	svc, _, _, _ := newTestService("")
+	ctx := context.Background()
+	id, err := svc.StartInbound(ctx, dto.InboundRequest{QueueID: "q1", SessionType: dto.SessionTypeAudio})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := svc.GetCall(ctx, id)
+	if err != nil || view.State != stateQueued || len(view.Legs) == 0 {
+		t.Fatalf("view=%+v err=%v", view, err)
+	}
+	if _, err := svc.JoinWebRTC(ctx, id, view.Legs[0].ID); err != nil {
+		t.Fatalf("queued customer join media: %v", err)
+	}
 }
 
 func TestInboundAnswerHangup(t *testing.T) {

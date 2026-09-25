@@ -63,7 +63,7 @@ func (d RouterDeps) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleQueueBind(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +111,7 @@ func (d RouterDeps) handleGuestJoin(w http.ResponseWriter, r *http.Request) {
 		SessionType string `json:"session_type"`
 		Token       string `json:"token"`
 		Priority    int    `json:"priority"`
+		UserID      string `json:"user_id"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
@@ -129,7 +130,7 @@ func (d RouterDeps) handleGuestJoin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.Forbidden("生产模式仅允许使用已签发的访客令牌"))
 		return
 	}
-	out, err := d.Guests.Join(r.Context(), body.QueueID, dto.SessionType(body.SessionType), body.Priority)
+	out, err := d.Guests.Join(r.Context(), body.QueueID, dto.SessionType(body.SessionType), body.Priority, body.UserID)
 	if err != nil {
 		writeErr(w, err)
 		return

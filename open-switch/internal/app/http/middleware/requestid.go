@@ -4,10 +4,10 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5/middleware"
+	"open-switch/internal/httpapi"
 )
 
 // RequestID 为每个请求注入 chi 生成的 Request-ID，并写入响应头。
 func RequestID(next http.Handler) http.Handler {
-	return middleware.RequestID(next)
+	return httpapi.RequestID(next)
 }

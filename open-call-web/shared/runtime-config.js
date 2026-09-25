@@ -6,7 +6,7 @@
 const injected = typeof window !== "undefined" ? window.__OPEN_VOIP__ : undefined;
 
 /** @type {string|undefined} */
-const viteApiBase = import.meta.env.VITE_API_BASE;
+const viteApiBase = import.meta.env?.VITE_API_BASE;
 
 /** @returns {{ apiBase: string, wsPath: string, publicUrl: string }} */
 export function getRuntimeConfig() {

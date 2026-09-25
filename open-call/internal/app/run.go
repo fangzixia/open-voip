@@ -45,7 +45,11 @@ func Run(configPath string) error {
 		return err
 	}
 
-	log := newLogger(cfg.Log)
+	log, logFiles, err := newLogger(cfg.Log)
+	if err != nil {
+		return err
+	}
+	defer logFiles.Close()
 	slog.SetDefault(log)
 
 	gormLog := logger.Warn
@@ -99,6 +103,7 @@ func Run(configPath string) error {
 	// 后台任务使用独立上下文，停机时先停止领取新任务。
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
+	go monitorLogDisk(workerCtx, log, cfg.Log.Dir)
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
@@ -129,6 +134,7 @@ func Run(configPath string) error {
 		ConfigIO:   cfgIO,
 		Snapshots:  configSnap,
 		Hub:        wsHub,
+		Calls:      switchClient,
 		Status: apphttp.StatusProvider{
 			DB:            db,
 			Runtime:       switchClient,

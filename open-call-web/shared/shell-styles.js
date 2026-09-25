@@ -1,7 +1,8 @@
 import { css } from "lit";
+import { designSystemStyles } from "./styles/index.js";
 
-/** 传统后台壳层 + 坐席深色通话台 */
-export const shellStyles = css`
+/** 旧结构样式保留为兼容层，统一设计系统在其后覆盖。 */
+const legacyShellStyles = css`
   :host {
     display: block;
     min-height: 100vh;
@@ -787,3 +788,5 @@ export const shellStyles = css`
     }
   }
 `;
+
+export const shellStyles = [legacyShellStyles, ...designSystemStyles];

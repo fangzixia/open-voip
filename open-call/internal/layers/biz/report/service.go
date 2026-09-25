@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"open-call/internal/datetime"
 	"open-call/internal/errs"
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
@@ -108,20 +109,34 @@ func (s *Service) Live(ctx context.Context) (Live, error) {
 
 // Historical 按日期与队列聚合。
 func (s *Service) Historical(ctx context.Context, from, to, queueID string) (Historical, error) {
+	var start, end time.Time
+	if from != "" {
+		var err error
+		start, err = datetime.ParseDate(from)
+		if err != nil {
+			return Historical{}, errs.InvalidRequest("from 必须为 YYYY-MM-DD 日期")
+		}
+	}
+	if to != "" {
+		var err error
+		end, err = datetime.ParseDate(to)
+		if err != nil {
+			return Historical{}, errs.InvalidRequest("to 必须为 YYYY-MM-DD 日期")
+		}
+	}
+	if !start.IsZero() && !end.IsZero() && end.Before(start) {
+		return Historical{}, errs.InvalidRequest("to 不能早于 from")
+	}
 	scoped := func() *gorm.DB {
 		q := s.db.WithContext(ctx).Model(&models.CDR{})
 		if queueID != "" {
 			q = q.Where("queue_id = ?", queueID)
 		}
-		if t, err := time.Parse("2006-01-02", from); err == nil {
-			q = q.Where("started_at >= ?", t)
-		} else if t, err := time.Parse(time.RFC3339, from); err == nil {
-			q = q.Where("started_at >= ?", t)
+		if !start.IsZero() {
+			q = q.Where("started_at >= ?", start)
 		}
-		if t, err := time.Parse("2006-01-02", to); err == nil {
-			q = q.Where("started_at < ?", t.Add(24*time.Hour))
-		} else if t, err := time.Parse(time.RFC3339, to); err == nil {
-			q = q.Where("started_at <= ?", t)
+		if !end.IsZero() {
+			q = q.Where("started_at < ?", end.AddDate(0, 0, 1))
 		}
 		return q
 	}
@@ -169,13 +184,13 @@ func (s *Service) Historical(ctx context.Context, from, to, queueID string) (His
 
 // AgentUtilization 状态时长统计。
 func (s *Service) AgentUtilization(ctx context.Context, from, to string) ([]AgentUtil, error) {
-	start, err := time.Parse(time.RFC3339, from)
+	start, err := datetime.Parse(from)
 	if err != nil {
-		return nil, errs.InvalidRequest("from 必须为 RFC3339 时间")
+		return nil, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间")
 	}
-	end, err := time.Parse(time.RFC3339, to)
+	end, err := datetime.Parse(to)
 	if err != nil || !end.After(start) {
-		return nil, errs.InvalidRequest("to 必须为晚于 from 的 RFC3339 时间")
+		return nil, errs.InvalidRequest("to 必须为晚于 from 的 YYYY-MM-DD HH:MM:SS (UTC) 时间")
 	}
 	if end.Sub(start) > 366*24*time.Hour {
 		return nil, errs.InvalidRequest("单次查询范围不能超过 366 天")

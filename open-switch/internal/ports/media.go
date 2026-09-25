@@ -32,6 +32,8 @@ type MediaPort interface {
 	RequestRenegotiation(ctx context.Context, callID, legID string, addVideo bool) error
 	// InjectAudio 向 IVR bot leg 注入放音。
 	InjectAudio(ctx context.Context, callID, botLegID string, source dto.AudioSource) error
+	// StopInjectedAudio 停止当前队列或 IVR 放音。
+	StopInjectedAudio(ctx context.Context, callID string) error
 	// SubscribeDTMF 订阅 leg 上的 DTMF 事件。
 	SubscribeDTMF(ctx context.Context, callID, legID string, handler DTMFHandler) error
 	// StartRecording 按策略开始录制，返回 recordingID。

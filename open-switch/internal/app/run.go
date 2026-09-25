@@ -16,6 +16,7 @@ import (
 
 	apphttp "open-switch/internal/app/http"
 	"open-switch/internal/config"
+	"open-switch/internal/errs"
 	"open-switch/internal/integration/platform"
 	"open-switch/internal/layers/control"
 	"open-switch/internal/layers/media"
@@ -31,7 +32,11 @@ func Run(configPath string) error {
 		return err
 	}
 
-	log := newLogger(cfg.Log)
+	log, closeLogs, err := newLogger(cfg.Log)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeLogs() }()
 	slog.SetDefault(log)
 
 	if err := ensureDir(cfg.Recordings.Dir); err != nil {
@@ -55,7 +60,8 @@ func Run(configPath string) error {
 	}
 
 	mediaSvc, err := media.NewService(media.Options{
-		ICE: cfg.ICE, TURN: cfg.TURN, RecordingsDir: cfg.Recordings.Dir, SIP: cfg.SIP,
+		ICE: cfg.ICE, TURN: cfg.TURN, RecordingsDir: cfg.Recordings.Dir,
+		VideoFormat: cfg.Recordings.VideoFormat, FFmpegPath: cfg.Recordings.FFmpegPath, SIP: cfg.SIP,
 	})
 	if err != nil {
 		return fmt.Errorf("媒体层: %w", err)
@@ -82,14 +88,7 @@ func Run(configPath string) error {
 	mediaSvc.SetSIPHangupHandler(func(ctx context.Context, callID string) {
 		_ = callControl.Hangup(ctx, callID, dto.HangupReasonNormal)
 	})
-	mediaSvc.SetDeviceHandler(func(ctx context.Context, destination, from, callID string) (string, string, error) {
-		return callControl.SIPSource(ctx, callID, from, destination)
-	})
-	mediaSvc.SetInboundHandler(func(ctx context.Context, did, from, callID string) (string, string, error) {
-		qid, err := platformClient.ResolveDID(ctx, did)
-		if err != nil {
-			return "", "", err
-		}
+	startInbound := func(ctx context.Context, qid, from, callID string) (string, string, error) {
 		id, err := callControl.StartInbound(ctx, dto.InboundRequest{
 			CallID: callID, QueueID: qid, Caller: from, SessionType: dto.SessionTypeAudio,
 		})
@@ -106,6 +105,24 @@ func Run(configPath string) error {
 			}
 		}
 		return id, "", nil
+	}
+	mediaSvc.SetDeviceHandler(func(ctx context.Context, destination, from, callID string) (string, string, error) {
+		qid, err := platformClient.ResolveDID(ctx, destination)
+		if err == nil {
+			return startInbound(ctx, qid, from, callID)
+		}
+		var apiErr *errs.APIError
+		if !errors.As(err, &apiErr) || apiErr.HTTP != http.StatusNotFound {
+			return "", "", err
+		}
+		return callControl.SIPSource(ctx, callID, from, destination)
+	})
+	mediaSvc.SetInboundHandler(func(ctx context.Context, did, from, callID string) (string, string, error) {
+		qid, err := platformClient.ResolveDID(ctx, did)
+		if err != nil {
+			return "", "", err
+		}
+		return startInbound(ctx, qid, from, callID)
 	})
 
 	deps := apphttp.RouterDeps{
@@ -123,6 +140,7 @@ func Run(configPath string) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go monitorLogDisk(ctx, log, cfg.Log.Dir)
 	go platformClient.RunOutbox(ctx)
 	go callControl.Run(ctx)
 	go func() {

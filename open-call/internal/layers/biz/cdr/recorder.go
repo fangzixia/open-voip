@@ -9,7 +9,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"open-call/internal/datetime"
 	"open-call/internal/errs"
+	"open-call/internal/observability"
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
@@ -56,7 +58,9 @@ func NewRecorderService(db *gorm.DB) *RecorderService {
 
 var _ ports.CDRRecorderPort = (*RecorderService)(nil)
 
+// Upsert 以 callID 为键持续补全话单，保留通话从排队到结束的记录。
 func (r *RecorderService) Upsert(ctx context.Context, req ports.CDRWriteRequest) error {
+	ctx = observability.With(ctx, observability.Context{CallID: req.CallID, AgentID: req.AgentID, QueueID: req.QueueID})
 	wait := 0
 	if req.AnsweredAt != nil && !req.StartedAt.IsZero() {
 		wait = int(req.AnsweredAt.Sub(req.StartedAt).Seconds())
@@ -104,7 +108,7 @@ func (r *RecorderService) Upsert(ctx context.Context, req ports.CDRWriteRequest)
 		ScreenShareCount: req.ScreenShareCount,
 		CreatedAt:        time.Now().UTC(),
 	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+	err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "call_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"direction", "queue_id", "agent_id", "caller", "callee", "session_type",
@@ -112,6 +116,14 @@ func (r *RecorderService) Upsert(ctx context.Context, req ports.CDRWriteRequest)
 			"video_started_at", "video_upgrade_ok", "screen_share_count",
 		}),
 	}).Create(&row).Error
+	if err != nil {
+		observability.Emit(ctx, "cdr.upsert.failed", map[string]any{"error": err.Error()})
+		return err
+	}
+	observability.Emit(ctx, "cdr.upserted", map[string]any{
+		"direction": req.Direction, "result": req.Result, "duration_sec": dur, "wait_sec": wait,
+	})
+	return nil
 }
 
 // List 分页查询。
@@ -134,16 +146,16 @@ func (r *RecorderService) query(ctx context.Context, f Filter) (*gorm.DB, error)
 		q = q.Where("result = ?", f.Result)
 	}
 	if f.From != "" {
-		t, err := time.Parse(time.RFC3339, f.From)
+		t, err := datetime.Parse(f.From)
 		if err != nil {
-			return nil, errs.InvalidRequest("from 必须为 RFC3339 时间")
+			return nil, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间")
 		}
 		q = q.Where("started_at >= ?", t)
 	}
 	if f.To != "" {
-		t, err := time.Parse(time.RFC3339, f.To)
+		t, err := datetime.Parse(f.To)
 		if err != nil {
-			return nil, errs.InvalidRequest("to 必须为 RFC3339 时间")
+			return nil, errs.InvalidRequest("to 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间")
 		}
 		q = q.Where("started_at <= ?", t)
 	}
@@ -200,7 +212,7 @@ func (r *RecorderService) ListFiltered(ctx context.Context, page, pageSize int, 
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-// ExportCSV 导出时间范围内话单。
+// Stream 逐行读取指定时间范围内的话单，避免导出时一次加载全部记录。
 func (r *RecorderService) Stream(ctx context.Context, f Filter, emit func(Item) error) error {
 	if f.From == "" || f.To == "" {
 		return errs.InvalidRequest("导出必须指定 from 和 to")

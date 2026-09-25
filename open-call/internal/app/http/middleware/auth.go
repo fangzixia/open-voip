@@ -3,6 +3,8 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"open-call/internal/httpapi"
+	"open-call/internal/observability"
 	"strings"
 
 	"open-call/internal/errs"
@@ -41,7 +43,9 @@ func Auth(a Authenticator) func(http.Handler) http.Handler {
 				writeAuthError(w, errs.Forbidden("必须先修改临时密码"))
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+			ctx := WithPrincipal(r.Context(), p)
+			ctx = observability.With(ctx, observability.Context{AgentID: p.AgentID, CallID: p.GuestCallID})
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -88,28 +92,7 @@ func RequireRoles(roles ...string) func(http.Handler) http.Handler {
 	}
 }
 
-func writeAuthError(w http.ResponseWriter, err error) {
-	api := errs.AsAPIError(err)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(api.HTTP)
-	msg := api.Message
-	if msg == "" {
-		msg = api.Kind
-	}
-	body := `{"error":"` + api.Kind + `","message":"` + jsonEscape(msg) + `"`
-	if api.Code != "" {
-		body += `,"code":"` + api.Code + `"`
-	}
-	body += "}"
-	_, _ = w.Write([]byte(body))
-}
-
-func jsonEscape(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", " ")
-	return s
-}
+func writeAuthError(w http.ResponseWriter, err error) { httpapi.Error(w, err) }
 
 // WithUser 兼容旧测试辅助。
 func WithUser(ctx context.Context, userID, role string) context.Context {

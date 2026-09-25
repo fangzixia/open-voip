@@ -15,10 +15,11 @@ import (
 )
 
 type ivrRuntime struct {
-	doc     ivrDoc
-	node    string
-	entered time.Time
-	timeout time.Duration
+	doc             ivrDoc
+	node            string
+	entered         time.Time
+	timeout         time.Duration
+	invalidAttempts int
 }
 
 type ivrDoc struct {
@@ -31,8 +32,10 @@ type ivrNode struct {
 	Prompt      string            `json:"prompt"`
 	File        string            `json:"file"`
 	TimeoutSec  int               `json:"timeout_sec"`
+	MaxRetries  *int              `json:"max_retries"`
 	Choices     map[string]string `json:"choices"`
 	Default     string            `json:"default"`
+	Invalid     string            `json:"invalid"`
 	QueueID     string            `json:"queue_id"`
 	SessionType string            `json:"session_type"`
 	Next        string            `json:"next"`
@@ -40,6 +43,7 @@ type ivrNode struct {
 	Closed      string            `json:"closed"`
 }
 
+// bootIVR 读取流程的最新发布快照，确保运行中的呼叫使用固定版本。
 func (s *Service) bootIVR(ctx context.Context, callID, flowID string) error {
 	snap, err := s.deps.Config.GetLatestIVR(ctx, flowID)
 	if err != nil {
@@ -48,7 +52,9 @@ func (s *Service) bootIVR(ctx context.Context, callID, flowID string) error {
 	return s.startIVRPayload(ctx, callID, snap)
 }
 
+// attachIVR 根据通话所属队列找到绑定的 IVR 流程并启动。
 func (s *Service) attachIVR(ctx context.Context, callID, snapshotID string) error {
+	// 接口保留 snapshotID 参数；当前运行逻辑以队列绑定的最新发布版本为准。
 	_ = snapshotID
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -66,6 +72,7 @@ func (s *Service) attachIVR(ctx context.Context, callID, snapshotID string) erro
 	return s.bootIVR(ctx, callID, q.IVRFlowID)
 }
 
+// startIVRPayload 创建 IVR 媒体房间和机器人通话腿，并订阅客户的按键信号。
 func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports.IVRSnapshot) error {
 	var doc ivrDoc
 	if err := json.Unmarshal([]byte(snap.PayloadJSON), &doc); err != nil || doc.Start == "" {
@@ -105,6 +112,7 @@ func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports
 	return nil
 }
 
+// tickIVR 在节点超时后沿默认或下一节点继续，没有目标时转入排队。
 func (s *Service) tickIVR(ctx context.Context, callID string) {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -121,7 +129,7 @@ func (s *Service) tickIVR(ctx context.Context, callID string) {
 	}
 	node := rt.ivr.doc.Nodes[rt.ivr.node]
 	next := node.Default
-	if next == "" {
+	if node.Type == "play" {
 		next = node.Next
 	}
 	if next == "" {
@@ -131,6 +139,7 @@ func (s *Service) tickIVR(ctx context.Context, callID string) {
 	s.gotoIVR(ctx, callID, next)
 }
 
+// onDTMF 处理菜单按键；无效输入达到重试上限后走 invalid 或 default 分支。
 func (s *Service) onDTMF(ctx context.Context, callID, digit string) {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -146,24 +155,45 @@ func (s *Service) onDTMF(ctx context.Context, callID, digit string) {
 	}
 	next, ok := node.Choices[digit]
 	if !ok {
+		rt.ivr.invalidAttempts++
+		limit := 2
+		if node.MaxRetries != nil {
+			limit = *node.MaxRetries
+		}
+		if rt.ivr.invalidAttempts >= limit {
+			target := node.Invalid
+			if target == "" {
+				target = node.Default
+			}
+			if target != "" {
+				s.gotoIVR(ctx, callID, target)
+			}
+		}
 		return
 	}
 	s.gotoIVR(ctx, callID, next)
 }
 
+// gotoIVR 切换节点并重置该节点的计时和无效输入次数。
 func (s *Service) gotoIVR(ctx context.Context, callID, nodeID string) {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
 	s.mu.Lock()
 	rt := s.calls[callID]
+	if rt == nil || rt.ivr == nil {
+		s.mu.Unlock()
+		return
+	}
 	if rt != nil && rt.ivr != nil {
 		rt.ivr.node = nodeID
 		rt.ivr.entered = time.Now().UTC()
+		rt.ivr.invalidAttempts = 0
 	}
 	s.mu.Unlock()
 	s.runIVRNode(ctx, callID)
 }
 
+// runIVRNode 播放提示并执行挂断、转队列、时间判断等节点动作。
 func (s *Service) runIVRNode(ctx context.Context, callID string) {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -176,7 +206,21 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		_ = s.enterQueue(ctx, callID)
 		return
 	}
-	_ = s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"})
+	if node.Type == "play" || node.Type == "menu" {
+		_ = s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"})
+	}
+	if node.Type == "play" || node.Type == "menu" {
+		seconds := node.TimeoutSec
+		if seconds == 0 {
+			if node.Type == "menu" {
+				seconds = 8
+			} else {
+				seconds = 2
+			}
+		}
+		rt.ivr.timeout = time.Duration(seconds) * time.Second
+		rt.ivr.entered = time.Now().UTC()
+	}
 	_ = s.publishCall(ctx, callID, "ivr.prompt", "", map[string]any{"call_id": callID, "prompt": node.Prompt, "type": node.Type})
 	switch node.Type {
 	case "hangup":
@@ -207,12 +251,11 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		}
 		s.gotoIVR(ctx, callID, next)
 	case "play":
-		if node.Next != "" {
-			time.AfterFunc(2*time.Second, func() { s.gotoIVR(context.Background(), callID, node.Next) })
-		}
+		// 放音节点由定时 tick 在播放时长结束后推进。
 	}
 }
 
+// enterQueue 清理 IVR 状态，播放等候音并开始派单。
 func (s *Service) enterQueue(ctx context.Context, callID string) error {
 	if err := s.transition(ctx, callID, stateQueued); err != nil {
 		return err
@@ -238,6 +281,7 @@ func (s *Service) enterQueue(ctx context.Context, callID string) error {
 	return s.tryDispatch(ctx, callID)
 }
 
+// publishPosition 按优先级和入队时间计算同队列前方人数。
 func (s *Service) publishPosition(ctx context.Context, callID string) {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -260,6 +304,7 @@ func (s *Service) publishPosition(ctx context.Context, callID string) {
 	_ = s.publishCall(ctx, callID, "queue.position", "", map[string]any{"call_id": callID, "position": pos, "message": msg})
 }
 
+// withinHours 按队列时区判断营业窗口；无配置或无法解析时沿用默认开放策略。
 func withinHours(cfg ports.ConfigSnapshotPort, ctx context.Context, queueID string) bool {
 	h, err := cfg.GetBusinessHours(ctx, queueID)
 	if err != nil || h.WeekdayHours == "" || h.WeekdayHours == "always" {

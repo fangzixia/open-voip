@@ -3,6 +3,7 @@ package middleware
 import (
 	"encoding/json"
 	"net/http"
+	"open-switch/internal/httpapi"
 	"strings"
 
 	"open-switch/internal/authctx"
@@ -38,25 +39,4 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
-func writeAuthError(w http.ResponseWriter, err error) {
-	api := errs.AsAPIError(err)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(api.HTTP)
-	msg := api.Message
-	if msg == "" {
-		msg = api.Kind
-	}
-	body := `{"error":"` + api.Kind + `","message":"` + jsonEscape(msg) + `"`
-	if api.Code != "" {
-		body += `,"code":"` + api.Code + `"`
-	}
-	body += "}"
-	_, _ = w.Write([]byte(body))
-}
-
-func jsonEscape(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", " ")
-	return s
-}
+func writeAuthError(w http.ResponseWriter, err error) { httpapi.Error(w, err) }

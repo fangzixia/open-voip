@@ -1,10 +1,10 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
+	"open-call/internal/datetime"
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"
 )
@@ -20,7 +20,7 @@ func IntegrationAuth(secret string) func(http.Handler) http.Handler {
 			}
 			if h := r.Header.Get("X-Principal"); h != "" {
 				var p auth.Principal
-				if err := json.Unmarshal([]byte(h), &p); err == nil {
+				if err := datetime.Unmarshal([]byte(h), &p); err == nil {
 					next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
 					return
 				}

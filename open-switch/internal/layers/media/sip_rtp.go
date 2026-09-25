@@ -3,7 +3,9 @@ package media
 import (
 	"context"
 	"net"
+	"open-switch/internal/observability"
 	"sync"
+	"time"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -12,13 +14,20 @@ import (
 )
 
 type sipRTP struct {
-	legID    string
-	held     bool
-	muted    bool
-	mu       sync.Mutex
-	conn     *net.UDPConn
-	remote   *net.UDPAddr
-	remotePT uint8
+	callID                                 string
+	legID                                  string
+	held                                   bool
+	muted                                  bool
+	mu                                     sync.Mutex
+	conn                                   *net.UDPConn
+	remote                                 *net.UDPAddr
+	remotePT                               uint8
+	started                                time.Time
+	rxPackets, rxBytes, txPackets, txBytes uint64
+	sequenceGaps, outOfOrder               uint64
+	expectedSeq                            uint16
+	haveSeq                                bool
+	summaryLogged                          bool
 }
 
 func (u *sipUA) listenRTP() (*sipRTP, error) {
@@ -34,7 +43,7 @@ func (u *sipUA) listenRTP() (*sipRTP, error) {
 			last = err
 			continue
 		}
-		return &sipRTP{conn: c, remotePT: 0}, nil
+		return &sipRTP{conn: c, remotePT: 0, started: time.Now().UTC()}, nil
 	}
 	return nil, last
 }
@@ -48,6 +57,13 @@ func (r *sipRTP) close() {
 	if r.conn != nil {
 		_ = r.conn.Close()
 		r.conn = nil
+	}
+	if !r.summaryLogged {
+		r.summaryLogged = true
+		ctx := observability.WithFields(context.Background(), observability.Fields{CallID: r.callID, LegID: r.legID})
+		observability.Event(ctx, "sip_rtp", "rtp.summary", "hangup", "ok", "", r.started,
+			"rx_packets", r.rxPackets, "rx_bytes", r.rxBytes, "tx_packets", r.txPackets, "tx_bytes", r.txBytes,
+			"sequence_gaps", r.sequenceGaps, "out_of_order", r.outOfOrder)
 	}
 }
 
@@ -92,7 +108,13 @@ func (r *sipRTP) write(b []byte) {
 	if conn == nil || addr == nil {
 		return
 	}
-	_, _ = conn.WriteToUDP(b, addr)
+	n, err := conn.WriteToUDP(b, addr)
+	if err == nil {
+		r.mu.Lock()
+		r.txPackets++
+		r.txBytes += uint64(n)
+		r.mu.Unlock()
+	}
 }
 
 func (r *sipRTP) writePCMU(b []byte) {
@@ -154,6 +176,9 @@ func applyRemoteSDP(rtpSess *sipRTP, media sdpMedia) {
 }
 
 func (s *Service) attachSIPRTP(callID string, rtpSess *sipRTP) {
+	rtpSess.mu.Lock()
+	rtpSess.callID = callID
+	rtpSess.mu.Unlock()
 	s.mu.Lock()
 	r := s.rooms[callID]
 	if r == nil {
@@ -185,6 +210,7 @@ func (s *Service) hasWebRTCPeer(callID string) bool {
 	return len(r.peers) > 0
 }
 
+// sipReadLoop 校验 RTP 来源，解码电话按键，并在 SIP、WebRTC 与录音之间转发音频。
 func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 	if rtpSess == nil {
 		return
@@ -210,6 +236,8 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 		if !rtpSess.acceptSource(addr) {
 			continue
 		}
+		rtpSess.observeInbound(pkt.SequenceNumber, n)
+		// RFC 2833 结束包可能重复发送，同一时间戳只派发一次按键。
 		if pkt.PayloadType == 101 && len(pkt.Payload) > 0 {
 			event := pkt.Payload[0] & 0x7f
 			end := len(pkt.Payload) > 1 && pkt.Payload[1]&0x80 != 0
@@ -259,11 +287,35 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 		if rec != nil {
 			cp := *pkt
 			cp.Payload = append([]byte{}, pkt.Payload...)
-			rec.writeRTP(webrtc.RTPCodecTypeAudio, &cp)
+			rec.writeRTP(rtpSess.legID, webrtc.RTPCodecTypeAudio, "audio/PCMU", &cp)
 		}
 	}
 }
 
+// observeInbound 用 RTP 序号累计丢包间隔和乱序包，供媒体质量统计。
+func (r *sipRTP) observeInbound(seq uint16, bytes int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rxPackets++
+	r.rxBytes += uint64(bytes)
+	if !r.haveSeq {
+		r.haveSeq, r.expectedSeq = true, seq+1
+		return
+	}
+	if seq == r.expectedSeq {
+		r.expectedSeq++
+		return
+	}
+	ahead := uint16(seq - r.expectedSeq)
+	if ahead < 0x8000 {
+		r.sequenceGaps += uint64(ahead)
+		r.expectedSeq = seq + 1
+	} else {
+		r.outOfOrder++
+	}
+}
+
+// dispatchDTMF 复制回调列表后再调用，避免回调期间持有房间读锁。
 func (s *Service) dispatchDTMF(callID, digit string) {
 	if digit == "" {
 		return

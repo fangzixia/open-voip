@@ -2,11 +2,13 @@ package switchapi
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"open-call/internal/errs"
+	"open-call/internal/httpapi"
 	"path/filepath"
+	"time"
 )
 
 // recordingPath 构造 Switch 内部录音下载/删除 API 路径。
@@ -15,19 +17,28 @@ func recordingPath(callID, id, path string) string {
 }
 
 // OpenRecording 从 Switch 拉取录音文件流。
-func (c *Client) OpenRecording(ctx context.Context, callID, id, path string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+recordingPath(callID, id, path), nil)
+func (c *Client) OpenRecordingAs(ctx context.Context, callID, id, path, format string) (io.ReadCloser, error) {
+	endpoint := recordingPath(callID, id, path)
+	if format != "" {
+		endpoint += "&format=" + url.QueryEscape(format)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.secret)
-	res, err := c.http.Do(req)
+	setTraceHeaders(req, ctx)
+	client := &http.Client{Transport: c.http.Transport, Timeout: 10 * time.Minute}
+	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode != http.StatusOK {
-		res.Body.Close()
-		return nil, fmt.Errorf("交换服务读取录音失败: HTTP %d", res.StatusCode)
+		defer res.Body.Close()
+		if err := httpapi.Decode(res, nil); err != nil {
+			return nil, err
+		}
+		return nil, errs.Internal("交换服务返回了非预期的录音响应")
 	}
 	return res.Body, nil
 }

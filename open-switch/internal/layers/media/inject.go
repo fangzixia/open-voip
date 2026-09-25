@@ -37,21 +37,38 @@ func (s *Service) resolvePrompt(path string) string {
 	return clean
 }
 
-func (s *Service) playSourceToRoom(callID string, filePath string, loop bool) {
+func (s *Service) playSourceToRoom(callID string, filePath string, loop bool, seq uint64) {
 	if filePath != "" {
 		if pcm, rate, err := readPCMWav(filePath); err == nil && len(pcm) > 0 {
-			s.playPCMToRoom(callID, pcm, rate, loop)
+			s.playPCMToRoom(callID, pcm, rate, loop, seq)
 			return
 		}
 	}
-	dur := 2 * time.Second
-	if loop {
-		dur = 8 * time.Second
+	for {
+		s.playToneToRoom(callID, time.Second, seq)
+		if !loop {
+			return
+		}
+		// 缺省等待音采用一秒回铃、三秒停顿，避免持续尖锐响声。
+		if !s.waitPromptInterval(callID, 3*time.Second, seq) {
+			return
+		}
 	}
-	s.playToneToRoom(callID, dur)
 }
 
-func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool) {
+func (s *Service) waitPromptInterval(callID string, duration time.Duration, seq uint64) bool {
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		room := s.getRoom(callID)
+		if room == nil || room.promptSeq.Load() != seq {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
+}
+
+func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool, seq uint64) {
 	if rate <= 0 {
 		rate = 8000
 	}
@@ -68,18 +85,14 @@ func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool)
 		frames = append(frames, buf)
 	}
 	if len(frames) == 0 {
-		s.playToneToRoom(callID, 2*time.Second)
+		s.playToneToRoom(callID, time.Second, seq)
 		return
 	}
-	rounds := 1
-	if loop {
-		rounds = 4
-	}
 	packet := rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SSRC: rand.Uint32(), Timestamp: rand.Uint32()}}
-	for r := 0; r < rounds; r++ {
+	for {
 		for _, payload := range frames {
 			room := s.getRoom(callID)
-			if room == nil {
+			if room == nil || room.promptSeq.Load() != seq {
 				return
 			}
 			room.mu.RLock()
@@ -98,6 +111,9 @@ func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool)
 			}
 			room.mu.RUnlock()
 			time.Sleep(20 * time.Millisecond)
+		}
+		if !loop {
+			return
 		}
 	}
 }

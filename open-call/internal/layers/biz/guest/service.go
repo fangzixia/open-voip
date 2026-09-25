@@ -2,8 +2,10 @@ package guest
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -11,6 +13,7 @@ import (
 
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"
+	"open-call/internal/observability"
 	"open-call/internal/ports"
 	"open-call/internal/ports/dto"
 	"open-call/internal/store/models"
@@ -88,21 +91,31 @@ func (s *Service) CreateSession(ctx context.Context, queueID string, ttlSec int,
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return SessionDTO{}, err
 	}
-	url := "/guest/?token=" + token
+	query := url.Values{"token": {token}, "media": {allowedMedia}}.Encode()
+	guestURL := "/guest/?" + query
 	if s.guestBase != "" {
-		url = strings.TrimRight(s.guestBase, "/") + "/?token=" + token
+		guestURL = strings.TrimRight(s.guestBase, "/") + "/?" + query
 	}
 	return SessionDTO{
 		Token:     token,
-		GuestURL:  url,
+		GuestURL:  guestURL,
 		ExpiresAt: exp,
 	}, nil
 }
 
 // Join 仅供显式启用的演示直连模式创建会话并入队，优先级固定为零。
-func (s *Service) Join(ctx context.Context, queueID string, sessionType dto.SessionType, _ int) (JoinResult, error) {
+func (s *Service) Join(ctx context.Context, queueID string, sessionType dto.SessionType, _ int, userID string) (JoinResult, error) {
+	ctx = observability.With(ctx, observability.Context{QueueID: queueID})
+	observability.Emit(ctx, "guest.join.requested", map[string]any{"mode": "direct", "session_type": sessionType})
 	if sessionType == "" {
 		sessionType = dto.SessionTypeAudio
+	}
+	userID = strings.TrimSpace(userID)
+	if sessionType == dto.SessionTypeVideo && userID == "" {
+		return JoinResult{}, errs.InvalidRequest("视频通话必须提供 user_id")
+	}
+	if utf8.RuneCountInString(userID) > 64 {
+		return JoinResult{}, errs.InvalidRequest("user_id 不能超过 64 个字符")
 	}
 	var q models.Queue
 	if err := s.db.WithContext(ctx).First(&q, "id = ?", queueID).Error; err != nil {
@@ -134,19 +147,25 @@ func (s *Service) Join(ctx context.Context, queueID string, sessionType dto.Sess
 		GuestSessionID: gs.ID,
 		SessionType:    sessionType,
 		Priority:       priority,
+		Caller:         userID,
 	})
 	if err != nil {
+		observability.Emit(ctx, "guest.join.failed", map[string]any{"error": err.Error()})
 		return JoinResult{}, err
 	}
+	ctx = observability.With(ctx, observability.Context{CallID: callID})
 	if err := s.db.WithContext(ctx).Model(&models.GuestSession{}).Where("id = ?", gs.ID).Update("call_id", callID).Error; err != nil {
 		return JoinResult{}, err
 	}
 	legID, state := s.customerLeg(ctx, callID)
+	ctx = observability.With(ctx, observability.Context{LegID: legID, ClientSessionID: gs.ID})
+	observability.Emit(ctx, "guest.join.succeeded", map[string]any{"state": state, "session_type": sessionType})
 	return JoinResult{CallID: callID, Token: token, LegID: legID, State: state, ExpiresAt: exp}, nil
 }
 
 // JoinByToken 使用已签发入会 token 入队。
 func (s *Service) JoinByToken(ctx context.Context, token string, sessionType dto.SessionType) (JoinResult, error) {
+	observability.Emit(ctx, "guest.join.requested", map[string]any{"mode": "token", "session_type": sessionType})
 	var gs models.GuestSession
 	var callID string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -179,9 +198,13 @@ func (s *Service) JoinByToken(ctx context.Context, token string, sessionType dto
 		return tx.Model(&models.GuestSession{}).Where("id = ?", gs.ID).Updates(map[string]any{"call_id": callID, "consumed_at": now, "token": auth.TokenDigest(token)}).Error
 	})
 	if err != nil {
+		observability.Emit(ctx, "guest.join.failed", map[string]any{"mode": "token", "error": err.Error()})
 		return JoinResult{}, err
 	}
+	ctx = observability.With(ctx, observability.Context{CallID: callID, QueueID: gs.QueueID, ClientSessionID: gs.ID})
 	legID, state := s.customerLeg(ctx, callID)
+	ctx = observability.With(ctx, observability.Context{LegID: legID})
+	observability.Emit(ctx, "guest.join.succeeded", map[string]any{"mode": "token", "state": state})
 	return JoinResult{CallID: callID, Token: token, LegID: legID, State: state, ExpiresAt: gs.ExpiresAt}, nil
 }
 

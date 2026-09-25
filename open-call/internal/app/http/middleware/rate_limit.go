@@ -3,6 +3,7 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"open-call/internal/httpapi"
 	"sync"
 	"time"
 )
@@ -46,7 +47,7 @@ func RateLimit(limit int) func(http.Handler) http.Handler {
 			mu.Unlock()
 			if !allowed {
 				w.Header().Set("Retry-After", "60")
-				http.Error(w, "请求过于频繁", http.StatusTooManyRequests)
+				httpapi.Failure(w, http.StatusTooManyRequests, "rate_limited", "请求过于频繁")
 				return
 			}
 			next.ServeHTTP(w, r)

@@ -14,6 +14,10 @@ go run ./cmd/open-switch -config deploy/config.example.yml
 
 默认监听 `127.0.0.1:8082`（内网）；需配置 `integration.platform_base_url` 指向 open-call。
 
+视频录像需要 FFmpeg。设置 `recordings.ffmpeg_path` 为可执行文件路径，或将 FFmpeg 加入 `PATH`；
+`recordings.video_format` 可选 `webm`（VP8/Opus）或 `mp4`（H.264/AAC）。每通视频呼叫保存一份同时含画面和声音的文件。
+下载接口可通过 `format=webm|mp4` 临时转换为另一种格式，不会长期保存第二份成品。
+
 ## 测试
 
 ```bash

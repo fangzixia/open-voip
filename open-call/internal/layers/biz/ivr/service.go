@@ -19,8 +19,10 @@ type Node struct {
 	Prompt      string            `json:"prompt,omitempty"`
 	File        string            `json:"file,omitempty"`
 	TimeoutSec  int               `json:"timeout_sec,omitempty"`
+	MaxRetries  *int              `json:"max_retries,omitempty"`
 	Choices     map[string]string `json:"choices,omitempty"`
 	Default     string            `json:"default,omitempty"`
+	Invalid     string            `json:"invalid,omitempty"`
 	QueueID     string            `json:"queue_id,omitempty"`
 	SessionType string            `json:"session_type,omitempty"`
 	Next        string            `json:"next,omitempty"`
@@ -28,8 +30,13 @@ type Node struct {
 	Closed      string            `json:"closed,omitempty"`
 }
 type Doc struct {
-	Start string          `json:"start"`
-	Nodes map[string]Node `json:"nodes"`
+	Start  string              `json:"start"`
+	Nodes  map[string]Node     `json:"nodes"`
+	Layout map[string]Position `json:"layout,omitempty"`
+}
+type Position struct {
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 type FlowDTO struct {
 	ID            string    `json:"id"`
@@ -72,8 +79,8 @@ func (s *Service) Create(ctx context.Context, name string, draft Doc) (FlowDTO, 
 	if name == "" {
 		return FlowDTO{}, errs.InvalidRequest("流程名称必填")
 	}
-	if err := s.validateDoc(ctx, draft); err != nil {
-		return FlowDTO{}, err
+	if len(draft.Nodes) > 100 {
+		return FlowDTO{}, errs.InvalidRequest("IVR 节点不能超过 100 个")
 	}
 	raw, _ := json.Marshal(draft)
 	now := time.Now().UTC()
@@ -96,8 +103,8 @@ func (s *Service) Update(ctx context.Context, id, name string, draft *Doc) (Flow
 		updates["name"] = strings.TrimSpace(name)
 	}
 	if draft != nil {
-		if err := s.validateDoc(ctx, *draft); err != nil {
-			return FlowDTO{}, err
+		if len(draft.Nodes) > 100 {
+			return FlowDTO{}, errs.InvalidRequest("IVR 节点不能超过 100 个")
 		}
 		raw, _ := json.Marshal(draft)
 		updates["draft_json"] = string(raw)
@@ -216,7 +223,18 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 	if _, ok := d.Nodes[d.Start]; !ok {
 		return errs.InvalidRequest("start 节点不存在")
 	}
+	for id, pos := range d.Layout {
+		if _, ok := d.Nodes[id]; !ok || pos.X < 0 || pos.X > 4000 || pos.Y < 0 || pos.Y > 4000 {
+			return errs.InvalidRequest("IVR 画布位置无效")
+		}
+	}
 	for id, n := range d.Nodes {
+		if n.TimeoutSec < 0 || n.TimeoutSec > 120 {
+			return errs.InvalidRequest("节点 " + id + " 超时时间必须在 0–120 秒")
+		}
+		if n.MaxRetries != nil && (*n.MaxRetries < 0 || *n.MaxRetries > 5) {
+			return errs.InvalidRequest("节点 " + id + " 无效按键重试不能超过 5 次")
+		}
 		switch n.Type {
 		case "play", "menu", "route_queue", "time_check", "hangup":
 		default:
@@ -230,11 +248,18 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 			if len(n.Choices) == 0 {
 				return errs.InvalidRequest("menu 必须包含 choices")
 			}
-			for _, v := range n.Choices {
+			for digit, v := range n.Choices {
+				if len(digit) != 1 || !strings.Contains("0123456789*#", digit) {
+					return errs.InvalidRequest("节点 " + id + " 包含无效按键")
+				}
 				refs = append(refs, v)
 			}
-			if n.Default != "" {
-				refs = append(refs, n.Default)
+			if n.Default == "" {
+				return errs.InvalidRequest("节点 " + id + " 缺少超时去向")
+			}
+			refs = append(refs, n.Default)
+			if n.Invalid != "" {
+				refs = append(refs, n.Invalid)
 			}
 		case "time_check":
 			refs = []string{n.Open, n.Closed}
@@ -248,6 +273,9 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 			}
 			if count == 0 {
 				return errs.InvalidRequest("节点 " + id + " 引用了不存在的队列")
+			}
+			if n.SessionType != "" && n.SessionType != "audio" && n.SessionType != "video" {
+				return errs.InvalidRequest("节点 " + id + " 通话类型无效")
 			}
 		}
 		for _, ref := range refs {
@@ -275,6 +303,7 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 				visit(v)
 			}
 			visit(n.Default)
+			visit(n.Invalid)
 		case "time_check":
 			visit(n.Open)
 			visit(n.Closed)
@@ -283,6 +312,42 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 	visit(d.Start)
 	if len(reachable) != len(d.Nodes) {
 		return errs.InvalidRequest("IVR 包含不可达节点")
+	}
+	// 运行时没有无限循环控制；配置图必须可终止。
+	visiting, done := map[string]bool{}, map[string]bool{}
+	var checkCycle func(string) bool
+	checkCycle = func(id string) bool {
+		if visiting[id] {
+			return true
+		}
+		if done[id] {
+			return false
+		}
+		visiting[id] = true
+		n := d.Nodes[id]
+		refs := []string{}
+		switch n.Type {
+		case "play":
+			refs = append(refs, n.Next)
+		case "menu":
+			for _, target := range n.Choices {
+				refs = append(refs, target)
+			}
+			refs = append(refs, n.Default, n.Invalid)
+		case "time_check":
+			refs = append(refs, n.Open, n.Closed)
+		}
+		for _, target := range refs {
+			if target != "" && checkCycle(target) {
+				return true
+			}
+		}
+		visiting[id] = false
+		done[id] = true
+		return false
+	}
+	if checkCycle(d.Start) {
+		return errs.InvalidRequest("IVR 不能包含循环节点")
 	}
 	return nil
 }

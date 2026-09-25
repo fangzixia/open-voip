@@ -147,6 +147,16 @@ func TestBuildAnswerSDPSubset(t *testing.T) {
 	}
 }
 
+func TestSIPRTPSequenceStatistics(t *testing.T) {
+	r := &sipRTP{}
+	for _, seq := range []uint16{10, 11, 14, 13, 15} {
+		r.observeInbound(seq, 160)
+	}
+	if r.rxPackets != 5 || r.rxBytes != 800 || r.sequenceGaps != 2 || r.outOfOrder != 1 {
+		t.Fatalf("unexpected RTP stats: %+v", r)
+	}
+}
+
 func TestRegisterRequestURIHasNoUser(t *testing.T) {
 	uri := registerRequestURI("sip.carrier.example", 5060)
 	if uri.User != "" {

@@ -5,42 +5,49 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/pion/webrtc/v4/pkg/media/ivfwriter"
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 
 	"open-switch/internal/config"
 	"open-switch/internal/errs"
+	"open-switch/internal/observability"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 )
 
 type peer struct {
 	pc         *webrtc.PeerConnection
+	iceMu      sync.Mutex
+	pendingICE []webrtc.ICECandidateInit
 	audioOut   *webrtc.TrackLocalStaticRTP
 	videoOut   *webrtc.TrackLocalStaticRTP
 	audioSamp  *webrtc.TrackLocalStaticSample
 	role       dto.LegRole
 	audioMuted bool
 	videoMuted bool
+	videoSSRC  uint32
 	held       bool
 }
 
 type room struct {
 	mu          sync.RWMutex
+	promptSeq   atomic.Uint64
 	enableVideo bool
 	sipAudio    bool
 	sipRTP      map[*sipRTP]struct{}
@@ -54,11 +61,10 @@ type recorder struct {
 	callID    string
 	path      string
 	audioPath string
-	videoPath string
 	mode      string
+	videoRec  *videoRecording
 	file      *os.File
 	ogg       *oggwriter.OggWriter
-	ivf       *ivfwriter.IVFWriter
 	pcm       *pcmMix
 	mu        sync.Mutex
 	bytes     int64
@@ -72,6 +78,8 @@ type Options struct {
 	ICE           config.ICEConfig
 	TURN          config.TURNConfig
 	RecordingsDir string
+	VideoFormat   string
+	FFmpegPath    string
 	SIP           config.SIPConfig
 }
 
@@ -82,6 +90,8 @@ type Service struct {
 	ice           []webrtc.ICEServer
 	turn          config.TURNConfig
 	recDir        string
+	videoFormat   string
+	ffmpegPath    string
 	sip           *sipUA
 	mu            sync.Mutex
 	rooms         map[string]*room
@@ -91,7 +101,14 @@ type Service struct {
 }
 
 // NewService 根据 ICE/TURN/录音目录创建媒体服务。
+// NewService 初始化 WebRTC 媒体能力及 SIP 配置，并建立房间与录音索引。
 func NewService(opt Options) (*Service, error) {
+	if opt.VideoFormat == "" {
+		opt.VideoFormat = "webm"
+	}
+	if opt.FFmpegPath == "" {
+		opt.FFmpegPath = "ffmpeg"
+	}
 	me := &webrtc.MediaEngine{}
 	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
@@ -178,6 +195,8 @@ func NewService(opt Options) (*Service, error) {
 		ice:           iceServers,
 		turn:          opt.TURN,
 		recDir:        opt.RecordingsDir,
+		videoFormat:   opt.VideoFormat,
+		ffmpegPath:    opt.FFmpegPath,
 		rooms:         map[string]*room{},
 		recByID:       map[string]*recorder{},
 		sipPending:    map[string]bool{},
@@ -189,7 +208,9 @@ func NewService(opt Options) (*Service, error) {
 
 var _ ports.MediaPort = (*Service)(nil)
 
+// CreateRoom 为通话建立媒体房间；重复调用沿用已有房间。
 func (s *Service) CreateRoom(ctx context.Context, callID string, opts dto.RoomOptions) error {
+	started := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.rooms[callID]; ok {
@@ -217,10 +238,13 @@ func (s *Service) CreateRoom(ctx context.Context, callID string, opts dto.RoomOp
 		peers:       map[string]*peer{},
 		dtmf:        map[string]ports.DTMFHandler{},
 	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "room.created", "create", "ok", "", started, "video", opts.EnableVideo)
 	return nil
 }
 
+// CloseRoom 关闭通话中的 WebRTC、SIP 和录音资源。
 func (s *Service) CloseRoom(ctx context.Context, callID string) error {
+	started := time.Now()
 	if s.sip != nil {
 		s.sip.endCall(callID, true)
 	}
@@ -255,6 +279,7 @@ func (s *Service) CloseRoom(ctx context.Context, callID string) error {
 	for _, p := range peers {
 		_ = p.pc.Close()
 	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "room.closed", "close", "ok", "", started, "peer_count", len(peers))
 	return nil
 }
 
@@ -285,6 +310,7 @@ func (s *Service) LeaveRoom(ctx context.Context, callID, legID string) error {
 	return nil
 }
 
+// JoinWebRTC 将通话腿加入房间，绑定轨道并由服务端生成 Offer。
 func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto.LegRole) (dto.LocalOffer, error) {
 	r := s.getRoom(callID)
 	if r == nil {
@@ -351,8 +377,43 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 
 	recvOnly := role == dto.LegRoleSupervisor
 	p := &peer{pc: pc, audioOut: audioOut, videoOut: videoOut, audioSamp: audioSamp, role: role, audioMuted: recvOnly}
+	peerCtx := observability.WithFields(ctx, observability.Fields{CallID: callID, LegID: legID})
+	pc.OnSignalingStateChange(func(state webrtc.SignalingState) {
+		observability.Event(peerCtx, "webrtc", "peer.signaling_state", "state", "ok", "", time.Time{}, "state", state.String())
+	})
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		observability.Event(peerCtx, "webrtc", "peer.ice_state", "state", "ok", "", time.Time{}, "state", state.String())
+	})
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		observability.Event(peerCtx, "webrtc", "peer.connection_state", "state", "ok", "", time.Time{}, "state", state.String())
+		if state == webrtc.PeerConnectionStateConnected && enableVideo {
+			go func() {
+				for attempt := 0; attempt < 3; attempt++ {
+					if attempt > 0 {
+						time.Sleep(500 * time.Millisecond)
+					}
+					s.requestVideoKeyframes(callID, legID)
+				}
+			}()
+		}
+	})
+	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		value := ""
+		if candidate != nil {
+			value = candidate.ToJSON().Candidate
+		}
+		observability.Event(peerCtx, "webrtc", "ice.local_candidate", "candidate", "ok", "", time.Time{}, "body", observability.Redact(value))
+	})
 
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		observability.Event(peerCtx, "webrtc", "track.received", "track", "ok", "", time.Time{}, "kind", remote.Kind().String(), "codec", remote.Codec().MimeType, "ssrc", remote.SSRC())
+		if remote.Kind() == webrtc.RTPCodecTypeVideo {
+			r.mu.Lock()
+			if r.peers[legID] == p {
+				p.videoSSRC = uint32(remote.SSRC())
+			}
+			r.mu.Unlock()
+		}
 		if remote.Codec().MimeType == "audio/telephone-event" {
 			go s.readDTMF(callID, legID, remote)
 			return
@@ -385,7 +446,32 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 	if ld == nil {
 		return dto.LocalOffer{}, errs.Internal("未生成本地 SDP")
 	}
+	observability.Event(peerCtx, "webrtc", "sdp.offer", "local", "ok", "", time.Time{}, "body", observability.Redact(ld.SDP))
+	go samplePeerQuality(peerCtx, pc)
 	return dto.LocalOffer{SDP: ld.SDP, Type: "offer"}, nil
+}
+
+// A late subscriber needs a fresh keyframe to decode an already running video stream.
+func (s *Service) requestVideoKeyframes(callID, joiningLeg string) {
+	r := s.getRoom(callID)
+	if r == nil {
+		return
+	}
+	type source struct {
+		pc   *webrtc.PeerConnection
+		ssrc uint32
+	}
+	sources := make([]source, 0, 2)
+	r.mu.RLock()
+	for legID, p := range r.peers {
+		if legID != joiningLeg && p.videoSSRC != 0 {
+			sources = append(sources, source{pc: p.pc, ssrc: p.videoSSRC})
+		}
+	}
+	r.mu.RUnlock()
+	for _, source := range sources {
+		_ = source.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: source.ssrc}})
+	}
 }
 
 func (s *Service) AcceptAnswer(ctx context.Context, callID, legID string, answerSDP string) error {
@@ -393,7 +479,24 @@ func (s *Service) AcceptAnswer(ctx context.Context, callID, legID string, answer
 	if p == nil {
 		return errs.NotFound("媒体腿不存在")
 	}
-	return p.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answerSDP})
+	started := time.Now()
+	p.iceMu.Lock()
+	err := p.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answerSDP})
+	if err == nil {
+		for _, candidate := range p.pendingICE {
+			if addErr := p.pc.AddICECandidate(candidate); addErr != nil && err == nil {
+				err = addErr
+			}
+		}
+		p.pendingICE = nil
+	}
+	p.iceMu.Unlock()
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID, LegID: legID}), "webrtc", "sdp.answer", "remote", result, "", started, "body", observability.Redact(answerSDP))
+	return err
 }
 
 func (s *Service) TrickleICE(ctx context.Context, callID, legID string, cand dto.ICECandidateInit) error {
@@ -408,7 +511,21 @@ func (s *Service) TrickleICE(ctx context.Context, callID, legID string, cand dto
 	if cand.SDPMLineIndex != nil {
 		init.SDPMLineIndex = new(uint16(*cand.SDPMLineIndex))
 	}
-	return p.pc.AddICECandidate(init)
+	started := time.Now()
+	p.iceMu.Lock()
+	var err error
+	if p.pc.RemoteDescription() == nil {
+		p.pendingICE = append(p.pendingICE, init)
+	} else {
+		err = p.pc.AddICECandidate(init)
+	}
+	p.iceMu.Unlock()
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID, LegID: legID}), "webrtc", "ice.remote_candidate", "candidate", result, "", started, "body", observability.Redact(cand.Candidate))
+	return err
 }
 
 func (s *Service) IssueTURNCredentials(ctx context.Context, subject string, ttl time.Duration) (dto.TURNConfig, error) {
@@ -498,7 +615,18 @@ func (s *Service) InjectAudio(ctx context.Context, callID, botLegID string, sour
 	}
 	_ = botLegID
 	path := s.resolvePrompt(source.FilePath)
-	go s.playSourceToRoom(callID, path, source.Loop)
+	seq := r.promptSeq.Add(1)
+	go s.playSourceToRoom(callID, path, source.Loop, seq)
+	return nil
+}
+
+func (s *Service) StopInjectedAudio(ctx context.Context, callID string) error {
+	r := s.getRoom(callID)
+	if r == nil {
+		return errs.NotFound("媒体房间不存在")
+	}
+	r.promptSeq.Add(1)
+	_ = ctx
 	return nil
 }
 
@@ -527,6 +655,7 @@ func (s *Service) SendDTMF(ctx context.Context, callID, legID string, digit dto.
 	return nil
 }
 
+// StartRecording 按策略创建音视频录制器，并返回可查询的录音 ID。
 func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.RecordingPolicy) (string, error) {
 	if policy.Mode == "" || policy.Mode == "off" {
 		return "", nil
@@ -542,6 +671,9 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 	r.mu.RLock()
 	sipAudio := r.sipAudio
 	r.mu.RUnlock()
+	if policy.Mode == "video_composite" && sipAudio {
+		return "", fmt.Errorf("SIP 音频通话不支持视频录像")
+	}
 	ext := ".ogg"
 	if sipAudio {
 		ext = ".wav"
@@ -551,11 +683,20 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 	if policy.RetainDays > 0 {
 		until = new(time.Now().UTC().Add(time.Duration(policy.RetainDays) * 24 * time.Hour))
 	}
+	startedAt := time.Now().UTC()
 	rec := &recorder{
 		id: id, callID: callID, path: audioPath, audioPath: audioPath, mode: policy.Mode,
-		started: time.Now().UTC(), retainTo: until,
+		started: startedAt, retainTo: until,
 	}
-	if sipAudio {
+	if policy.Mode == "video_composite" {
+		videoRec, err := newVideoRecording(s.recDir, callID, id, s.videoFormat, s.ffmpegPath, startedAt)
+		if err != nil {
+			return "", err
+		}
+		rec.videoRec = videoRec
+		rec.path = videoRec.outputPath
+		rec.audioPath = ""
+	} else if sipAudio {
 		rec.pcm = newPCMMix(8000, rec.started)
 		if err := rec.pcm.startFile(audioPath); err != nil {
 			return "", err
@@ -567,23 +708,17 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 		}
 		rec.ogg = ogg
 	}
-	if policy.Mode == "video_composite" {
-		videoPath := filepath.Join(s.recDir, callID+"-"+id+".ivf")
-		ivf, err := ivfwriter.New(videoPath)
-		if err == nil {
-			rec.videoPath = videoPath
-			rec.ivf = ivf
-		}
-	}
 	r.mu.Lock()
 	r.rec = rec
 	r.mu.Unlock()
 	s.mu.Lock()
 	s.recByID[id] = rec
 	s.mu.Unlock()
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "recording.opened", "start", "ok", "", rec.started, "recording_id", id, "mode", policy.Mode)
 	return id, nil
 }
 
+// StopRecording 结束写盘并保留最终文件元数据。
 func (s *Service) StopRecording(ctx context.Context, recordingID string) error {
 	s.mu.Lock()
 	rec := s.recByID[recordingID]
@@ -598,7 +733,31 @@ func (s *Service) StopRecording(ctx context.Context, recordingID string) error {
 		}
 		r.mu.Unlock()
 	}
-	return rec.close()
+	started := time.Now()
+	err := rec.close()
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: rec.callID}), "media", "recording.closed", "stop", result, "", started, "recording_id", recordingID, "bytes", rec.bytes)
+	return err
+}
+
+func samplePeerQuality(ctx context.Context, pc *webrtc.PeerConnection) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		<-ticker.C
+		if pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
+			return
+		}
+		raw, err := json.Marshal(pc.GetStats())
+		if err != nil {
+			slog.WarnContext(ctx, "WebRTC stats 编码失败", append(observability.Attrs(ctx), "error", err)...)
+			continue
+		}
+		observability.Event(ctx, "webrtc", "quality.sample", "sample", "ok", "", time.Time{}, "interval_sec", 10, "stats", string(raw))
+	}
 }
 
 func (s *Service) RecordingInfo(ctx context.Context, recordingID string) (ports.RecordingMeta, error) {
@@ -649,6 +808,7 @@ func (s *Service) getPeer(callID, legID string) *peer {
 	return r.peers[legID]
 }
 
+// forward 将输入 RTP 轨道转发给房间内其他通话腿，并写入录音。
 func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 	buf := make([]byte, 1500)
 	pkt := &rtp.Packet{}
@@ -666,7 +826,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 		if unmarshaled && r.rec != nil {
 			cp := *pkt
 			cp.Payload = append([]byte{}, pkt.Payload...)
-			r.rec.writeRTP(remote.Kind(), &cp)
+			r.rec.writeRTP(fromLeg, remote.Kind(), remote.Codec().MimeType, &cp)
 		}
 		from := r.peers[fromLeg]
 		muted := false
@@ -714,6 +874,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 	}
 }
 
+// readDTMF 从 WebRTC RTP 轨道提取电话按键事件并通知订阅者。
 func (s *Service) readDTMF(callID, legID string, remote *webrtc.TrackRemote) {
 	buf := make([]byte, 1500)
 	last := byte(255)
@@ -779,12 +940,12 @@ func (s *Service) playTone(callID, legID string, dur time.Duration) {
 	}
 }
 
-func (s *Service) playToneToRoom(callID string, dur time.Duration) {
+func (s *Service) playToneToRoom(callID string, dur time.Duration, seq uint64) {
 	deadline := time.Now().Add(dur)
 	payload := mulawToneFrame()
 	for time.Now().Before(deadline) {
 		r := s.getRoom(callID)
-		if r == nil {
+		if r == nil || r.promptSeq.Load() != seq {
 			return
 		}
 		r.mu.RLock()
@@ -798,13 +959,20 @@ func (s *Service) playToneToRoom(callID string, dur time.Duration) {
 	}
 }
 
-func (rec *recorder) writeRTP(kind webrtc.RTPCodecType, pkt *rtp.Packet) {
+func (rec *recorder) writeRTP(legID string, kind webrtc.RTPCodecType, mime string, pkt *rtp.Packet) {
 	if rec == nil || pkt == nil {
 		return
 	}
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if rec.ended != nil {
+		return
+	}
+	if rec.videoRec != nil {
+		if err := rec.videoRec.writeRTP(legID, kind, mime, pkt); err != nil && rec.videoRec.writeErr == nil {
+			rec.videoRec.writeErr = err
+		}
+		rec.bytes += int64(len(pkt.Payload))
 		return
 	}
 	if kind == webrtc.RTPCodecTypeAudio && rec.pcm != nil && (pkt.PayloadType == 0 || pkt.PayloadType == 8) {
@@ -814,11 +982,6 @@ func (rec *recorder) writeRTP(kind webrtc.RTPCodecType, pkt *rtp.Packet) {
 	}
 	if kind == webrtc.RTPCodecTypeAudio && rec.ogg != nil && pkt.PayloadType != 0 && pkt.PayloadType != 8 && pkt.PayloadType != 101 {
 		if err := rec.ogg.WriteRTP(pkt); err == nil {
-			rec.bytes += int64(len(pkt.Payload))
-		}
-	}
-	if kind == webrtc.RTPCodecTypeVideo && rec.ivf != nil {
-		if err := rec.ivf.WriteRTP(pkt); err == nil {
 			rec.bytes += int64(len(pkt.Payload))
 		}
 	}
@@ -861,21 +1024,20 @@ func (rec *recorder) close() error {
 		}
 		rec.pcm = nil
 	}
-	if rec.ivf != nil {
-		_ = rec.ivf.Close()
-		rec.ivf = nil
-	}
 	if rec.file != nil {
 		_ = rec.file.Close()
 		rec.file = nil
 	}
-	if rec.audioPath != "" && rec.videoPath != "" {
-		if out, muxErr := muxWebM(rec.audioPath, rec.videoPath); muxErr == nil && out != "" {
-			rec.path = out
-			if st, e := os.Stat(out); e == nil {
-				rec.bytes = st.Size()
+	if rec.videoRec != nil {
+		if out, size, muxErr := rec.videoRec.finish(rec.ended.Sub(rec.started)); muxErr != nil {
+			if err == nil {
+				err = muxErr
 			}
+		} else {
+			rec.path = out
+			rec.bytes = size
 		}
+		return err
 	}
 	return err
 }
@@ -889,29 +1051,12 @@ func (rec *recorder) snapshot() ports.RecordingMeta {
 	}
 }
 
-func muxWebM(audioPath, videoPath string) (string, error) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return "", err
-	}
-	out := strings.TrimSuffix(audioPath, filepath.Ext(audioPath)) + ".webm"
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", audioPath, "-i", videoPath, "-c", "copy", out)
-	if err := cmd.Run(); err != nil {
-		return "", err
-	}
-	return out, nil
-}
-
 func mulawToneFrame() []byte {
 	const n = 160
 	out := make([]byte, n)
 	for i := 0; i < n; i++ {
-		v := int16(8000)
-		if i%18 < 9 {
-			v = -8000
-		}
-		out[i] = linearToMulaw(v)
+		// 400 Hz 正弦波恰好在 20 ms 帧中完成整数个周期，避免帧边界爆音。
+		out[i] = linearToMulaw(int16(1400 * math.Sin(2*math.Pi*400*float64(i)/8000)))
 	}
 	return out
 }
@@ -921,21 +1066,23 @@ func linearToMulaw(sample int16) byte {
 		bias = 0x84
 		clip = 32635
 	)
+	pcm := int(sample)
 	sign := byte(0)
-	if sample < 0 {
+	if pcm < 0 {
 		sign = 0x80
-		sample = -sample
+		pcm = -pcm
 	}
-	if sample > clip {
-		sample = clip
+	if pcm > clip {
+		pcm = clip
 	}
-	sample += bias
+	pcm += bias
 	exp := byte(7)
-	for exp > 0 && sample&(0x4000) == 0 {
-		sample <<= 1
+	mask := 0x4000
+	for exp > 0 && pcm&mask == 0 {
+		mask >>= 1
 		exp--
 	}
-	mant := byte((sample >> 7) & 0x0F)
+	mant := byte((pcm >> (exp + 3)) & 0x0F)
 	return ^(sign | (exp << 4) | mant)
 }
 

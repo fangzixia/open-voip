@@ -1,7 +1,6 @@
 package http
 
 import (
-	"encoding/json"
 	"io/fs"
 	"net/http"
 	"path/filepath"
@@ -65,8 +64,7 @@ func (s StatusProvider) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func dirSize(root string) int64 {

@@ -257,7 +257,7 @@ sequenceDiagram
 |---|---|---|
 | GET | `/switch/v1/internal/calls` | 服务密钥鉴权，返回活跃 CallView 数组；报表/重连权威来源 |
 | GET | `/switch/v1/internal/calls/{callId}` | 内部单通查询，不要求用户主体；禁止浏览器代理 |
-| GET / DELETE | `/switch/v1/internal/recordings/{callId}/{recordingId}?ext=.wav` | 文件读取/删除；扩展名仅 wav/ogg/webm/ivf；文件根目录限制 |
+| GET / DELETE | `/switch/v1/internal/recordings/{callId}/{recordingId}?ext=.wav` | 文件读取/删除；扩展名支持 wav/ogg/webm/mp4/ivf；视频 GET 可加 `format=webm|mp4` 临时转换，文件根目录限制 |
 | GET | `/api/v1/agents/me/calls` | open-call 面向已登录坐席的过滤视图，返回 `{items: [...]}` |
 
 `AgentInfo` 增加 `terminal_type`（webrtc/sip）、`sip_username`；设备密码只存在 open-switch 配置。`CallView` 增加 `created_at` 和 `caller`。全部 Port DTO 采用 snake_case JSON，升级时必须同时升级两端。
@@ -267,3 +267,6 @@ sequenceDiagram
 外呼返回时可能为 ringing；等 `call.answered` 或重新查询后建立浏览器媒体。SIP 坐席应在设备上接听/拨号，浏览器不代替 SIP 响应。`X-Principal` 的管理角色仅授权通话级管理，操作个人媒体腿仍检查所属坐席。
 
 CDR、录音元数据、通话结束释放通过交换服务 outbox 顺序重试，业务服务端需按 ID 幂等。实时 WebSocket 和 Webhook 目前不保证持久投递；客户端重连后必须查询快照。服务端不能把业务服务失败解释为不存在分机，并自动拨向中继。
+# 响应结构更新
+
+CC 与 Switch 双向 HTTP 接口已统一采用 `code/message/data/request_id`。本文中的业务返回字段均位于 `data` 内，原无内容响应改为 HTTP 200 + `data:null`。文件流与 WebSocket 事件除外。详见 [统一响应契约](api/response-contract.md)。

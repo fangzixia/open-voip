@@ -90,6 +90,7 @@ func (s *Service) SetState(ctx context.Context, agentID, fromState, toState, rea
 	return s.SetCallState(ctx, "", agentID, fromState, toState, reason)
 }
 
+// SetCallState 按预期旧状态更新坐席会话并记录当前通话，避免并发状态覆盖。
 func (s *Service) SetCallState(ctx context.Context, callID, agentID, fromState, toState, reason string) error {
 	if toState == "" {
 		return errs.InvalidRequest("目标状态不能为空")
@@ -186,7 +187,7 @@ func (s *Service) Me(ctx context.Context, agentID string) (MeDTO, error) {
 	}, nil
 }
 
-// CheckIn 签入指定队列。
+// CheckIn 验证队列绑定并创建坐席在线会话。
 func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string) (SessionDTO, error) {
 	if _, err := s.ByID(ctx, agentID); err != nil {
 		return SessionDTO{}, err
@@ -266,7 +267,7 @@ func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string
 	return s.sessionDTO(ctx, agentID), nil
 }
 
-// CheckOut 签出。
+// CheckOut 在没有振铃或通话时结束坐席在线会话。
 func (s *Service) CheckOut(ctx context.Context, agentID string) error {
 	var sess models.AgentSession
 	if err := s.db.WithContext(ctx).Where("agent_id = ?", agentID).First(&sess).Error; err != nil {

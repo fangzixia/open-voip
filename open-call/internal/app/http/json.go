@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"open-call/internal/datetime"
+	"open-call/internal/httpapi"
 	"strconv"
 
 	"open-call/internal/app/http/middleware"
@@ -21,29 +23,18 @@ func WriteErr(w http.ResponseWriter, err error) {
 	writeErr(w, err)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
+func writeJSON(w http.ResponseWriter, status int, v any) { httpapi.Write(w, status, v) }
 
-func writeErr(w http.ResponseWriter, err error) {
-	api := errs.AsAPIError(err)
-	body := map[string]any{
-		"error":   api.Kind,
-		"message": api.Message,
-	}
-	if api.Code != "" {
-		body["code"] = api.Code
-	}
-	writeJSON(w, api.HTTP, body)
-}
+func writeErr(w http.ResponseWriter, err error) { httpapi.Error(w, err) }
 
 func decodeJSON(r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return errs.InvalidRequest("JSON 无法解析")
+	}
+	if err := datetime.UnmarshalStrict(raw, dst); err != nil {
 		return errs.InvalidRequest("JSON 无法解析")
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {

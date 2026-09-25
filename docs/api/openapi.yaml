@@ -1,10 +1,13 @@
 openapi: 3.1.0
 info:
   title: Open VoIP API
-  version: 1.0.0
-  description: |
+  version: 1.1.0
+  description: |-
     内网呼叫中心 REST API。WebSocket 见 ../events.md。
     需求 ID 见各 operation 的 x-requirement-id。
+
+    JSON 响应统一为 code/message/data/request_id，详见 response-contract.md。原 204 操作现在返回 200 和 data:null；下载、存活探针和 WebSocket 升级除外。
+    所有时间戳使用 UTC 的 YYYY-MM-DD HH:MM:SS，例如 2026-09-25 10:12:35。
   license:
     name: Proprietary
 
@@ -31,6 +34,7 @@ tags:
   - name: Supervisor
   - name: Platform
   - name: AdminMaintenance
+  - name: Observability
 
 security:
   - bearerAuth: []
@@ -38,7 +42,7 @@ security:
 paths:
   /api/v1/agents/me/calls:
     get:
-      tags: [Agents]
+      tags: [ Agents ]
       summary: 当前坐席活跃通话快照（重连恢复）
       operationId: getMyActiveCalls
       responses:
@@ -48,16 +52,35 @@ paths:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
                 properties:
-                  items:
-                    type: array
-                    items:
-                      type: object
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                  request_id:
+                    type: string
         "403":
           description: 当前用户不是坐席
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /health:
     get:
-      tags: [Platform]
+      tags: [ Platform ]
       security: []
       summary: 存活探针
       x-requirement-id: PLAT-06
@@ -67,32 +90,70 @@ paths:
 
   /health/ready:
     get:
-      tags: [Platform]
+      tags: [ Platform ]
       security: []
       summary: 就绪探针，检查 PostgreSQL 与 open-switch
       responses:
         "200":
           description: 依赖均可用
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
         "503":
           description: 至少一个关键依赖不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/status:
     get:
-      tags: [Platform]
+      tags: [ Platform ]
       summary: 运行状态摘要
       x-requirement-id: PLAT-06,DEPLOY-08
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       responses:
         "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StatusResponse"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/StatusResponse"
+                  request_id:
+                    type: string
 
   /api/v1/auth/login:
     post:
-      tags: [Auth]
+      tags: [ Auth ]
       security: []
       summary: 登录
       x-requirement-id: PLAT-02
@@ -108,13 +169,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TokenResponse"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/TokenResponse"
+                  request_id:
+                    type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
 
   /api/v1/auth/refresh:
     post:
-      tags: [Auth]
+      tags: [ Auth ]
       security: []
       summary: 刷新 access token
       x-requirement-id: PLAT-02
@@ -123,7 +199,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [refresh_token]
+              required: [ refresh_token ]
               properties:
                 refresh_token:
                   type: string
@@ -132,23 +208,57 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TokenResponse"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/TokenResponse"
+                  request_id:
+                    type: string
 
   /api/v1/auth/logout:
     post:
-      tags: [Auth]
+      tags: [ Auth ]
       summary: 登出并撤销
       x-requirement-id: PLAT-02
       responses:
-        "204":
+        "200":
           description: No content
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/users:
     get:
-      tags: [Users]
+      tags: [ Users ]
       summary: 用户列表
       x-requirement-id: ADM-01
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -157,12 +267,27 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserList"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/UserList"
+                  request_id:
+                    type: string
     post:
-      tags: [Users]
+      tags: [ Users ]
       summary: 创建用户
       x-requirement-id: ADM-01,AGENT-01
-      x-roles: [admin]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -173,23 +298,53 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/User"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/User"
+                  request_id:
+                    type: string
 
   /api/v1/users/{userId}:
     parameters:
       - $ref: "#/components/parameters/UserId"
     get:
-      tags: [Users]
-      x-roles: [admin]
+      tags: [ Users ]
+      x-roles: [ admin ]
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/User"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/User"
+                  request_id:
+                    type: string
     patch:
-      tags: [Users]
-      x-roles: [admin]
+      tags: [ Users ]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -200,68 +355,170 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/User"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/User"
+                  request_id:
+                    type: string
     delete:
-      tags: [Users]
-      x-roles: [admin]
+      tags: [ Users ]
+      x-roles: [ admin ]
       responses:
-        "204":
+        "200":
           description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/users/{userId}/reset-password:
     post:
-      tags: [Users]
+      tags: [ Users ]
       x-requirement-id: AGENT-01
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - $ref: "#/components/parameters/UserId"
       responses:
         "200":
           description: 新临时密码或邮件流程（实现定义）
-
-  /api/v1/agents/me:
-    get:
-      tags: [Agents]
-      summary: 当前坐席资料
-      x-roles: [agent, supervisor, admin]
-      responses:
-        "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Agent"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
-  /api/v1/agents:
+  /api/v1/agents/me:
     get:
-      tags: [Agents]
-      summary: 坐席目录（转接/外呼）
-      x-roles: [agent, supervisor, admin]
+      tags: [ Agents ]
+      summary: 当前坐席资料
+      x-roles: [ agent, supervisor, admin ]
       responses:
         "200":
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
                 properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Agent"
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Agent"
+                  request_id:
+                    type: string
+
+  /api/v1/agents:
+    get:
+      tags: [ Agents ]
+      summary: 坐席目录（转接/外呼）
+      x-roles: [ agent, supervisor, admin ]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Agent"
+                  request_id:
+                    type: string
 
   /api/v1/agents/{agentId}/skills:
     get:
-      tags: [Skills]
+      tags: [ Skills ]
       x-requirement-id: AGENT-06
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - $ref: "#/components/parameters/AgentId"
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     put:
-      tags: [Skills]
+      tags: [ Skills ]
       x-requirement-id: AGENT-06
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - $ref: "#/components/parameters/AgentId"
       requestBody:
@@ -277,13 +534,32 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/agents/{agentId}/check-in:
     post:
-      tags: [Agents]
+      tags: [ Agents ]
       summary: 签入队列
       x-requirement-id: AGENT-02
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/AgentId"
       requestBody:
@@ -301,25 +577,59 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AgentSession"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/AgentSession"
+                  request_id:
+                    type: string
 
   /api/v1/agents/{agentId}/check-out:
     post:
-      tags: [Agents]
+      tags: [ Agents ]
       x-requirement-id: AGENT-02
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/AgentId"
       responses:
-        "204":
+        "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/agents/{agentId}/state:
     put:
-      tags: [Agents]
+      tags: [ Agents ]
       summary: 设置示闲/示忙等
       x-requirement-id: AGENT-03,AGENT-04
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/AgentId"
       requestBody:
@@ -332,13 +642,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AgentSession"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/AgentSession"
+                  request_id:
+                    type: string
 
   /api/v1/queues:
     get:
-      tags: [Queues]
+      tags: [ Queues ]
       x-requirement-id: ADM-01,QUEUE-01
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -347,10 +672,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QueueList"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/QueueList"
+                  request_id:
+                    type: string
     post:
-      tags: [Queues]
-      x-roles: [admin]
+      tags: [ Queues ]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -361,23 +701,53 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Queue"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Queue"
+                  request_id:
+                    type: string
 
   /api/v1/queues/{queueId}:
     parameters:
       - $ref: "#/components/parameters/QueueId"
     get:
-      tags: [Queues]
-      x-roles: [admin, supervisor, agent]
+      tags: [ Queues ]
+      x-roles: [ admin, supervisor, agent ]
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Queue"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Queue"
+                  request_id:
+                    type: string
     patch:
-      tags: [Queues]
-      x-roles: [admin]
+      tags: [ Queues ]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -388,19 +758,53 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Queue"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Queue"
+                  request_id:
+                    type: string
     delete:
-      tags: [Queues]
-      x-roles: [admin]
+      tags: [ Queues ]
+      x-roles: [ admin ]
       responses:
-        "204":
+        "200":
           description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/queues/{queueId}/agents:
     put:
-      tags: [Queues]
+      tags: [ Queues ]
       summary: 绑定坐席
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - $ref: "#/components/parameters/QueueId"
       requestBody:
@@ -416,23 +820,57 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/skills:
     get:
-      tags: [Skills]
+      tags: [ Skills ]
       x-requirement-id: AGENT-06,ADM-01
-      x-roles: [admin]
+      x-roles: [ admin ]
       responses:
         "200":
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Skill"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Skill"
+                  request_id:
+                    type: string
     post:
-      tags: [Skills]
-      x-roles: [admin]
+      tags: [ Skills ]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -443,24 +881,54 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Skill"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Skill"
+                  request_id:
+                    type: string
 
   /api/v1/ivr/flows:
     get:
-      tags: [IVR]
+      tags: [ IVR ]
       x-requirement-id: ADM-02
-      x-roles: [admin]
+      x-roles: [ admin ]
       responses:
         "200":
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/IVRFlow"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IVRFlow"
+                  request_id:
+                    type: string
     post:
-      tags: [IVR]
-      x-roles: [admin]
+      tags: [ IVR ]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -471,14 +939,29 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IVRFlow"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/IVRFlow"
+                  request_id:
+                    type: string
 
   /api/v1/ivr/flows/{flowId}/publish:
     post:
-      tags: [IVR]
+      tags: [ IVR ]
       summary: 发布 IVR 快照
       x-requirement-id: ADM-04,IVR-01
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - name: flowId
           in: path
@@ -490,14 +973,29 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IVRPublishedSnapshot"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/IVRPublishedSnapshot"
+                  request_id:
+                    type: string
 
   /api/v1/guest/sessions:
     post:
-      tags: [Guest]
+      tags: [ Guest ]
       summary: 创建访客入会 token
       x-requirement-id: ADM-05
-      x-roles: [admin, agent]
+      x-roles: [ admin, agent ]
       requestBody:
         content:
           application/json:
@@ -508,11 +1006,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/GuestSession"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/GuestSession"
+                  request_id:
+                    type: string
 
   /api/v1/guest/queues:
     get:
-      tags: [Guest]
+      tags: [ Guest ]
       summary: Demo 公开队列列表
       x-requirement-id: UI-C-01
       security: []
@@ -522,16 +1035,68 @@ paths:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
                 properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/GuestQueue"
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/GuestQueue"
+                  request_id:
+                    type: string
+
+  /api/v1/client-events:
+    post:
+      tags: [ Observability ]
+      summary: 批量上报浏览器通话与媒体诊断事件
+      description: 使用坐席 access token 或访客会话 token；事件仅写入服务器 trace.jsonl，不写数据库。
+      parameters:
+        - name: X-Trace-ID
+          in: header
+          schema:
+            type: string
+          description: 一次用户操作或通话链路的追踪标识
+        - name: X-Call-ID
+          in: header
+          schema:
+            type: string
+        - name: X-Leg-ID
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientTraceBatch"
+      responses:
+        "202":
+          description: 事件已写入追踪日志
+        "400":
+          description: 事件格式或数量不合法
+        "401":
+          description: 未认证
+        "403":
+          description: call_id 不属于当前访客或坐席
+        "429":
+          description: 上报频率超过限制
 
   /api/v1/guest/join:
     post:
-      tags: [Guest]
-      summary: Demo 直链入队并创建呼入
+      tags: [ Guest ]
+      summary: H5 访客无需 token 直接入队并创建呼入
       x-requirement-id: QUEUE-03,UI-C-01
       security: []
       requestBody:
@@ -544,14 +1109,29 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/GuestJoinResponse"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/GuestJoinResponse"
+                  request_id:
+                    type: string
 
   /api/v1/calls/outbound:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       summary: 外呼
       x-requirement-id: CALL-01,MEDIA-09
-      x-roles: [agent]
+      x-roles: [ agent ]
       requestBody:
         content:
           application/json:
@@ -562,13 +1142,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Call"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Call"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/answer:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: QUEUE-03
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
@@ -576,12 +1171,27 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Call"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Call"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/hangup:
     post:
-      tags: [Calls]
-      x-roles: [agent, supervisor]
+      tags: [ Calls ]
+      x-roles: [ agent, supervisor ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       requestBody:
@@ -593,14 +1203,33 @@ paths:
                 reason:
                   type: string
       responses:
-        "204":
+        "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/hold:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: MEDIA-05
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       requestBody:
@@ -614,12 +1243,31 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/transfer:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: CALL-02,VIDEO-09
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       requestBody:
@@ -630,37 +1278,94 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
         "422":
           $ref: "#/components/responses/BusinessError"
 
   /api/v1/calls/{callId}/transfer/complete:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       summary: 完成咨询转
       x-requirement-id: CALL-02
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
         "409":
           $ref: "#/components/responses/BusinessError"
 
   /api/v1/calls/{callId}/video/request:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: VIDEO-06
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
         "202":
           description: 已通知对端
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}:
     get:
-      tags: [Calls]
+      tags: [ Calls ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
@@ -668,21 +1373,55 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Call"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/Call"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/decline:
     post:
-      tags: [Calls]
-      x-roles: [agent]
+      tags: [ Calls ]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
-        "204":
+        "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/video/respond:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: VIDEO-06
       parameters:
         - $ref: "#/components/parameters/CallId"
@@ -697,20 +1436,58 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/video/downgrade:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: VIDEO-07
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/screen-share:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: VIDEO-08
       parameters:
         - $ref: "#/components/parameters/CallId"
@@ -727,12 +1504,31 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/conference:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: CALL-03
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       requestBody:
@@ -740,17 +1536,36 @@ paths:
           application/json:
             schema:
               type: object
-              required: [agent_id]
+              required: [ agent_id ]
               properties:
                 agent_id:
                   type: string
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/dtmf:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: MEDIA-06
       parameters:
         - $ref: "#/components/parameters/CallId"
@@ -767,12 +1582,31 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/wrap-up:
     post:
-      tags: [Calls]
+      tags: [ Calls ]
       x-requirement-id: UI-A-07
-      x-roles: [agent]
+      x-roles: [ agent ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       requestBody:
@@ -789,20 +1623,39 @@ paths:
                   type: string
                 tags:
                   type: array
-                  items: {type: string}
+                  items: { type: string }
                 complete:
                   type: boolean
                   description: 完成 ACW 后将坐席恢复为空闲
       responses:
         "201":
           description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/wrap-ups:
     get:
-      tags: [Calls]
+      tags: [ Calls ]
       summary: 查询通话小结
       x-requirement-id: UI-A-07
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - name: call_id
           in: query
@@ -811,21 +1664,59 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/qa-marks:
     get:
-      tags: [Recordings]
+      tags: [ Recordings ]
       x-requirement-id: QA-01
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     post:
-      tags: [Recordings]
+      tags: [ Recordings ]
       x-requirement-id: QA-01
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       requestBody:
@@ -845,45 +1736,104 @@ paths:
       responses:
         "201":
           description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/qa-marks/{markId}:
     patch:
-      tags: [Recordings]
-      x-roles: [admin, supervisor]
+      tags: [ Recordings ]
+      x-roles: [ admin, supervisor ]
       parameters:
         - $ref: "#/components/parameters/CallId"
         - name: markId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [offset_sec, label]
+              required: [ offset_sec, label ]
               properties:
-                offset_sec: {type: integer, minimum: 0}
-                label: {type: string}
-                score: {type: integer, minimum: 0, maximum: 100}
+                offset_sec: { type: integer, minimum: 0 }
+                label: { type: string }
+                score: { type: integer, minimum: 0, maximum: 100 }
       responses:
-        "200": {description: Updated}
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     delete:
-      tags: [Recordings]
-      x-roles: [admin, supervisor]
+      tags: [ Recordings ]
+      x-roles: [ admin, supervisor ]
       parameters:
         - $ref: "#/components/parameters/CallId"
         - name: markId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "204": {description: Deleted}
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/legs/{legId}/mute:
     post:
-      tags: [MediaSignaling]
+      tags: [ MediaSignaling ]
       x-requirement-id: MEDIA-05
       parameters:
         - $ref: "#/components/parameters/CallId"
@@ -901,10 +1851,29 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/legs/{legId}/offer:
     post:
-      tags: [MediaSignaling]
+      tags: [ MediaSignaling ]
       summary: 提交 SDP Offer 或获取 Offer
       x-requirement-id: MEDIA-01,VIDEO-01
       parameters:
@@ -920,11 +1889,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SDPPayload"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/SDPPayload"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/legs/{legId}/answer:
     post:
-      tags: [MediaSignaling]
+      tags: [ MediaSignaling ]
       parameters:
         - $ref: "#/components/parameters/CallId"
         - $ref: "#/components/parameters/LegId"
@@ -936,10 +1920,29 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/legs/{legId}/ice:
     post:
-      tags: [MediaSignaling]
+      tags: [ MediaSignaling ]
       x-requirement-id: MEDIA-04
       parameters:
         - $ref: "#/components/parameters/CallId"
@@ -950,12 +1953,31 @@ paths:
             schema:
               $ref: "#/components/schemas/ICECandidate"
       responses:
-        "204":
+        "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/calls/{callId}/turn-credentials:
     get:
-      tags: [MediaSignaling]
+      tags: [ MediaSignaling ]
       x-requirement-id: VIDEO-12,MEDIA-04b
       parameters:
         - $ref: "#/components/parameters/CallId"
@@ -964,13 +1986,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TURNCredentials"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/TURNCredentials"
+                  request_id:
+                    type: string
 
   /api/v1/cdr:
     get:
-      tags: [CDR]
+      tags: [ CDR ]
       x-requirement-id: CDR-01,ADM-03
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -978,12 +2015,12 @@ paths:
           in: query
           schema:
             type: string
-            format: date-time
+            pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         - name: to
           in: query
           schema:
             type: string
-            format: date-time
+            pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         - name: queue_id
           in: query
           schema:
@@ -993,26 +2030,41 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CDRList"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/CDRList"
+                  request_id:
+                    type: string
 
   /api/v1/cdr/export.csv:
     get:
-      tags: [CDR]
+      tags: [ CDR ]
       x-requirement-id: CDR-03
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - name: from
           in: query
           required: true
           schema:
             type: string
-            format: date-time
+            pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         - name: to
           in: query
           required: true
           schema:
             type: string
-            format: date-time
+            pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
       responses:
         "200":
           description: CSV file
@@ -1023,9 +2075,9 @@ paths:
 
   /api/v1/recordings:
     get:
-      tags: [Recordings]
+      tags: [ Recordings ]
       x-requirement-id: ADM-03,REC-04
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - $ref: "#/components/parameters/Page"
         - name: call_id
@@ -1037,23 +2089,52 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RecordingList"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/RecordingList"
+                  request_id:
+                    type: string
 
   /api/v1/recordings/{recordingId}/download:
     get:
-      tags: [Recordings]
+      tags: [ Recordings ]
       x-requirement-id: REC-04
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - name: recordingId
           in: path
           required: true
           schema:
             type: string
+        - name: format
+          in: query
+          description: 视频录像的下载格式；省略时下载保存的原格式。转换格式不会额外长期保存文件。
+          schema:
+            type: string
+            enum: [webm, mp4]
       responses:
         "200":
           description: 二进制流
           content:
+            video/webm:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
             application/octet-stream:
               schema:
                 type: string
@@ -1061,21 +2142,36 @@ paths:
 
   /api/v1/reports/live:
     get:
-      tags: [Reports]
+      tags: [ Reports ]
       x-requirement-id: RPT-01
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LiveReport"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/LiveReport"
+                  request_id:
+                    type: string
 
   /api/v1/reports/historical:
     get:
-      tags: [Reports]
+      tags: [ Reports ]
       x-requirement-id: RPT-02,RPT-03
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - name: from
           in: query
@@ -1096,44 +2192,93 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HistoricalReport"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/HistoricalReport"
+                  request_id:
+                    type: string
 
   /api/v1/reports/agents:
     get:
-      tags: [Reports]
+      tags: [ Reports ]
       x-requirement-id: RPT-04
-      x-roles: [admin, supervisor]
+      x-roles: [ admin, supervisor ]
       parameters:
         - name: from
           in: query
           schema:
             type: string
-            format: date-time
+            pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         - name: to
           in: query
           schema:
             type: string
-            format: date-time
+            pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
       responses:
         "200":
           description: 坐席利用率
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/webhooks/subscriptions:
     get:
-      tags: [Webhooks]
+      tags: [ Webhooks ]
       x-requirement-id: EVT-04
-      x-roles: [admin]
+      x-roles: [ admin ]
       responses:
         "200":
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/WebhookSubscription"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookSubscription"
+                  request_id:
+                    type: string
     post:
-      tags: [Webhooks]
-      x-roles: [admin]
+      tags: [ Webhooks ]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -1144,13 +2289,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WebhookSubscription"
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/WebhookSubscription"
+                  request_id:
+                    type: string
 
   /api/v1/webhooks/deliveries/{deliveryId}/retry:
     post:
-      tags: [Webhooks]
+      tags: [ Webhooks ]
       x-requirement-id: EVT-04
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - name: deliveryId
           in: path
@@ -1160,24 +2320,58 @@ paths:
       responses:
         "202":
           description: 已触发重试
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/config/export:
     get:
-      tags: [Config]
+      tags: [ Config ]
       x-requirement-id: DEPLOY-06
-      x-roles: [admin]
+      x-roles: [ admin ]
       responses:
         "200":
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: object
+                  request_id:
+                    type: string
 
   /api/v1/config/import:
     post:
-      tags: [Config]
+      tags: [ Config ]
       x-requirement-id: DEPLOY-06
-      x-roles: [admin]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
@@ -1186,12 +2380,31 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/audit/logs:
     get:
-      tags: [Audit]
+      tags: [ Audit ]
       x-requirement-id: PLAT-05
-      x-roles: [admin]
+      x-roles: [ admin ]
       parameters:
         - $ref: "#/components/parameters/Page"
         - name: user_id
@@ -1204,52 +2417,124 @@ paths:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
                 properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/AuditLog"
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/AuditLog"
+                  request_id:
+                    type: string
 
   /api/v1/supervisor/agents/{agentId}/force-check-out:
     post:
-      tags: [Supervisor]
+      tags: [ Supervisor ]
       x-requirement-id: AGENT-05
-      x-roles: [supervisor, admin]
+      x-roles: [ supervisor, admin ]
       parameters:
         - $ref: "#/components/parameters/AgentId"
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/supervisor/calls/{callId}/listen:
     post:
-      tags: [Supervisor]
+      tags: [ Supervisor ]
       x-requirement-id: CALL-04
-      x-roles: [supervisor]
+      x-roles: [ supervisor ]
       parameters:
         - $ref: "#/components/parameters/CallId"
       responses:
         "200":
           description: 返回 supervisor leg 信令入口信息
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/dids:
     get:
-      tags: [Config]
+      tags: [ Config ]
       x-requirement-id: MEDIA-08
-      x-roles: [admin]
+      x-roles: [ admin ]
       responses:
         "200":
           description: DID 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     post:
-      tags: [Config]
+      tags: [ Config ]
       x-requirement-id: MEDIA-08
-      x-roles: [admin]
+      x-roles: [ admin ]
       requestBody:
         content:
           application/json:
             schema:
               type: object
-              required: [did, queue_id]
+              required: [ did, queue_id ]
               properties:
                 did:
                   type: string
@@ -1260,26 +2545,60 @@ paths:
       responses:
         "201":
           description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/admin/recordings/purge-expired:
     post:
-      tags: [AdminMaintenance]
+      tags: [ AdminMaintenance ]
       summary: 清理过期录音（无内置定时任务）
       x-requirement-id: REC-05
-      x-roles: [admin]
+      x-roles: [ admin ]
       responses:
         "200":
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
                 properties:
-                  deleted_count:
-                    type: integer
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      deleted_count:
+                        type: integer
+                  request_id:
+                    type: string
 
   /api/v1/auth/change-password:
     post:
-      tags: [Auth]
+      tags: [ Auth ]
       summary: 修改本人密码并撤销全部现有会话
       requestBody:
         required: true
@@ -1287,157 +2606,438 @@ paths:
           application/json:
             schema:
               type: object
-              required: [current_password, new_password]
+              required: [ current_password, new_password ]
               properties:
-                current_password: {type: string}
-                new_password: {type: string, minLength: 12}
+                current_password: { type: string }
+                new_password: { type: string, minLength: 12 }
       responses:
-        "204": {description: Password changed}
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/auth/sessions:
     get:
-      tags: [Auth]
+      tags: [ Auth ]
       summary: 列出本人登录会话
       responses:
-        "200": {description: OK}
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/auth/sessions/{sessionId}:
     delete:
-      tags: [Auth]
+      tags: [ Auth ]
       summary: 撤销本人指定登录会话
       parameters:
         - name: sessionId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "204": {description: Revoked}
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/skills/{skillId}:
     patch:
-      tags: [Skills]
-      x-roles: [admin]
+      tags: [ Skills ]
+      x-roles: [ admin ]
       parameters:
         - name: skillId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "200": {description: Updated}
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     delete:
-      tags: [Skills]
-      x-roles: [admin]
+      tags: [ Skills ]
+      x-roles: [ admin ]
       parameters:
         - name: skillId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "204": {description: Deleted when unreferenced}
+        "200":
+          description: Deleted when unreferenced
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/ivr/flows/{flowId}:
     get:
-      tags: [IVR]
-      x-roles: [admin]
+      tags: [ IVR ]
+      x-roles: [ admin ]
       parameters:
         - name: flowId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "200": {description: Draft and current version}
+        "200":
+          description: Draft and current version
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     patch:
-      tags: [IVR]
-      x-roles: [admin]
+      tags: [ IVR ]
+      x-roles: [ admin ]
       parameters:
         - name: flowId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "200": {description: Updated}
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     delete:
-      tags: [IVR]
-      x-roles: [admin]
+      tags: [ IVR ]
+      x-roles: [ admin ]
       parameters:
         - name: flowId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "204": {description: Deleted when unreferenced}
+        "200":
+          description: Deleted when unreferenced
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/ivr/flows/{flowId}/versions:
     get:
-      tags: [IVR]
-      x-roles: [admin]
+      tags: [ IVR ]
+      x-roles: [ admin ]
       parameters:
         - name: flowId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "200": {description: Immutable published versions}
+        "200":
+          description: Immutable published versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/ivr/flows/{flowId}/rollback:
     post:
-      tags: [IVR]
-      x-roles: [admin]
+      tags: [ IVR ]
+      x-roles: [ admin ]
       parameters:
         - name: flowId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "200": {description: A new version copied from the selected version}
+        "200":
+          description: A new version copied from the selected version
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/webhooks/subscriptions/{subscriptionId}:
     patch:
-      tags: [Webhooks]
-      x-roles: [admin]
+      tags: [ Webhooks ]
+      x-roles: [ admin ]
       parameters:
         - name: subscriptionId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "200": {description: Updated, optionally returns a rotated secret once}
+        "200":
+          description: Updated
+          optionally returns a rotated secret once: null
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
     delete:
-      tags: [Webhooks]
-      x-roles: [admin]
+      tags: [ Webhooks ]
+      x-roles: [ admin ]
       parameters:
         - name: subscriptionId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "204": {description: Deleted}
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/webhooks/deliveries:
     get:
-      tags: [Webhooks]
-      x-roles: [admin]
+      tags: [ Webhooks ]
+      x-roles: [ admin ]
       parameters:
         - name: status
           in: query
-          schema: {type: string, enum: [pending, processing, success, dead_letter]}
+          schema: { type: string, enum: [ pending, processing, success, dead_letter ] }
         - name: event_type
           in: query
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "200": {description: Delivery history and dead letters}
+        "200":
+          description: Delivery history and dead letters
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
   /api/v1/dids/{didId}:
     delete:
-      tags: [DID]
-      x-roles: [admin]
+      tags: [ DID ]
+      x-roles: [ admin ]
       parameters:
         - name: didId
           in: path
           required: true
-          schema: {type: string}
+          schema: { type: string }
       responses:
-        "204": {description: Deleted}
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                  - request_id
+                properties:
+                  code:
+                    type: string
+                    const: OK
+                  message:
+                    type: string
+                  data:
+                    type: "null"
+                  request_id:
+                    type: string
 
 components:
   securitySchemes:
@@ -1511,17 +3111,23 @@ components:
   schemas:
     Error:
       type: object
-      required: [error, message]
+      required:
+        - code
+        - message
+        - data
+        - request_id
+        - error
       properties:
-        error:
+        code:
           type: string
         message:
           type: string
-        code:
+        data: {}
+        request_id:
           type: string
-        details:
-          type: object
-          additionalProperties: true
+        error:
+          type: string
+          description: 错误分类；兼容旧版客户端
 
     StatusResponse:
       type: object
@@ -1547,7 +3153,7 @@ components:
 
     LoginRequest:
       type: object
-      required: [username, password]
+      required: [ username, password ]
       properties:
         username:
           type: string
@@ -1572,7 +3178,7 @@ components:
       properties:
         terminal_type:
           type: string
-          enum: [webrtc, sip]
+          enum: [ webrtc, sip ]
           description: SIP 终端只支持语音，修改绑定前必须签出
         sip_username:
           type: string
@@ -1585,7 +3191,7 @@ components:
           type: string
         role:
           type: string
-          enum: [admin, supervisor, agent]
+          enum: [ admin, supervisor, agent ]
         disabled:
           type: boolean
         agent_id:
@@ -1596,15 +3202,15 @@ components:
           type: boolean
         created_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
 
     UserCreate:
       type: object
-      required: [username, password, role]
+      required: [ username, password, role ]
       properties:
         terminal_type:
           type: string
-          enum: [webrtc, sip]
+          enum: [ webrtc, sip ]
           description: SIP 终端只支持语音，修改绑定前必须签出
         sip_username:
           type: string
@@ -1615,7 +3221,7 @@ components:
           type: string
         role:
           type: string
-          enum: [admin, supervisor, agent]
+          enum: [ admin, supervisor, agent ]
         display_name:
           type: string
         extension:
@@ -1629,7 +3235,7 @@ components:
       properties:
         terminal_type:
           type: string
-          enum: [webrtc, sip]
+          enum: [ webrtc, sip ]
           description: SIP 终端只支持语音，修改绑定前必须签出
         sip_username:
           type: string
@@ -1658,7 +3264,7 @@ components:
       properties:
         terminal_type:
           type: string
-          enum: [webrtc, sip]
+          enum: [ webrtc, sip ]
           description: SIP 终端只支持语音，修改绑定前必须签出
         sip_username:
           type: string
@@ -1692,11 +3298,11 @@ components:
 
     AgentState:
       type: string
-      enum: [offline, idle, busy, ringing, on_call, acw]
+      enum: [ offline, idle, busy, ringing, on_call, acw ]
 
     AgentStateUpdate:
       type: object
-      required: [state]
+      required: [ state ]
       properties:
         state:
           $ref: "#/components/schemas/AgentState"
@@ -1716,14 +3322,14 @@ components:
           type: integer
         strategy:
           type: string
-          enum: [longest_idle, round_robin]
+          enum: [ longest_idle, round_robin ]
         overflow_policy:
           type: string
         overflow_queue_id:
           type: string
         recording_policy:
           type: string
-          enum: [off, audio, video_composite]
+          enum: [ off, audio, video_composite ]
         ivr_flow_id:
           type: string
         wait_prompt:
@@ -1736,7 +3342,7 @@ components:
     QueueCreate:
       allOf:
         - $ref: "#/components/schemas/Queue"
-      required: [name]
+      required: [ name ]
 
     QueueUpdate:
       type: object
@@ -1772,7 +3378,7 @@ components:
 
     SkillCreate:
       type: object
-      required: [name]
+      required: [ name ]
       properties:
         name:
           type: string
@@ -1790,7 +3396,7 @@ components:
 
     IVRFlowCreate:
       type: object
-      required: [name]
+      required: [ name ]
       properties:
         name:
           type: string
@@ -1806,13 +3412,13 @@ components:
           type: integer
         published_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         config:
           type: object
 
     GuestSessionCreate:
       type: object
-      required: [queue_id]
+      required: [ queue_id ]
       properties:
         queue_id:
           type: string
@@ -1820,7 +3426,7 @@ components:
           type: integer
         allowed_media:
           type: string
-          enum: [audio, video]
+          enum: [ audio, video ]
 
     GuestSession:
       type: object
@@ -1832,7 +3438,7 @@ components:
           description: 相对路径（如 /guest/?token=），根地址由调用方拼接
         expires_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
 
     Call:
       type: object
@@ -1844,10 +3450,10 @@ components:
           type: string
         direction:
           type: string
-          enum: [inbound, outbound, internal]
+          enum: [ inbound, outbound, internal ]
         session_type:
           type: string
-          enum: [audio, video, mixed]
+          enum: [ audio, video, mixed ]
         queue_id:
           type: string
         agent_id:
@@ -1877,15 +3483,54 @@ components:
         video_enabled:
           type: boolean
 
+    ClientTraceBatch:
+      type: object
+      required: [ events ]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/ClientTraceEvent"
+
+    ClientTraceEvent:
+      type: object
+      required: [ type ]
+      properties:
+        type:
+          type: string
+          maxLength: 96
+          examples: [ webrtc.stats ]
+        timestamp:
+          type: string
+          description: 客户端事件时间
+        call_id:
+          type: string
+        leg_id:
+          type: string
+        queue_id:
+          type: string
+        client_session_id:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+          description: 经客户端与服务端双重脱敏的诊断字段
+
     GuestJoinRequest:
       type: object
-      required: [queue_id]
+      required: [ queue_id ]
       properties:
         queue_id:
           type: string
         session_type:
           type: string
-          enum: [audio, video, mixed]
+          enum: [ audio, video, mixed ]
+        user_id:
+          type: string
+          maxLength: 64
+          description: 访客自行提供的身份标识；发起视频通话时必填
         token:
           type: string
         priority:
@@ -1903,11 +3548,11 @@ components:
           type: string
         expires_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
 
     OutboundCallRequest:
       type: object
-      required: [destination]
+      required: [ destination ]
       properties:
         destination:
           type: string
@@ -1915,11 +3560,11 @@ components:
 
     TransferRequest:
       type: object
-      required: [mode]
+      required: [ mode ]
       properties:
         mode:
           type: string
-          enum: [blind, consult]
+          enum: [ blind, consult ]
         target_agent_id:
           type: string
         target_queue_id:
@@ -1932,7 +3577,7 @@ components:
           type: string
         type:
           type: string
-          enum: [offer, answer]
+          enum: [ offer, answer ]
 
     ICECandidate:
       type: object
@@ -1975,13 +3620,13 @@ components:
           type: string
         started_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         answered_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         ended_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
         duration_sec:
           type: integer
         wait_sec:
@@ -2016,14 +3661,18 @@ components:
           type: string
         call_id:
           type: string
-        kind:
+        media_type:
           type: string
-          enum: [audio, video, composite]
-        path:
+          enum: [ audio, video_composite ]
+        format:
           type: string
-        retention_until:
+          description: 当前保存文件的扩展名，如 ogg、wav、webm、mp4。
+        started_at:
           type: string
-          format: date-time
+        ended_at:
+          type: string
+        file_size:
+          type: integer
 
     RecordingList:
       type: object
@@ -2032,6 +3681,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Recording"
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
 
     LiveReport:
       type: object
@@ -2073,7 +3728,7 @@ components:
 
     WebhookSubscriptionCreate:
       type: object
-      required: [url, event_filter]
+      required: [ url, event_filter ]
       properties:
         url:
           type: string
@@ -2098,4 +3753,4 @@ components:
           type: string
         created_at:
           type: string
-          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'

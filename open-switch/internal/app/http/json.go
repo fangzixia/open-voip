@@ -3,6 +3,8 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"open-switch/internal/datetime"
+	"open-switch/internal/httpapi"
 	"strconv"
 
 	"open-switch/internal/app/http/middleware"
@@ -10,27 +12,18 @@ import (
 	"open-switch/internal/errs"
 )
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
+func writeJSON(w http.ResponseWriter, status int, v any) { httpapi.Write(w, status, v) }
 
-func writeErr(w http.ResponseWriter, err error) {
-	api := errs.AsAPIError(err)
-	body := map[string]any{
-		"error":   api.Kind,
-		"message": api.Message,
-	}
-	if api.Code != "" {
-		body["code"] = api.Code
-	}
-	writeJSON(w, api.HTTP, body)
-}
+func writeErr(w http.ResponseWriter, err error) { httpapi.Error(w, err) }
 
 func decodeJSON(r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(dst); err != nil {
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return errs.InvalidRequest("JSON 无法解析")
+	}
+	if err := datetime.UnmarshalCurrent(raw, dst); err != nil {
 		return errs.InvalidRequest("JSON 无法解析")
 	}
 	return nil

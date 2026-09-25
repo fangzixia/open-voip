@@ -1,5 +1,7 @@
 # API 错误码
 
+响应外层统一为 `code/message/data/request_id`，失败额外保留 `error` 分类。完整示例、协议例外及升级说明见 [统一响应契约](./response-contract.md)。
+
 > 与 [openapi.yaml](./openapi.yaml) 中 `components/schemas/Error` 一致。
 
 ---

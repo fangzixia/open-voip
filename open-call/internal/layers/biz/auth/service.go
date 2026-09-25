@@ -124,6 +124,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	}
 	var pair TokenPair
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 锁定会话后再校验旧 JTI，确保同一刷新令牌只能成功轮换一次。
 		if revoked(tx, claims.ID) {
 			return errs.Unauthorized("令牌已撤销")
 		}
@@ -281,6 +282,7 @@ func (s *Service) CleanupExpired(ctx context.Context) error {
 	return s.db.WithContext(ctx).Where("expires_at < ?", now).Delete(&models.AuthSession{}).Error
 }
 
+// buildPair 为同一登录会话生成访问令牌和可轮换的刷新令牌。
 func (s *Service) buildPair(user models.User, agentID, sessionID string, now time.Time) (TokenPair, string, time.Time, error) {
 	access, _, _, err := s.sign(user, agentID, sessionID, "access", now, time.Duration(s.cfg.AccessTTLSec)*time.Second)
 	if err != nil {
@@ -304,6 +306,7 @@ func (s *Service) sign(user models.User, agentID, sessionID, typ string, now tim
 	return token, jti, exp, err
 }
 
+// parse 校验 JWT 的签名算法和令牌类型，阻止访问令牌与刷新令牌混用。
 func (s *Service) parse(token, wantTyp string) (*jwtClaims, error) {
 	parsed, err := jwt.ParseWithClaims(token, &jwtClaims{}, func(t *jwt.Token) (any, error) {
 		if t.Method != jwt.SigningMethodHS256 {
@@ -321,6 +324,7 @@ func (s *Service) parse(token, wantTyp string) (*jwtClaims, error) {
 	return claims, nil
 }
 
+// authenticateGuest 从访客会话令牌构造受限身份。
 func (s *Service) authenticateGuest(ctx context.Context, token string) (Principal, error) {
 	hash := sha256.Sum256([]byte(token))
 	encoded := hex.EncodeToString(hash[:])

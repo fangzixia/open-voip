@@ -14,6 +14,9 @@ func TestLoadExampleConfig(t *testing.T) {
 	if cfg.Server.Listen == "" || cfg.Security.LoginRequestsPerMin == 0 {
 		t.Fatal("expected defaults")
 	}
+	if cfg.Log.Dir != "logs/open-call" || cfg.Log.MaxSizeMB <= 0 || cfg.Log.MaxAgeDays != 0 {
+		t.Fatalf("unexpected log defaults: %+v", cfg.Log)
+	}
 }
 
 func TestValidateRejectsWeakSecrets(t *testing.T) {

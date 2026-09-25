@@ -19,6 +19,7 @@ import (
 
 	"open-switch/internal/config"
 	"open-switch/internal/errs"
+	"open-switch/internal/observability"
 )
 
 const (
@@ -228,7 +229,9 @@ func (u *sipUA) ipAllowed(src string) bool {
 	return ipInNets(ip, nets)
 }
 
+// onInvite 校验来源和设备身份，协商 G.711 媒体并创建呼入 SIP 对话。
 func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	src := req.Source()
 	deviceCall := false
 	fromUser := ""
@@ -247,6 +250,7 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
+	// 已存在的对话走重协商；带 To tag 却找不到对话的请求必须拒绝。
 	if existing := u.dialogByReq(req); existing != nil {
 		u.handleReInvite(existing, req, tx)
 		return
@@ -269,6 +273,7 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	_ = dlg.Respond(sip.StatusTrying, "Trying", nil)
 
 	offer := parseSDP(string(req.Body()))
+	logSDP("receive", "offer", callIDFromMessage(req), string(req.Body()))
 	if !offer.hasG711() {
 		_ = dlg.Respond(sip.StatusNotAcceptableHere, "Not Acceptable Here", nil)
 		return
@@ -370,6 +375,7 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 	hdrs := u.answerHeaders(req)
+	logSDP("send", "answer", callID, sdp)
 	if err := dlg.Respond(sip.StatusOK, "OK", []byte(sdp), hdrs...); err != nil {
 		slog.Warn("SIP 200 SDP 失败", "call_id", callID, "err", err)
 		u.endCall(callID, false)
@@ -382,7 +388,9 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	slog.Info("SIP 200 OK", "call_id", callID, "did", did, "from", from, "sip_call_id", sess.sipCallID)
 }
 
+// handleReInvite 在已有对话中校验 CSeq 并更新媒体协商与会话计时。
 func (u *sipUA) handleReInvite(d *sipSession, req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, d.callID)
 	d.mu.Lock()
 	ended, confirmed, rtpSess, lastCSeq := d.ended, d.confirmed, d.rtp, d.inviteCSeq
 	d.mu.Unlock()
@@ -489,6 +497,7 @@ func (u *sipUA) answerHeaders(req *sip.Request) []sip.Header {
 }
 
 func (u *sipUA) onAck(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	if u.dlgSrv != nil {
 		_ = u.dlgSrv.ReadAck(req, tx)
 	}
@@ -508,6 +517,7 @@ func (u *sipUA) onAck(req *sip.Request, tx sip.ServerTransaction) {
 }
 
 func (u *sipUA) onByeReq(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	d := u.dialogByReq(req)
 	if d == nil {
 		d = u.dialogBySIP(headerCallID(req))
@@ -531,6 +541,7 @@ func (u *sipUA) onByeReq(req *sip.Request, tx sip.ServerTransaction) {
 }
 
 func (u *sipUA) onCancel(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	_ = tx.Respond(sip.NewResponseFromRequest(req, 200, "OK", nil))
 	d := u.dialogBySIP(headerCallID(req))
 	if d == nil {
@@ -545,6 +556,7 @@ func (u *sipUA) onCancel(req *sip.Request, tx sip.ServerTransaction) {
 }
 
 func (u *sipUA) onPrack(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	d := u.dialogByReq(req)
 	if d == nil {
 		d = u.dialogBySIP(headerCallID(req))
@@ -574,6 +586,7 @@ func (u *sipUA) onPrack(req *sip.Request, tx sip.ServerTransaction) {
 }
 
 func (u *sipUA) onUpdate(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	d := u.dialogByReq(req)
 	if d == nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Call/Transaction Does Not Exist", nil)
@@ -603,19 +616,23 @@ func (u *sipUA) onUpdate(req *sip.Request, tx sip.ServerTransaction) {
 }
 
 func (u *sipUA) onNoRoute(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	res := sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "Method Not Allowed", nil)
 	res.AppendHeader(sipAllowHeader())
 	_ = tx.Respond(res)
 }
 
 func (u *sipUA) onOptions(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	res := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	res.AppendHeader(sipAllowHeader())
 	res.AppendHeader(sip.NewHeader("Supported", "100rel, timer"))
 	_ = tx.Respond(res)
 }
 
+// onRegister 验证话机凭据，维护注册绑定及过期时间。
 func (u *sipUA) onRegister(req *sip.Request, tx sip.ServerTransaction) {
+	logSIP("receive", req, "")
 	src := req.Source()
 	if !u.cfg.LocalRegistrar {
 		slog.Warn("拒绝 SIP REGISTER", "src", src, "local_registrar", u.cfg.LocalRegistrar)
@@ -893,6 +910,7 @@ func uriEqual(a, b sip.Uri) bool {
 	return strings.EqualFold(a.User, b.User) && strings.EqualFold(a.Host, b.Host) && a.Port == b.Port
 }
 
+// originate 选择中继或已注册话机，发起 SIP INVITE 并处理协商响应。
 func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID string) error {
 	tr := u.pickTrunk(trunkID)
 	if trunkID == "@device" {
@@ -924,6 +942,7 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 
 	recipient, cliUser, codecs, user, pass := u.outboundTarget(dial, tr)
 	sdp := buildAudioSDP(u.cfg.AdvertiseHost(), rtpSess.localPort(), codecs)
+	logSDP("send", "offer", callID, sdp)
 	if u.dlgCli == nil {
 		rtpSess.close()
 		return errs.Unprocessable("SIP 未就绪", errs.CodeSIPDisabled)
@@ -938,6 +957,7 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 			rtpSess.close()
 			return err
 		}
+		logSIP("send", dlg.InviteRequest, callID)
 		sipCID := headerCallID(dlg.InviteRequest)
 		inviteCSeq := uint32(0)
 		if dlg.InviteRequest != nil && dlg.InviteRequest.CSeq() != nil {
@@ -962,6 +982,7 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 				if res == nil {
 					return nil
 				}
+				logSIP("receive", res, callID)
 				if res.StatusCode > 100 && res.StatusCode < 200 && require100rel(res.GetHeaders("Require")) {
 					if perr := u.sendPRACK(waitCtx, dlg, res); perr != nil {
 						slog.Warn("SIP PRACK 失败", "call_id", callID, "err", perr)
@@ -1043,6 +1064,7 @@ func (u *sipUA) sendPRACK(ctx context.Context, dlg *sipgo.DialogClientSession, r
 	}
 	req := sip.NewRequest(sip.PRACK, dest)
 	req.AppendHeader(sip.NewHeader("RAck", fmt.Sprintf("%s %d INVITE", rseq, invCSeq)))
+	logSIP("send", req, "")
 	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	pr, err := dlg.Do(pctx, req)
@@ -1178,6 +1200,7 @@ func (u *sipUA) registerTrunk(ctx context.Context, tr config.SIPTrunkConfig) {
 	}
 }
 
+// doRegister 向运营商中继发送 REGISTER，并处理挑战认证。
 func (u *sipUA) doRegister(ctx context.Context, tr config.SIPTrunkConfig, expire int) {
 	if u.cli == nil {
 		return
@@ -1199,6 +1222,7 @@ func (u *sipUA) doRegister(ctx context.Context, tr config.SIPTrunkConfig, expire
 		req.SetTransport("UDP")
 	}
 	tx, err := u.cli.TransactionRequest(ctx, req, sipgo.ClientRequestRegisterBuild)
+	logSIP("send", req, "")
 	if err != nil {
 		slog.Error("SIP REGISTER 发送失败", "trunk", tr.ID, "err", err)
 		return
@@ -1209,6 +1233,7 @@ func (u *sipUA) doRegister(ctx context.Context, tr config.SIPTrunkConfig, expire
 		slog.Error("SIP REGISTER 无响应", "trunk", tr.ID, "err", err)
 		return
 	}
+	logSIP("receive", res, "")
 	if res.StatusCode == sip.StatusUnauthorized || res.StatusCode == sip.StatusProxyAuthRequired {
 		authHeader := "WWW-Authenticate"
 		if res.StatusCode == sip.StatusProxyAuthRequired {
@@ -1235,6 +1260,7 @@ func (u *sipUA) doRegister(ctx context.Context, tr config.SIPTrunkConfig, expire
 			newReq.AppendHeader(sip.NewHeader("Authorization", cred))
 		}
 		tx2, err := u.cli.TransactionRequest(ctx, newReq, sipgo.ClientRequestIncreaseCSEQ, sipgo.ClientRequestAddVia)
+		logSIP("send", newReq, "")
 		if err != nil {
 			slog.Error("SIP REGISTER 鉴权重试失败", "trunk", tr.ID, "err", err)
 			return
@@ -1245,6 +1271,7 @@ func (u *sipUA) doRegister(ctx context.Context, tr config.SIPTrunkConfig, expire
 			slog.Error("SIP REGISTER 鉴权无响应", "trunk", tr.ID, "err", err)
 			return
 		}
+		logSIP("receive", res, "")
 	}
 	if res.StatusCode != 200 {
 		slog.Error("SIP REGISTER 被拒", "trunk", tr.ID, "status", res.StatusCode)
@@ -1285,12 +1312,14 @@ func (u *sipUA) sendOptions(ctx context.Context, tr config.SIPTrunkConfig) {
 		req.SetTransport("UDP")
 	}
 	tx, err := u.cli.TransactionRequest(ctx, req)
+	logSIP("send", req, "")
 	if err != nil {
 		slog.Warn("SIP OPTIONS 失败", "trunk", tr.ID, "err", err)
 		return
 	}
 	defer tx.Terminate()
-	_, _ = waitFinal(ctx, tx)
+	res, _ := waitFinal(ctx, tx)
+	logSIP("receive", res, "")
 }
 
 func waitFinal(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, error) {
@@ -1309,6 +1338,7 @@ func waitFinal(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, er
 	}
 }
 
+// armSessionTimerFrom 根据 Session-Expires 安排后续会话刷新。
 func (u *sipUA) armSessionTimerFrom(sess *sipSession, raw, defaultRefresher string) {
 	if sess == nil {
 		return
@@ -1375,6 +1405,7 @@ func (u *sipUA) sendSessionRefresh(sess *sipSession) {
 	req := sip.NewRequest(sip.UPDATE, dest)
 	req.AppendHeader(sip.NewHeader("Supported", "timer"))
 	req.AppendHeader(sip.NewHeader("Session-Expires", strconv.Itoa(int(se.Seconds()))+";refresher=uac"))
+	logSIP("send", req, sess.callID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var res *sip.Response
@@ -1404,6 +1435,7 @@ func (u *sipUA) sendReInviteRefresh(sess *sipSession, dest sip.Uri) {
 	req := sip.NewRequest(sip.INVITE, dest)
 	req.SetBody([]byte(sdp))
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+	logSIP("send", req, sess.callID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var err error
@@ -1554,6 +1586,26 @@ func headerCallID(msg sip.Message) string {
 		return h.Value()
 	}
 	return ""
+}
+
+func callIDFromMessage(msg sip.Message) string { return headerCallID(msg) }
+
+func logSIP(direction string, msg sip.Message, callID string) {
+	if msg == nil {
+		return
+	}
+	if callID == "" {
+		callID = headerCallID(msg)
+	}
+	ctx := observability.WithFields(context.Background(), observability.Fields{CallID: callID})
+	observability.Event(ctx, "sip", "sip.message", direction, "ok", "", time.Time{},
+		"direction", direction, "sip_call_id", headerCallID(msg), "body", observability.Redact(msg.String()))
+}
+
+func logSDP(direction, kind, callID, body string) {
+	ctx := observability.WithFields(context.Background(), observability.Fields{CallID: callID})
+	observability.Event(ctx, "sdp", "sdp."+kind, direction, "ok", "", time.Time{},
+		"direction", direction, "body", observability.Redact(body))
 }
 
 func headerValue(msg sip.Message, name string) string {

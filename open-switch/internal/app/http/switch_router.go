@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"open-switch/internal/httpapi"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -21,8 +22,10 @@ type SwitchRouterDeps struct {
 // NewSwitchRouter 构建 /switch/v1 路由（见 docs/open-switch对接说明.md）。
 func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 	r := chi.NewRouter()
+	r.NotFound(httpapi.NotFound)
+	r.MethodNotAllowed(httpapi.MethodNotAllowed)
 	r.Use(chimw.RealIP)
-	r.Use(chimw.Recoverer)
+	r.Use(httpapi.Recover)
 	r.Use(middleware.RequestID)
 	r.Use(chimw.Logger)
 
@@ -31,6 +34,9 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 	r.Route("/switch/v1", func(sw chi.Router) {
 		sw.Use(middleware.IntegrationAuth(deps.Config.Integration.Secret))
 		sw.Get("/internal/calls/{callId}", deps.handleInternalCall)
+		sw.Get("/ivr-assets", deps.handleIVRAssets)
+		sw.Post("/ivr-assets", deps.handleIVRAssetUpload)
+		sw.Get("/ivr-assets/{assetId}", deps.handleIVRAssetFile)
 		sw.Get("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
 		sw.Delete("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
 		if deps.Runtime != nil {

@@ -102,7 +102,7 @@ func (d RouterDeps) handleVideoRequest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusAccepted, nil)
 }
 
 func (d RouterDeps) handleVideoRespond(w http.ResponseWriter, r *http.Request) {
@@ -264,5 +264,5 @@ func (d RouterDeps) handleDecline(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }

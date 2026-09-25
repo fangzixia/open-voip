@@ -1,56 +1,7 @@
-/**
- * REST 客户端：统一 base URL、Authorization、JSON 与错误解析。
- */
-
-import { getAccessToken } from "./auth-store.js";
-import { getRuntimeConfig } from "./runtime-config.js";
-
-export class ApiError extends Error {
-  /** @param {number} status */
-  constructor(status, message, body) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.body = body;
-  }
-}
-
-/**
- * @param {string} path 以 / 开头的 API 路径
- * @param {RequestInit & { auth?: boolean }} [options]
- */
-export async function apiFetch(path, options = {}) {
-  const { apiBase } = getRuntimeConfig();
-  const url = path.startsWith("http") ? path : `${apiBase.replace(/\/$/, "")}${path}`;
-  const headers = new Headers(options.headers || {});
-  if (!headers.has("Content-Type") && options.body) {
-    headers.set("Content-Type", "application/json");
-  }
-  const useAuth = options.auth !== false;
-  if (useAuth) {
-    const token = getAccessToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-  }
-
-  const res = await fetch(url, { ...options, headers });
-  const text = await res.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
-  }
-  if (!res.ok) {
-    const msg =
-      (data && typeof data === "object" && data.message) ||
-      res.statusText ||
-      "请求失败";
-    throw new ApiError(res.status, msg, data);
-  }
-  return data;
-}
+import { request } from "./http-client.js";
+import { formatDate, formatDateTime } from "./datetime.js";
+export { ApiError } from "./http-client.js";
+export const apiFetch = request;
 
 export function fetchHealth() {
   return apiFetch("/health", { auth: false, method: "GET" });
@@ -106,11 +57,11 @@ export function listGuestQueues() {
   return apiFetch("/api/v1/guest/queues", { auth: false });
 }
 
-export function guestJoin(queueId, sessionType, priority = 0) {
+export function guestJoin(queueId, sessionType, priority = 0, userId = "") {
   return apiFetch("/api/v1/guest/join", {
     method: "POST",
     auth: false,
-    body: JSON.stringify({ queue_id: queueId, session_type: sessionType, priority }),
+    body: JSON.stringify({ queue_id: queueId, session_type: sessionType, priority, user_id: userId }),
   });
 }
 
@@ -248,7 +199,7 @@ export function createGuestSession(queueId, ttlSec = 3600, allowedMedia = "audio
   });
 }
 
-export function guestJoinToken(token, sessionType) {
+export function guestJoinToken(token, sessionType = "") {
   return apiFetch("/api/v1/guest/join", {
     method: "POST",
     auth: false,
@@ -269,7 +220,20 @@ export function fetchLiveReport() {
 }
 
 export function fetchHistoricalReport() {
-  return apiFetch("/api/v1/reports/historical");
+  return apiFetch(`/api/v1/reports/historical?${todayDateRange()}`);
+}
+
+function todayDateRange() {
+  const today = formatDate();
+  return new URLSearchParams({ from: today, to: today });
+}
+
+// 报表范围采用 UTC 当日零点及统一时间格式。
+function todayReportRange() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const end = new Date(Math.max(now.getTime(), start.getTime() + 1));
+  return new URLSearchParams({ from: formatDateTime(start), to: formatDateTime(end) });
 }
 
 export function listRecordings(callId) {
@@ -291,6 +255,40 @@ export function publishIvr(flowId) {
 
 export function listIvr() {
   return apiFetch("/api/v1/ivr/flows");
+}
+
+export function getIvrFlow(id) {
+  return apiFetch(`/api/v1/ivr/flows/${encodeURIComponent(id)}`);
+}
+
+export function updateIvrFlow(id, name, draft) {
+  return apiFetch(`/api/v1/ivr/flows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ name, draft }) });
+}
+
+export function deleteIvrFlow(id) {
+  return apiFetch(`/api/v1/ivr/flows/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function listIvrVersions(id) {
+  return apiFetch(`/api/v1/ivr/flows/${encodeURIComponent(id)}/versions`);
+}
+
+export function rollbackIvrFlow(id, version) {
+  return apiFetch(`/api/v1/ivr/flows/${encodeURIComponent(id)}/rollback`, { method: "POST", body: JSON.stringify({ version }) });
+}
+
+export function listIvrAssets() {
+  return apiFetch("/api/v1/ivr-assets");
+}
+
+export function uploadIvrAsset(file) {
+  const body = new FormData();
+  body.append("file", file);
+  return apiFetch("/api/v1/ivr-assets", { method: "POST", body, timeoutMs: 120000 });
+}
+
+export function fetchIvrAsset(id) {
+  return apiFetch(`/api/v1/ivr-assets/${encodeURIComponent(id)}`, { responseType: "blob", timeoutMs: 120000 });
 }
 
 export function createWebhook(url, eventTypes) {
@@ -316,7 +314,7 @@ export function patchQueue(queueId, body) {
 }
 
 export function fetchAgentUtil() {
-  return apiFetch("/api/v1/reports/agents");
+  return apiFetch(`/api/v1/reports/agents?${todayReportRange()}`);
 }
 
 export function listDids() {
@@ -365,18 +363,13 @@ export function listWrapUps(callId) {
   return apiFetch(`/api/v1/wrap-ups${q}`);
 }
 
-export async function fetchRecordingBlob(id) {
-  const { apiBase } = getRuntimeConfig();
-  const token = getAccessToken();
-  const res = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/recordings/${id}/download`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!res.ok) throw new ApiError(res.status, "下载失败");
-  return res.blob();
+export function fetchRecordingBlob(id, format = "") {
+ const query = format ? `?format=${encodeURIComponent(format)}` : "";
+ return request(`/api/v1/recordings/${id}/download${query}`, { responseType: "blob", timeoutMs: 600000 });
 }
 
-export async function downloadRecording(id) {
-  const blob = await fetchRecordingBlob(id);
+export async function downloadRecording(id, format = "") {
+  const blob = await fetchRecordingBlob(id, format);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -388,6 +381,7 @@ export async function downloadRecording(id) {
 function extFromType(type) {
   if (!type) return ".ogg";
   if (type.includes("webm")) return ".webm";
+  if (type.includes("mp4")) return ".mp4";
   if (type.includes("ogg")) return ".ogg";
   if (type.includes("wav")) return ".wav";
   if (type.includes("ivf")) return ".ivf";
@@ -395,14 +389,8 @@ function extFromType(type) {
 }
 
 export async function downloadCdrCsv() {
-  const { apiBase } = getRuntimeConfig();
-  const token = getAccessToken();
-  const res = await fetch(
-    `${apiBase.replace(/\/$/, "")}/api/v1/cdr/export.csv?from=2020-01-01T00:00:00Z&to=2099-01-01T00:00:00Z`,
-    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-  );
-  if (!res.ok) throw new ApiError(res.status, "导出失败");
-  const blob = await res.blob();
+  const range = new URLSearchParams({ from: "2020-01-01 00:00:00", to: "2099-01-01 00:00:00" });
+  const blob = await request(`/api/v1/cdr/export.csv?${range}`, { responseType: "blob", timeoutMs: 120000 });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

@@ -3,11 +3,12 @@ package middleware
 import (
 	"net/http"
 	"net/url"
+	"open-call/internal/httpapi"
 	"strings"
 )
 
 const corsAllowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-const corsAllowHeaders = "Accept, Authorization, Content-Type, X-Request-ID"
+const corsAllowHeaders = "Accept, Authorization, Content-Type, X-Request-ID, X-Trace-ID, X-Call-ID, X-Leg-ID, X-Client-Session-ID"
 
 // CORS 仅允许同源请求或配置白名单中的浏览器来源。
 func CORS(allowed []string) func(http.Handler) http.Handler {
@@ -29,7 +30,7 @@ func CORS(allowed []string) func(http.Handler) http.Handler {
 			same := err == nil && strings.EqualFold(u.Host, r.Host)
 			_, configured := set[strings.ToLower(origin)]
 			if !same && !configured {
-				http.Error(w, "浏览器来源不在允许列表", http.StatusForbidden)
+				httpapi.Failure(w, http.StatusForbidden, "forbidden", "浏览器来源不在允许列表")
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -37,6 +38,7 @@ func CORS(allowed []string) func(http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Methods", corsAllowMethods)
 			w.Header().Set("Access-Control-Allow-Headers", corsAllowHeaders)
 			w.Header().Set("Access-Control-Max-Age", "600")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Trace-ID, Retry-After")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return

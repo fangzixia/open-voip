@@ -1,0 +1,2 @@
+ALTER TABLE os_platform_outbox ADD COLUMN IF NOT EXISTS trace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE os_platform_outbox ADD COLUMN IF NOT EXISTS request_id TEXT NOT NULL DEFAULT '';

@@ -25,6 +25,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
+      allowedHosts: [".trycloudflare.com"],
       proxy: apiBase
         ? {}
         : {

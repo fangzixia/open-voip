@@ -4,16 +4,17 @@ package platform
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"gorm.io/gorm"
 	"io"
 	"net/http"
+	"open-switch/internal/datetime"
+	"open-switch/internal/httpapi"
+	"open-switch/internal/observability"
 	"strings"
 	"time"
 
 	"net/url"
 	"open-switch/internal/config"
-	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 )
@@ -41,9 +42,10 @@ func (c *Client) auth(req *http.Request) {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) error {
+	started := time.Now()
 	var body io.Reader
 	if in != nil {
-		b, err := json.Marshal(in)
+		b, err := datetime.Marshal(in)
 		if err != nil {
 			return err
 		}
@@ -54,27 +56,21 @@ func (c *Client) doJSON(ctx context.Context, method, path string, in, out any) e
 		return err
 	}
 	c.auth(req)
+	req.Header.Set("X-Request-ID", httpapi.ID(ctx))
+	req.Header.Set("X-Trace-ID", httpapi.TraceID(ctx))
 	res, err := c.http.Do(req)
 	if err != nil {
+		observability.Event(ctx, "platform_client", "platform.http", "response", "error", "transport_error", started, "method", method, "path", path, "error", err)
 		return err
 	}
 	defer func() { _ = res.Body.Close() }()
-	raw, _ := io.ReadAll(res.Body)
-	if res.StatusCode >= 400 {
-		var e struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-			Code    string `json:"code"`
-		}
-		_ = json.Unmarshal(raw, &e)
-		return &errs.APIError{Kind: e.Error, Message: e.Message, Code: e.Code, HTTP: res.StatusCode}
+	err = httpapi.Decode(res, out)
+	result, reason := "ok", ""
+	if err != nil {
+		result, reason = "error", "upstream_error"
 	}
-	if out != nil && len(raw) > 0 && string(raw) != "null" {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return err
-		}
-	}
-	return nil
+	observability.Event(ctx, "platform_client", "platform.http", "response", result, reason, started, "method", method, "path", path, "status", res.StatusCode)
+	return err
 }
 
 // RequestAgent 实现 ACDDispatchPort。

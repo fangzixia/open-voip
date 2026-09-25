@@ -31,3 +31,5 @@ open-call-web/.env
 Thumbs.db
 .DS_Store
 
+/open-call/logs/
+/open-switch/logs/

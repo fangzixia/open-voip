@@ -22,13 +22,17 @@
 {
   "type": "call.ringing",
   "ts": "2026-09-18T10:00:00Z",
+  "seq": 42,
   "payload": { }
 }
 ```
 
 - `type`：事件类型（见下文）  
-- `ts`：RFC3339 UTC  
+- `ts`：UTC `YYYY-MM-DD HH:MM:SS`，例如 `2026-09-25 10:12:35`
+- `seq`：连接内递增序号；重连时客户端以 `since` 请求补发
 - `payload`：类型相关对象  
+
+事件发布、目标连接、重放与失败会写入服务器 `trace.jsonl`，并通过 `call_id`、`agent_id` 与 HTTP 的 `X-Trace-ID` 关联。WebSocket 不承载 SDP、ICE 或认证令牌。
 
 ---
 

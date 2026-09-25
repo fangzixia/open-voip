@@ -10,7 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"open-switch/internal/datetime"
 	"open-switch/internal/errs"
+	"open-switch/internal/observability"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 )
@@ -84,6 +86,7 @@ func NewService(deps Deps) *Service {
 var _ ports.CallControlPort = (*Service)(nil)
 var _ ports.SignalingPort = (*Service)(nil)
 
+// StartInbound 幂等创建呼入及客户通话腿，并按营业时间和队列配置进入 IVR 或排队。
 func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (string, error) {
 	if req.CallID == "" {
 		req.CallID = uuid.New().String()
@@ -164,8 +167,11 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	s.mu.Lock()
 	s.calls[callID] = rt
 	s.mu.Unlock()
+	ctx = observability.WithFields(ctx, observability.Fields{CallID: callID, QueueID: req.QueueID})
+	observability.Event(ctx, "control", "call.created", stateCreated, "ok", "", now, "session_type", string(req.SessionType), "priority", req.Priority)
 	slog.Info("呼入已创建", "call_id", callID, "queue_id", req.QueueID, "session_type", string(req.SessionType), "priority", req.Priority)
 
+	// 非营业时段优先执行队列的留言、挂断或继续排队策略。
 	if !withinHours(s.deps.Config, ctx, req.QueueID) {
 		action := q.AfterHoursAction
 		if action == "" {
@@ -197,6 +203,7 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	return callID, nil
 }
 
+// Answer 校验振铃归属，建立坐席通话腿；咨询转接时先保持客户并通知双方。
 func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -236,6 +243,9 @@ func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 
 	opts := dto.RoomOptions{SessionType: rt.rec.SessionType, EnableVideo: rt.rec.SessionType != dto.SessionTypeAudio}
 	if err := s.deps.Media.CreateRoom(ctx, callID, opts); err != nil {
+		return err
+	}
+	if err := s.deps.Media.StopInjectedAudio(ctx, callID); err != nil {
 		return err
 	}
 
@@ -278,10 +288,11 @@ func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 	return s.publishCall(ctx, callID, "call.answered", agentID, map[string]any{
 		"call_id":     callID,
 		"agent_id":    agentID,
-		"answered_at": now.Format(time.RFC3339),
+		"answered_at": datetime.Format(now),
 	})
 }
 
+// Decline 释放当前振铃坐席；咨询转接失败时恢复原通话，否则重新派单。
 func (s *Service) Decline(ctx context.Context, callID, agentID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -316,6 +327,7 @@ func (s *Service) Decline(ctx context.Context, callID, agentID string) error {
 	return s.tryDispatch(ctx, callID)
 }
 
+// Hangup 幂等结束通话，依次释放坐席、停止录音、写入话单并关闭媒体房间。
 func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupReason) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -380,6 +392,7 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	rt.rec.EndedAt = new(time.Now().UTC())
 	s.mu.Unlock()
 
+	// 未接通的来电按原因记为放弃或失败，供 CDR 与报表区分。
 	result := "answered"
 	if rt.answeredAt == nil {
 		result = "abandoned"
@@ -402,34 +415,63 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 		"reason":  string(reason),
 		"result":  result,
 	})
+	endedAt := *rt.rec.EndedAt
+	var waitMS, ringMS, talkMS int64
+	if !rt.queuedAt.IsZero() {
+		waitEnd := endedAt
+		if !rt.offerAt.IsZero() {
+			waitEnd = rt.offerAt
+		}
+		waitMS = waitEnd.Sub(rt.queuedAt).Milliseconds()
+	}
+	if !rt.offerAt.IsZero() {
+		ringEnd := endedAt
+		if rt.answeredAt != nil {
+			ringEnd = *rt.answeredAt
+		}
+		ringMS = ringEnd.Sub(rt.offerAt).Milliseconds()
+	}
+	if rt.answeredAt != nil {
+		talkMS = endedAt.Sub(*rt.answeredAt).Milliseconds()
+	}
+	observability.Event(ctx, "control", "call.trace.summary", "ended", result, string(reason), time.Time{},
+		"session_type", string(rt.rec.SessionType),
+		"total_ms", endedAt.Sub(rt.rec.CreatedAt).Milliseconds(),
+		"queue_wait_ms", waitMS, "ring_ms", ringMS, "talk_ms", talkMS,
+		"video_started", rt.videoStartedAt != nil, "recording_id", rt.recordingID)
 	s.mu.Lock()
 	delete(s.calls, callID)
 	s.mu.Unlock()
 	return nil
 }
 
+// Transfer 串行执行转接，避免同一通话的状态操作并发交错。
 func (s *Service) Transfer(ctx context.Context, callID string, req dto.TransferRequest) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
 	return s.doTransfer(ctx, callID, req)
 }
 
+// CompleteTransfer 结束咨询阶段，将客户接入目标坐席。
 func (s *Service) CompleteTransfer(ctx context.Context, callID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
 	return s.completeConsult(ctx, callID)
 }
 
+// Outbound 创建外呼并交由具体目的地的呼叫流程处理。
 func (s *Service) Outbound(ctx context.Context, req dto.OutboundRequest) (string, error) {
 	return s.doOutbound(ctx, req)
 }
 
+// StartIVR 按通话所属队列加载当前发布的 IVR 流程。
 func (s *Service) StartIVR(ctx context.Context, callID, snapshotID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
 	return s.attachIVR(ctx, callID, snapshotID)
 }
 
+// GetCall 优先读取内存中的实时状态，缺失时从持久化记录重建视图。
 func (s *Service) GetCall(ctx context.Context, callID string) (ports.CallView, error) {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -450,15 +492,13 @@ func (s *Service) GetCall(ctx context.Context, callID string) (ports.CallView, e
 	return toView(&runtimeCall{rec: rec, legs: legs}), nil
 }
 
+// JoinWebRTC 校验通话腿和当前状态，再向媒体层申请本地 Offer。
 func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string) (dto.LocalOffer, error) {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
 	view, err := s.GetCall(ctx, callID)
 	if err != nil {
 		return dto.LocalOffer{}, err
-	}
-	if view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
-		return dto.LocalOffer{}, errs.Conflict("通话未接通，无法加入媒体", "")
 	}
 	var role dto.LegRole
 	found := false
@@ -471,6 +511,10 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string) (dto.Loc
 	}
 	if !found {
 		return dto.LocalOffer{}, errs.NotFound("通话腿不存在")
+	}
+	preAnswerCustomer := role == dto.LegRoleCustomer && (view.State == stateQueued || view.State == stateRinging)
+	if !preAnswerCustomer && view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
+		return dto.LocalOffer{}, errs.Conflict("当前状态无法加入媒体", "")
 	}
 	return s.deps.Media.JoinWebRTC(ctx, callID, legID, role)
 }
@@ -539,6 +583,7 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
+// tick 按优先级和入队时间先处理等待通话，再扫描其他状态的超时。
 func (s *Service) tick(ctx context.Context) {
 	type queuedItem struct {
 		id     string
@@ -573,6 +618,7 @@ func (s *Service) tick(ctx context.Context) {
 	}
 }
 
+// tickCall 推进单通呼叫的排队、IVR 或振铃超时状态。
 func (s *Service) tickCall(ctx context.Context, id string, now time.Time) {
 	ctx, unlock := s.command(ctx, id)
 	defer unlock()
@@ -635,6 +681,7 @@ func (s *Service) tickCall(ctx context.Context, id string, now time.Time) {
 	}
 }
 
+// tryDispatch 请求业务侧原子选人；旧派单结果会释放坐席，避免占用已变化的通话。
 func (s *Service) tryDispatch(ctx context.Context, callID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -642,6 +689,7 @@ func (s *Service) tryDispatch(ctx context.Context, callID string) error {
 	if rt == nil || rt.rec.State != stateQueued || rt.rec.QueueID == nil {
 		return nil
 	}
+	started := time.Now()
 	res, err := s.deps.ACD.RequestAgent(ctx, dto.DispatchRequest{
 		CallID:       callID,
 		QueueID:      *rt.rec.QueueID,
@@ -649,8 +697,10 @@ func (s *Service) tryDispatch(ctx context.Context, callID string) error {
 		SkillIDs:     nil,
 	})
 	if err != nil {
+		observability.Event(ctx, "acd", "acd.dispatch", "response", "error", "dispatch_failed", started, "queue_id", *rt.rec.QueueID)
 		return err
 	}
+	observability.Event(ctx, "acd", "acd.dispatch", "response", "ok", "", started, "queue_id", *rt.rec.QueueID, "agent_id", res.AgentID)
 	if res.AgentID == "" {
 		return nil
 	}
@@ -679,7 +729,9 @@ func (s *Service) tryDispatch(ctx context.Context, callID string) error {
 	})
 }
 
+// transition 同步更新运行时和持久化状态；写库失败时恢复此前的内存记录。
 func (s *Service) transition(ctx context.Context, callID, state string) error {
+	started := time.Now()
 	s.mu.Lock()
 	rt := s.calls[callID]
 	if rt == nil {
@@ -705,14 +757,17 @@ func (s *Service) transition(ctx context.Context, callID, state string) error {
 		s.mu.Lock()
 		rt.rec = before
 		s.mu.Unlock()
+		observability.Event(ctx, "control", "fsm.transition", state, "error", "persist_failed", started, "from_state", prev, "to_state", state)
 		return err
 	}
+	observability.Event(ctx, "control", "fsm.transition", state, "ok", "", started, "from_state", prev, "to_state", state)
 	if state == stateActive && prev != stateActive {
 		s.beginRecordingIfNeeded(ctx, callID)
 	}
 	return nil
 }
 
+// cdrUpsert 汇总通话时间、媒体和参与方信息，更新同一条话单。
 func (s *Service) cdrUpsert(ctx context.Context, callID, result string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -720,7 +775,8 @@ func (s *Service) cdrUpsert(ctx context.Context, callID, result string) error {
 	if rt == nil {
 		return nil
 	}
-	return s.deps.CDR.Upsert(ctx, ports.CDRWriteRequest{
+	started := time.Now()
+	err := s.deps.CDR.Upsert(ctx, ports.CDRWriteRequest{
 		CallID:           callID,
 		Direction:        rt.rec.Direction,
 		QueueID:          deref(rt.rec.QueueID),
@@ -736,8 +792,15 @@ func (s *Service) cdrUpsert(ctx context.Context, callID, result string) error {
 		VideoUpgradeOk:   rt.videoUpgradeOk,
 		ScreenShareCount: rt.screenShares,
 	})
+	status, reason := "ok", ""
+	if err != nil {
+		status, reason = "error", "cdr_upsert_failed"
+	}
+	observability.Event(ctx, "cdr", "cdr.upsert", "persist", status, reason, started, "result_value", result)
+	return err
 }
 
+// publishCall 向目标坐席及通话中的其他坐席广播事件，并对收件人去重。
 func (s *Service) publishCall(ctx context.Context, callID, typ, agentID string, payload map[string]any) error {
 	if s.deps.CallEvents == nil {
 		return nil

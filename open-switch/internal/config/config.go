@@ -65,6 +65,10 @@ type DatabaseConfig struct {
 type RecordingsConfig struct {
 	// Dir 本地绝对或相对路径，需可写。
 	Dir string `yaml:"dir"`
+	// VideoFormat 视频通话成品格式：webm 或 mp4。
+	VideoFormat string `yaml:"video_format"`
+	// FFmpegPath FFmpeg 可执行文件路径；为空时从 PATH 查找。
+	FFmpegPath string `yaml:"ffmpeg_path"`
 	// RetainDays 保留天数，purge API 按此删除；0 表示不自动过期。
 	RetainDays int `yaml:"retain_days"`
 	// NotifyMessage 录音告知文案（REC-03）。
@@ -170,6 +174,10 @@ type LogConfig struct {
 	Level string `yaml:"level"`
 	// Format json 或 text。
 	Format string `yaml:"format"`
+	// Dir 应用与追踪日志目录。
+	Dir string `yaml:"dir"`
+	// MaxSizeMB 单个日志文件大小上限；轮转文件 gzip 压缩且永久保留。
+	MaxSizeMB int `yaml:"max_size_mb"`
 }
 
 // TLSConfig 定义进程内 TLS 证书路径。
@@ -243,6 +251,9 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Recordings.Dir) == "" {
 		errs = append(errs, "recordings.dir 不能为空")
+	}
+	if c.Recordings.VideoFormat != "webm" && c.Recordings.VideoFormat != "mp4" {
+		errs = append(errs, "recordings.video_format 必须为 webm 或 mp4")
 	}
 	if strings.TrimSpace(c.Integration.PlatformBaseURL) == "" {
 		errs = append(errs, "integration.platform_base_url 不能为空")
@@ -362,6 +373,12 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) applyDefaults() {
+	if strings.TrimSpace(c.Log.Dir) == "" {
+		c.Log.Dir = "./logs/open-switch"
+	}
+	if c.Log.MaxSizeMB <= 0 {
+		c.Log.MaxSizeMB = 100
+	}
 	if c.ICE.UDPPortMin == 0 && c.ICE.UDPPortMax == 0 {
 		c.ICE.UDPPortMin = 10000
 		c.ICE.UDPPortMax = 20000
@@ -374,6 +391,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Recordings.RetainDays == 0 {
 		c.Recordings.RetainDays = 90
+	}
+	if strings.TrimSpace(c.Recordings.VideoFormat) == "" {
+		c.Recordings.VideoFormat = "webm"
 	}
 	if strings.TrimSpace(c.Recordings.NotifyMessage) == "" {
 		c.Recordings.NotifyMessage = "本通话可能会被录音或录像，继续即表示您已知悉。"

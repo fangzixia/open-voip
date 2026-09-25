@@ -57,7 +57,7 @@ func (d RouterDeps) handleCallHangup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleOffer(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +125,7 @@ func (d RouterDeps) handleICE(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleMute(w http.ResponseWriter, r *http.Request) {

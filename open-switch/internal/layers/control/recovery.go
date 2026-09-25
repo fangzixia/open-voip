@@ -6,6 +6,7 @@ import (
 	"open-switch/internal/ports/dto"
 )
 
+// setAgentState 统一更新坐席状态并附带通话追踪信息。
 func (s *Service) setAgentState(ctx context.Context, callID, agentID, from, to, reason string) error {
 	if p, ok := s.deps.Agents.(interface {
 		SetCallState(context.Context, string, string, string, string, string) error

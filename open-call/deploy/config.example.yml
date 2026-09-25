@@ -28,6 +28,11 @@ jwt:
 log:
   level: info
   format: json
+  # stdout 之外分别写入 app.jsonl 与 trace.jsonl；轮转文件使用 gzip。
+  dir: "logs/open-call"
+  max_size_mb: 100
+  # 0 表示永久保留轮转文件。
+  max_age_days: 0
 
 tls:
   enabled: false
@@ -56,3 +61,4 @@ security:
   login_requests_per_min: 10
   guest_requests_per_min: 30
   admin_requests_per_min: 120
+  client_event_requests_per_min: 60

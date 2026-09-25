@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"open-call/internal/errs"
+	"open-call/internal/observability"
 	"open-call/internal/ports"
 	"open-call/internal/ports/dto"
 	"open-call/internal/store/models"
@@ -441,6 +442,8 @@ func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error
 
 // RequestAgent 原子选人并标记 ringing。
 func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dto.DispatchResult, error) {
+	ctx = observability.With(ctx, observability.Context{CallID: req.CallID, QueueID: req.QueueID})
+	observability.Emit(ctx, "acd.dispatch.requested", map[string]any{"require_video": req.RequireVideo, "skill_ids": req.SkillIDs})
 	if req.CallID == "" {
 		return dto.DispatchResult{}, errs.InvalidRequest("call_id 必填")
 	}
@@ -453,6 +456,7 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 	}
 	var picked string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 同一通话的重复派单请求共用数据库锁，避免同时占用多个坐席。
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", req.CallID).Error; err != nil {
 			return err
 		}
@@ -463,6 +467,7 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		// 跳过其他事务正分配的坐席，仅从空闲且满足视频、队列、技能条件的会话中选人。
 		query := tx.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: clause.CurrentTable}, Options: "SKIP LOCKED"}).
 			Model(&models.AgentSession{}).
 			Joins("JOIN oc_agents ON oc_agents.id = oc_agent_sessions.agent_id").
@@ -486,6 +491,7 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 				query = query.Where("EXISTS (SELECT 1 FROM oc_agent_skills a WHERE a.agent_id = oc_agent_sessions.agent_id AND a.skill_id = ?)", skillID)
 			}
 		}
+		// 轮询策略用上次选中的坐席作为游标；其他策略选最久未更新的空闲坐席。
 		if q.DispatchStrategy == "round_robin" {
 			query = query.Order("oc_agents.id ASC")
 		} else {
@@ -539,6 +545,7 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 		return nil
 	})
 	if err != nil {
+		observability.Emit(ctx, "acd.dispatch.failed", map[string]any{"error": err.Error()})
 		return dto.DispatchResult{}, err
 	}
 	if picked != "" && s.events != nil {
@@ -547,6 +554,12 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 			AgentID: picked,
 			Payload: map[string]any{"agent_id": picked, "state": "ringing", "busy_reason": "", "current_call_id": req.CallID},
 		})
+	}
+	resultCtx := observability.With(ctx, observability.Context{AgentID: picked})
+	if picked == "" {
+		observability.Emit(resultCtx, "acd.dispatch.no_agent", nil)
+	} else {
+		observability.Emit(resultCtx, "acd.dispatch.assigned", map[string]any{"strategy": q.DispatchStrategy})
 	}
 	return dto.DispatchResult{AgentID: picked}, nil
 }

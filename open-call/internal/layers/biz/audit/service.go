@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"open-call/internal/datetime"
 	"open-call/internal/store/models"
 )
 
@@ -50,7 +50,7 @@ func (s *Service) Write(ctx context.Context, userID, action, resource string, de
 	}
 	raw := ""
 	if detail != nil {
-		b, _ := json.Marshal(detail)
+		b, _ := datetime.Marshal(detail)
 		raw = string(b)
 	}
 	var uid *string
@@ -110,16 +110,16 @@ func (s *Service) List(ctx context.Context, page, pageSize int, userID, action s
 		q = q.Where("outcome = ?", outcome)
 	}
 	if from := value(2); from != "" {
-		t, err := time.Parse(time.RFC3339, from)
+		t, err := datetime.Parse(from)
 		if err != nil {
-			return ListResult{}, fmt.Errorf("from 必须为 RFC3339: %w", err)
+			return ListResult{}, fmt.Errorf("from 必须为 YYYY-MM-DD HH:MM:SS (UTC): %w", err)
 		}
 		q = q.Where("created_at >= ?", t)
 	}
 	if to := value(3); to != "" {
-		t, err := time.Parse(time.RFC3339, to)
+		t, err := datetime.Parse(to)
 		if err != nil {
-			return ListResult{}, fmt.Errorf("to 必须为 RFC3339: %w", err)
+			return ListResult{}, fmt.Errorf("to 必须为 YYYY-MM-DD HH:MM:SS (UTC): %w", err)
 		}
 		q = q.Where("created_at <= ?", t)
 	}

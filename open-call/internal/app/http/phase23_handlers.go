@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"open-call/internal/datetime"
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/cdr"
 	"open-call/internal/layers/biz/configio"
@@ -72,12 +72,12 @@ func (d RouterDeps) handleWrapUpList(w http.ResponseWriter, r *http.Request) {
 
 func (d RouterDeps) handleCDRExport(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if _, err := time.Parse(time.RFC3339, q.Get("from")); err != nil {
-		writeErr(w, errs.InvalidRequest("from 必须为 RFC3339 时间"))
+	if _, err := datetime.Parse(q.Get("from")); err != nil {
+		writeErr(w, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间"))
 		return
 	}
-	if _, err := time.Parse(time.RFC3339, q.Get("to")); err != nil {
-		writeErr(w, errs.InvalidRequest("to 必须为 RFC3339 时间"))
+	if _, err := datetime.Parse(q.Get("to")); err != nil {
+		writeErr(w, errs.InvalidRequest("to 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv")
@@ -90,12 +90,12 @@ func (d RouterDeps) handleCDRExport(w http.ResponseWriter, r *http.Request) {
 	}, func(it cdr.Item) error {
 		ans, end := "", ""
 		if it.AnsweredAt != nil {
-			ans = it.AnsweredAt.Format(time.RFC3339)
+			ans = datetime.Format(*it.AnsweredAt)
 		}
 		if it.EndedAt != nil {
-			end = it.EndedAt.Format(time.RFC3339)
+			end = datetime.Format(*it.EndedAt)
 		}
-		return cw.Write([]string{it.CallID, it.Direction, it.Caller, it.Callee, it.QueueID, it.AgentID, it.StartedAt.Format(time.RFC3339), ans, end, strconv.Itoa(it.DurationSec), strconv.Itoa(it.WaitSec), it.Result, it.SessionType})
+		return cw.Write([]string{it.CallID, it.Direction, it.Caller, it.Callee, it.QueueID, it.AgentID, datetime.Format(it.StartedAt), ans, end, strconv.Itoa(it.DurationSec), strconv.Itoa(it.WaitSec), it.Result, it.SessionType})
 	})
 	cw.Flush()
 	if err != nil {
@@ -124,23 +124,37 @@ func (d RouterDeps) handleRecordingDownload(w http.ResponseWriter, r *http.Reque
 		writeErr(w, err)
 		return
 	}
-	d.writeAudit(r.Context(), p.UserID, "recording_download", row.ID, map[string]string{"call_id": row.CallID})
-	f, err := d.Recordings.Open(r.Context(), row)
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	if format != "" {
+		if (format != "webm" && format != "mp4") || row.MediaType != "video_composite" ||
+			(filepath.Ext(row.FilePath) != ".webm" && filepath.Ext(row.FilePath) != ".mp4") {
+			writeErr(w, errs.InvalidRequest("录像格式仅支持 webm 或 mp4"))
+			return
+		}
+	}
+	d.writeAudit(r.Context(), p.UserID, "recording_download", row.ID, map[string]string{"call_id": row.CallID, "format": format})
+	f, err := d.Recordings.Open(r.Context(), row, format)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	defer func() { _ = f.Close() }()
-	name := row.ID + filepath.Ext(row.FilePath)
+	ext := filepath.Ext(row.FilePath)
+	if format != "" {
+		ext = "." + format
+	}
+	name := row.ID + ext
 	if name == row.ID {
 		name = row.ID + ".ogg"
 	}
 	ctype := "application/octet-stream"
-	switch strings.ToLower(filepath.Ext(row.FilePath)) {
+	switch strings.ToLower(ext) {
 	case ".ogg":
 		ctype = "audio/ogg"
 	case ".webm":
 		ctype = "video/webm"
+	case ".mp4":
+		ctype = "video/mp4"
 	case ".ivf":
 		ctype = "video/x-ivf"
 	case ".wav":
@@ -240,7 +254,7 @@ func (d RouterDeps) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleAgentSkills(w http.ResponseWriter, r *http.Request) {
@@ -339,7 +353,7 @@ func (d RouterDeps) handleIVRDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 // handleIVRVersions 列出不可变发布版本。
@@ -433,7 +447,7 @@ func (d RouterDeps) handleWebhookDelete(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 // handleWebhookDeliveryList 分页查询投递任务和死信。
@@ -453,7 +467,7 @@ func (d RouterDeps) handleWebhookRetry(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusAccepted, nil)
 }
 
 func (d RouterDeps) handleConfigExport(w http.ResponseWriter, r *http.Request) {
@@ -555,7 +569,7 @@ func (d RouterDeps) handleQADelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleDIDList(w http.ResponseWriter, r *http.Request) {
@@ -591,5 +605,5 @@ func (d RouterDeps) handleDIDDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }

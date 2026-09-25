@@ -1,7 +1,9 @@
 package http
 
 import (
+	"context"
 	"net/http"
+	"open-call/internal/httpapi"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -22,6 +24,7 @@ import (
 	"open-call/internal/layers/biz/skill"
 	"open-call/internal/layers/biz/user"
 	"open-call/internal/layers/biz/webhook"
+	"open-call/internal/ports"
 )
 
 // RouterDeps HTTP 路由依赖。
@@ -45,13 +48,18 @@ type RouterDeps struct {
 	Hub        interface {
 		ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
+	Calls interface {
+		GetCall(context.Context, string) (ports.CallView, error)
+	}
 }
 
 // NewRouter 构建 chi 路由。
 func NewRouter(deps RouterDeps) http.Handler {
 	r := chi.NewRouter()
+	r.NotFound(httpapi.NotFound)
+	r.MethodNotAllowed(httpapi.MethodNotAllowed)
 	r.Use(chimw.RealIP)
-	r.Use(chimw.Recoverer)
+	r.Use(httpapi.Recover)
 	r.Use(middleware.RequestID)
 	r.Use(chimw.Logger)
 	r.Use(middleware.CORS(deps.Config.Security.AllowedOrigins))
@@ -69,6 +77,12 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 		if deps.Hub != nil {
 			api.Get("/ws", deps.Hub.ServeHTTP)
+		}
+		if deps.Auth != nil {
+			api.With(
+				middleware.RateLimit(deps.Config.Security.ClientEventRequestsPerMin),
+				middleware.Auth(deps.Auth),
+			).Post("/client-events", deps.handleClientEvents)
 		}
 
 		api.Group(func(priv chi.Router) {

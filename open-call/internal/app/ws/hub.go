@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"open-call/internal/datetime"
+	"open-call/internal/httpapi"
+	"open-call/internal/observability"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +41,7 @@ type retainedEvent struct {
 }
 
 func (c *client) send(ctx context.Context, v any) error {
-	b, err := json.Marshal(v)
+	b, err := datetime.Marshal(v)
 	if err != nil {
 		return err
 	}
@@ -93,7 +96,9 @@ func (h *Hub) ConnectionCount() int {
 }
 
 func (h *Hub) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
-	msg := envelope{Type: ev.Type, Seq: h.sequence.Add(1), TS: time.Now().UTC().Format(time.RFC3339), Payload: ev.Payload}
+	ctx = observability.With(ctx, observability.Context{CallID: ev.CallID, AgentID: ev.AgentID})
+	observability.Emit(ctx, "ws.call_event.published", map[string]any{"type": ev.Type})
+	msg := envelope{Type: ev.Type, Seq: h.sequence.Add(1), TS: datetime.Format(time.Now()), Payload: ev.Payload}
 	h.retain(ev.CallID, ev.AgentID, msg)
 	h.broadcast(ctx, ev.CallID, ev.AgentID, msg)
 	if h.hooks != nil {
@@ -105,7 +110,9 @@ func (h *Hub) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 }
 
 func (h *Hub) PublishAgentEvent(ctx context.Context, ev ports.AgentEvent) error {
-	msg := envelope{Type: ev.Type, Seq: h.sequence.Add(1), TS: time.Now().UTC().Format(time.RFC3339), Payload: ev.Payload}
+	ctx = observability.With(ctx, observability.Context{AgentID: ev.AgentID})
+	observability.Emit(ctx, "ws.agent_event.published", map[string]any{"type": ev.Type})
+	msg := envelope{Type: ev.Type, Seq: h.sequence.Add(1), TS: datetime.Format(time.Now()), Payload: ev.Payload}
 	h.retain("", ev.AgentID, msg)
 	h.broadcast(ctx, "", ev.AgentID, msg)
 	if h.hooks != nil {
@@ -116,32 +123,44 @@ func (h *Hub) PublishAgentEvent(ctx context.Context, ev ports.AgentEvent) error 
 	return nil
 }
 
+// ServeHTTP 校验来源和令牌，升级连接后接收消息并维护客户端生命周期。
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.originAllowed(r) {
-		http.Error(w, "WebSocket Origin 不允许", http.StatusForbidden)
+		httpapi.Failure(w, http.StatusForbidden, "websocket_error", "WebSocket Origin 不允许")
 		return
 	}
 	protocol, token := authProtocol(r.Header.Get("Sec-WebSocket-Protocol"))
 	if token == "" {
-		http.Error(w, "缺少 WebSocket 认证协议", http.StatusUnauthorized)
+		httpapi.Failure(w, http.StatusUnauthorized, "websocket_error", "缺少 WebSocket 认证协议")
 		return
 	}
 	if h.auth == nil {
-		http.Error(w, "认证未就绪", http.StatusServiceUnavailable)
+		httpapi.Failure(w, http.StatusServiceUnavailable, "websocket_error", "认证未就绪")
 		return
 	}
 	p, err := h.auth.Authenticate(r.Context(), token)
 	if err != nil {
-		http.Error(w, "未认证或令牌失效", http.StatusUnauthorized)
+		httpapi.Failure(w, http.StatusUnauthorized, "websocket_error", "未认证或令牌失效")
 		return
 	}
+	sessionID := observability.NewID()
+	ctx := observability.With(r.Context(), observability.Context{
+		AgentID: p.AgentID, CallID: p.GuestCallID, ClientSessionID: sessionID,
+	})
+	r = r.WithContext(ctx)
 
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
+	// Origin 已由 originAllowed 按配置白名单严格校验；关闭库内置的同源复检，
+	// 避免反向代理改写 Host 后误拒绝合法的 WebSocket 连接。
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:       []string{protocol},
+		InsecureSkipVerify: true,
+	})
 	if err != nil {
 		h.log.Warn("websocket accept failed", "err", err)
 		return
 	}
 	cl := &client{conn: conn, principal: p}
+	observability.Emit(ctx, "ws.connected", map[string]any{"role": p.Role})
 	h.connCount.Add(1)
 	h.add(cl)
 	defer func() {
@@ -158,12 +177,13 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.connCount.Add(-1)
+		observability.Emit(ctx, "ws.disconnected", map[string]any{"role": p.Role})
 		_ = conn.Close(websocket.StatusNormalClosure, "bye")
 	}()
 
 	_ = cl.send(r.Context(), envelope{
 		Type:    "system.connected",
-		TS:      time.Now().UTC().Format(time.RFC3339),
+		TS:      datetime.Format(time.Now()),
 		Payload: map[string]any{"role": p.Role},
 	})
 	if since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64); err == nil && since > 0 {
@@ -187,6 +207,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// retain 将事件放入有界缓冲，供断线客户端按序号补收。
 func (h *Hub) retain(callID, agentID string, msg envelope) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -196,6 +217,7 @@ func (h *Hub) retain(callID, agentID string, msg envelope) {
 	}
 }
 
+// replay 只补发序号大于 since 且属于当前客户端的事件。
 func (h *Hub) replay(ctx context.Context, cl *client, since uint64) {
 	h.mu.Lock()
 	events := make([]retainedEvent, 0)
@@ -268,12 +290,14 @@ func (h *Hub) handleClient(ctx context.Context, cl *client, data []byte) {
 	}
 	switch msg.Type {
 	case "ping":
-		_ = cl.send(ctx, envelope{Type: "pong", TS: time.Now().UTC().Format(time.RFC3339)})
+		_ = cl.send(ctx, envelope{Type: "pong", TS: datetime.Format(time.Now())})
 	case "call.answer":
 		if h.calls == nil || cl.principal.AgentID == "" {
 			return
 		}
 		callID, _ := msg.Payload["call_id"].(string)
+		ctx = observability.With(ctx, observability.Context{CallID: callID, AgentID: cl.principal.AgentID})
+		observability.Emit(ctx, "ws.call.answer", nil)
 		if err := h.calls.Answer(ctx, callID, cl.principal.AgentID); err != nil {
 			_ = cl.send(ctx, envelope{Type: "error", Payload: map[string]any{"message": err.Error()}})
 		}
@@ -282,6 +306,8 @@ func (h *Hub) handleClient(ctx context.Context, cl *client, data []byte) {
 			return
 		}
 		callID, _ := msg.Payload["call_id"].(string)
+		ctx = observability.With(ctx, observability.Context{CallID: callID, AgentID: cl.principal.AgentID})
+		observability.Emit(ctx, "ws.call.decline", nil)
 		_ = h.calls.Decline(ctx, callID, cl.principal.AgentID)
 	case "agent.set_state":
 		if h.agents == nil || cl.principal.AgentID == "" {
@@ -332,6 +358,7 @@ func (h *Hub) remove(cl *client) {
 	}
 }
 
+// broadcast 按通话或坐席路由消息，避免泄露给无关连接。
 func (h *Hub) broadcast(ctx context.Context, callID, agentID string, msg envelope) {
 	h.mu.Lock()
 	var targets []*client

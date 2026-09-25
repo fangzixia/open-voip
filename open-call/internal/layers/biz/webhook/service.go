@@ -19,7 +19,9 @@ import (
 	"gorm.io/gorm"
 
 	"open-call/internal/config"
+	"open-call/internal/datetime"
 	"open-call/internal/errs"
+	"open-call/internal/observability"
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
@@ -198,7 +200,11 @@ func (s *Service) Dispatch(ctx context.Context, eventType string, payload map[st
 		return err
 	}
 	eventID := uuid.New().String()
-	body, err := json.Marshal(map[string]any{"id": eventID, "type": eventType, "ts": time.Now().UTC().Format(time.RFC3339Nano), "payload": payload})
+	ids := observability.From(ctx)
+	body, err := datetime.Marshal(map[string]any{
+		"id": eventID, "type": eventType, "ts": datetime.Format(time.Now()), "payload": payload,
+		"trace_id": ids.TraceID, "request_id": ids.RequestID,
+	})
 	if err != nil {
 		return err
 	}
@@ -329,6 +335,7 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 	return out, nil
 }
 
+// processOne 仅处理已领取的任务，按订阅状态决定成功或失败结果。
 func (s *Service) processOne(ctx context.Context, job models.WebhookDelivery) error {
 	var sub models.WebhookSubscription
 	if err := s.db.WithContext(ctx).First(&sub, "id = ?", job.SubscriptionID).Error; err != nil {
@@ -346,6 +353,7 @@ func (s *Service) processOne(ctx context.Context, job models.WebhookDelivery) er
 	return s.finishFailure(ctx, job, err.Error())
 }
 
+// finishFailure 累计尝试次数；达到上限转死信，否则按退避时间重新入队。
 func (s *Service) finishFailure(ctx context.Context, job models.WebhookDelivery, message string) error {
 	attempts := job.Attempts + 1
 	maxRetries := s.cfg.MaxRetries
@@ -363,6 +371,7 @@ func (s *Service) finishFailure(ctx context.Context, job models.WebhookDelivery,
 	return s.db.WithContext(ctx).Model(&models.WebhookDelivery{}).Where("id = ?", job.ID).Updates(updates).Error
 }
 
+// postOnce 发送一次带追踪头和 HMAC 签名的 Webhook 请求。
 func (s *Service) postOnce(ctx context.Context, sub models.WebhookSubscription, eventID string, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sub.URL, bytes.NewReader(body))
 	if err != nil {
@@ -370,6 +379,22 @@ func (s *Service) postOnce(ctx context.Context, sub models.WebhookSubscription, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Open-VoIP-Event-ID", eventID)
+	var envelope struct {
+		TraceID   string `json:"trace_id"`
+		RequestID string `json:"request_id"`
+	}
+	if json.Unmarshal(body, &envelope) == nil {
+		if id := observability.NormalizeID(envelope.TraceID); id != "" {
+			req.Header.Set("X-Trace-ID", id)
+		}
+		if id := observability.NormalizeID(envelope.RequestID); id != "" {
+			req.Header.Set("X-Request-ID", id)
+		}
+	}
+	traceCtx := observability.With(ctx, observability.Context{
+		TraceID: observability.NormalizeID(envelope.TraceID), RequestID: observability.NormalizeID(envelope.RequestID),
+	})
+	observability.Emit(traceCtx, "webhook.delivery.started", map[string]any{"event_id": eventID, "subscription_id": sub.ID})
 	if sub.Secret != "" {
 		mac := hmac.New(sha256.New, []byte(sub.Secret))
 		_, _ = mac.Write(body)
@@ -377,12 +402,15 @@ func (s *Service) postOnce(ctx context.Context, sub models.WebhookSubscription, 
 	}
 	response, err := s.client.Do(req)
 	if err != nil {
+		observability.Emit(traceCtx, "webhook.delivery.failed", map[string]any{"event_id": eventID, "subscription_id": sub.ID, "error": err.Error()})
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		observability.Emit(traceCtx, "webhook.delivery.failed", map[string]any{"event_id": eventID, "subscription_id": sub.ID, "status": response.StatusCode})
 		return fmt.Errorf("HTTP %s", response.Status)
 	}
+	observability.Emit(traceCtx, "webhook.delivery.completed", map[string]any{"event_id": eventID, "subscription_id": sub.ID, "status": response.StatusCode})
 	return nil
 }
 
@@ -423,6 +451,7 @@ func authRandomToken(size int) (string, error) {
 	return value, nil
 }
 
+// backoff 计算下一次投递的指数退避时间。
 func backoff(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1

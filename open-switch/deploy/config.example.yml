@@ -17,12 +17,19 @@ database:
 recordings:
   # 录音/录像文件落盘目录（本进程写入）。
   dir: "./data/recordings"
+  # 每通视频呼叫仅保存一份包含音频的成品；可选 webm 或 mp4。
+  video_format: "webm"
+  # FFmpeg 可执行文件；留空时从 PATH 查找。视频录像必须安装 FFmpeg。
+  ffmpeg_path: ""
   retain_days: 90
   notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
 
 log:
   level: info
   format: json
+  # 同时输出 stdout、app.jsonl 与 trace.jsonl；按大小轮转为 gzip，归档不自动删除。
+  dir: "./logs/open-switch"
+  max_size_mb: 100
 
 tls:
   enabled: false

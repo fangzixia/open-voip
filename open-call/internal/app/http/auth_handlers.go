@@ -62,7 +62,7 @@ func (d RouterDeps) handleLogout(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 // handleChangePassword 修改本人密码，成功后全部现有会话失效。
@@ -85,7 +85,7 @@ func (d RouterDeps) handleChangePassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	d.writeAudit(r.Context(), p.UserID, "password_change", p.UserID, nil)
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 // handleSessionList 列出本人登录会话。
@@ -115,7 +115,7 @@ func (d RouterDeps) handleSessionRevoke(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 // clientIP 返回已由 RealIP 中间件校正的来源地址。

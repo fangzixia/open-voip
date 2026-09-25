@@ -59,8 +59,11 @@ type JWTConfig struct {
 }
 
 type LogConfig struct {
-	Level  string `yaml:"level"`
-	Format string `yaml:"format"`
+	Level      string `yaml:"level"`
+	Format     string `yaml:"format"`
+	Dir        string `yaml:"dir"`
+	MaxSizeMB  int64  `yaml:"max_size_mb"`
+	MaxAgeDays int    `yaml:"max_age_days"`
 }
 
 type TLSConfig struct {
@@ -77,10 +80,11 @@ type BootstrapConfig struct {
 }
 
 type SecurityConfig struct {
-	AllowedOrigins      []string `yaml:"allowed_origins"`
-	LoginRequestsPerMin int      `yaml:"login_requests_per_min"`
-	GuestRequestsPerMin int      `yaml:"guest_requests_per_min"`
-	AdminRequestsPerMin int      `yaml:"admin_requests_per_min"`
+	AllowedOrigins            []string `yaml:"allowed_origins"`
+	LoginRequestsPerMin       int      `yaml:"login_requests_per_min"`
+	GuestRequestsPerMin       int      `yaml:"guest_requests_per_min"`
+	AdminRequestsPerMin       int      `yaml:"admin_requests_per_min"`
+	ClientEventRequestsPerMin int      `yaml:"client_event_requests_per_min"`
 }
 
 func Load(path string) (*Config, error) {
@@ -133,6 +137,12 @@ func (c *Config) Validate() error {
 	if format != "json" && format != "text" {
 		problems = append(problems, "log.format 必须为 json 或 text")
 	}
+	if c.Log.MaxSizeMB < 0 {
+		problems = append(problems, "log.max_size_mb 不能小于 0")
+	}
+	if c.Log.MaxAgeDays < 0 {
+		problems = append(problems, "log.max_age_days 不能小于 0")
+	}
 	if c.TLS.Enabled && (strings.TrimSpace(c.TLS.CertFile) == "" || strings.TrimSpace(c.TLS.KeyFile) == "") {
 		problems = append(problems, "tls.enabled 为 true 时必须设置 cert_file 与 key_file")
 	}
@@ -156,6 +166,18 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) applyDefaults() {
+	if strings.TrimSpace(c.Log.Level) == "" {
+		c.Log.Level = "info"
+	}
+	if strings.TrimSpace(c.Log.Format) == "" {
+		c.Log.Format = "json"
+	}
+	if strings.TrimSpace(c.Log.Dir) == "" {
+		c.Log.Dir = "logs/open-call"
+	}
+	if c.Log.MaxSizeMB <= 0 {
+		c.Log.MaxSizeMB = 100
+	}
 	if c.Recordings.RetainDays <= 0 {
 		c.Recordings.RetainDays = 90
 	}
@@ -176,5 +198,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Security.AdminRequestsPerMin <= 0 {
 		c.Security.AdminRequestsPerMin = 120
+	}
+	if c.Security.ClientEventRequestsPerMin <= 0 {
+		c.Security.ClientEventRequestsPerMin = 60
 	}
 }

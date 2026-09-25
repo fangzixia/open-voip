@@ -1,10 +1,12 @@
 package http
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"open-call/internal/datetime"
+	"open-call/internal/httpapi"
+	"open-call/internal/observability"
 	"strings"
 	"time"
 
@@ -29,12 +31,21 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		r.Header.Del("X-Principal")
 		r.Header.Set("Authorization", "Bearer "+cfg.Secret)
 		if p, ok := middleware.PrincipalFromContext(r.Context()); ok {
-			b, _ := json.Marshal(p)
+			b, _ := datetime.Marshal(p)
 			r.Header.Set("X-Principal", string(b))
+			if p.AgentID != "" {
+				r.Header.Set("X-Agent-ID", p.AgentID)
+			}
+		}
+		if traceID := observability.From(r.Context()).TraceID; traceID != "" {
+			r.Header.Set("X-Trace-ID", traceID)
+		}
+		if callID := switchCallID(r.URL.Path); callID != "" {
+			r.Header.Set("X-Call-ID", callID)
 		}
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "switch_unavailable", "message": "交换服务暂不可用"})
+		httpapi.Failure(w, http.StatusBadGateway, "switch_unavailable", "交换服务暂不可用")
 	}
 	protected := middleware.Auth(auth)(proxy)
 
@@ -42,7 +53,7 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 	if len(allowedOrigins) > 0 {
 		origins = allowedOrigins[0]
 	}
-	return middleware.CORS(origins)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return middleware.RequestID(httpapi.Recover(middleware.CORS(origins)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !shouldProxyToSwitch(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
@@ -50,13 +61,25 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		r = r.Clone(r.Context())
 		r.URL.Path = mapSwitchPath(r.URL.Path)
 		protected.ServeHTTP(w, r)
-	}))
+	}))))
+}
+
+func switchCallID(path string) string {
+	for _, prefix := range []string{"/switch/v1/calls/", "/switch/v1/supervisor/calls/"} {
+		if strings.HasPrefix(path, prefix) {
+			id := strings.Split(strings.TrimPrefix(path, prefix), "/")[0]
+			return observability.NormalizeID(id)
+		}
+	}
+	return ""
 }
 
 func mapSwitchPath(path string) string {
 	switch {
 	case path == "/api/v1/calls/outbound":
 		return "/switch/v1/calls/outbound"
+	case strings.HasPrefix(path, "/api/v1/ivr-assets"):
+		return strings.Replace(path, "/api/v1/ivr-assets", "/switch/v1/ivr-assets", 1)
 	case strings.HasPrefix(path, "/api/v1/calls/"):
 		return strings.Replace(path, "/api/v1/calls/", "/switch/v1/calls/", 1)
 	case strings.HasPrefix(path, "/api/v1/supervisor/calls/"):
@@ -69,6 +92,9 @@ func mapSwitchPath(path string) string {
 }
 
 func shouldProxyToSwitch(path string) bool {
+	if path == "/api/v1/ivr-assets" || strings.HasPrefix(path, "/api/v1/ivr-assets/") {
+		return true
+	}
 	if path == "/api/v1/calls/outbound" {
 		return true
 	}

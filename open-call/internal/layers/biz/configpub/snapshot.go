@@ -67,6 +67,7 @@ func (s *SnapshotService) GetQueue(ctx context.Context, queueID string) (ports.Q
 	return out, nil
 }
 
+// GetLatestIVR 只返回已发布的最高版本快照，避免交换机读取编辑中的草稿。
 func (s *SnapshotService) GetLatestIVR(ctx context.Context, flowID string) (ports.IVRSnapshot, error) {
 	var row models.IVRPublishedSnapshot
 	if err := s.db.WithContext(ctx).Where("flow_id = ?", flowID).Order("version DESC").First(&row).Error; err != nil {
@@ -95,6 +96,7 @@ func (s *SnapshotService) GetBusinessHours(ctx context.Context, queueID string) 
 	return ports.BusinessHours{Timezone: "UTC", WeekdayHours: hours}, nil
 }
 
+// ResolveDID 依次尝试号码的规范化候选值，找到对应的呼入队列。
 func (s *SnapshotService) ResolveDID(ctx context.Context, did string) (string, error) {
 	var last error
 	for _, cand := range DIDCandidates(did) {

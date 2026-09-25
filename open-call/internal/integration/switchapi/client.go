@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"open-call/internal/datetime"
+	"open-call/internal/httpapi"
+	"open-call/internal/observability"
 	"strings"
 	"time"
 
 	"open-call/internal/config"
-	"open-call/internal/errs"
 	"open-call/internal/ports"
 	"open-call/internal/ports/dto"
 )
@@ -33,10 +35,11 @@ func NewClient(cfg config.IntegrationConfig) *Client {
 	}
 }
 
+// do 统一发送 Switch API 请求，透传调用方身份和追踪字段并解析错误响应。
 func (c *Client) do(ctx context.Context, method, path string, in any, principalJSON string, out any) error {
 	var body io.Reader
 	if in != nil {
-		b, err := json.Marshal(in)
+		b, err := datetime.Marshal(in)
 		if err != nil {
 			return err
 		}
@@ -51,25 +54,46 @@ func (c *Client) do(ctx context.Context, method, path string, in any, principalJ
 	if principalJSON != "" {
 		req.Header.Set("X-Principal", principalJSON)
 	}
+	setTraceHeaders(req, ctx)
+	observability.Emit(ctx, "switch.request.started", map[string]any{"method": method, "path": path})
 	res, err := c.http.Do(req)
 	if err != nil {
+		observability.Emit(ctx, "switch.request.failed", map[string]any{"method": method, "path": path, "error": err.Error()})
 		return err
 	}
 	defer func() { _ = res.Body.Close() }()
-	raw, _ := io.ReadAll(res.Body)
-	if res.StatusCode >= 400 {
-		var e struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-			Code    string `json:"code"`
-		}
-		_ = json.Unmarshal(raw, &e)
-		return &errs.APIError{Kind: e.Error, Message: e.Message, Code: e.Code, HTTP: res.StatusCode}
+	err = httpapi.Decode(res, out)
+	fields := map[string]any{"method": method, "path": path, "status": res.StatusCode}
+	if err != nil {
+		fields["error"] = err.Error()
+		observability.Emit(ctx, "switch.request.failed", fields)
+		return err
 	}
-	if out != nil && len(raw) > 0 {
-		return json.Unmarshal(raw, out)
-	}
+	observability.Emit(ctx, "switch.request.completed", fields)
 	return nil
+}
+
+func setTraceHeaders(req *http.Request, ctx context.Context) {
+	ids := observability.From(ctx)
+	req.Header.Set("X-Request-ID", httpapi.ID(ctx))
+	if ids.TraceID != "" {
+		req.Header.Set("X-Trace-ID", ids.TraceID)
+	}
+	if ids.CallID != "" {
+		req.Header.Set("X-Call-ID", ids.CallID)
+	}
+	if ids.LegID != "" {
+		req.Header.Set("X-Leg-ID", ids.LegID)
+	}
+	if ids.AgentID != "" {
+		req.Header.Set("X-Agent-ID", ids.AgentID)
+	}
+	if ids.QueueID != "" {
+		req.Header.Set("X-Queue-ID", ids.QueueID)
+	}
+	if ids.ClientSessionID != "" {
+		req.Header.Set("X-Client-Session-ID", ids.ClientSessionID)
+	}
 }
 
 func (c *Client) StartInbound(ctx context.Context, req dto.InboundRequest) (string, error) {

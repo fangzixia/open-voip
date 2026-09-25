@@ -61,7 +61,7 @@ func (d RouterDeps) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleUserResetPassword(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +79,7 @@ func (d RouterDeps) handleUserRevokeSessions(w http.ResponseWriter, r *http.Requ
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleAgentMe(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +127,7 @@ func (d RouterDeps) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func (d RouterDeps) handleAgentState(w http.ResponseWriter, r *http.Request) {

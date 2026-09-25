@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"open-switch/internal/errs"
+	"open-switch/internal/observability"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 )
@@ -224,6 +225,7 @@ func (s *Service) ForceReleaseAgent(ctx context.Context, agentID, policy string)
 	return s.deps.Agents.SetState(ctx, agentID, "", "offline", "force-check-out")
 }
 
+// doTransfer 按盲转、咨询转及目标类型编排坐席状态与客户媒体连接。
 func (s *Service) doTransfer(ctx context.Context, callID string, req dto.TransferRequest) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -252,6 +254,7 @@ func (s *Service) doTransfer(ctx context.Context, callID string, req dto.Transfe
 			return err
 		}
 		cust := customerLeg(rt)
+		// 咨询转先保持客户；盲转则立即让原坐席进入话后处理。
 		if mode == "consult" {
 			_ = s.deps.Media.SetHold(ctx, callID, cust, true)
 			s.mu.Lock()
@@ -317,6 +320,7 @@ func (s *Service) doTransfer(ctx context.Context, callID string, req dto.Transfe
 	return s.enterQueue(ctx, callID)
 }
 
+// completeConsult 移除原坐席并解除客户保持，完成咨询转接。
 func (s *Service) completeConsult(ctx context.Context, callID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -357,6 +361,7 @@ func (s *Service) doOutbound(ctx context.Context, req dto.OutboundRequest) (stri
 	return s.doOutboundWithID(ctx, req, uuid.New().String())
 }
 
+// doOutboundWithID 先持久化外呼，再按号码选择内部分机或 SIP 中继。
 func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest, callID string) (string, error) {
 	if req.AgentID == "" || req.Destination == "" {
 		return "", errs.InvalidRequest("agent_id 与 destination 必填")
@@ -426,6 +431,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	})
 }
 
+// originateSIPCall 异步拨号；回调前重新检查通话状态，避免已挂断后被接通。
 func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runtimeCall, req dto.OutboundRequest) (string, error) {
 	now := time.Now().UTC()
 	pstnLeg := ports.CallLegRecord{ID: uuid.New().String(), CallID: callID, Role: dto.LegRolePSTN, CreatedAt: now}
@@ -472,6 +478,7 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 	return callID, nil
 }
 
+// overflow 在排队超时后尝试转入备用队列或留言。
 func (s *Service) overflow(ctx context.Context, callID string) bool {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -511,6 +518,7 @@ func (s *Service) overflow(ctx context.Context, callID string) bool {
 	}
 }
 
+// beginRecordingIfNeeded 读取队列策略，避免重复启动录音并发送录音告知。
 func (s *Service) beginRecordingIfNeeded(ctx context.Context, callID string) {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -539,6 +547,7 @@ func (s *Service) beginRecordingIfNeeded(ctx context.Context, callID string) {
 	}
 }
 
+// startRecording 启动媒体录制并保存可查询的录音元数据。
 func (s *Service) startRecording(ctx context.Context, callID string, policy dto.RecordingPolicy) {
 	if policy.Mode == "" || policy.Mode == "off" {
 		return
@@ -549,12 +558,15 @@ func (s *Service) startRecording(ctx context.Context, callID string, policy dto.
 		return
 	}
 	s.mu.Unlock()
+	started := time.Now()
 	id, err := s.deps.Media.StartRecording(ctx, callID, policy)
 	if err != nil || id == "" {
+		observability.Event(ctx, "recording", "recording.start", "start", "error", "recording_start_failed", started, "mode", policy.Mode)
 		slog.Error("录音启动失败", "call_id", callID, "err", err)
 		_ = s.publishCall(ctx, callID, "recording.failed", "", map[string]any{"call_id": callID, "message": "录音启动失败，请联系管理员"})
 		return
 	}
+	observability.Event(ctx, "recording", "recording.start", "start", "ok", "", started, "recording_id", id, "mode", policy.Mode)
 	s.mu.Lock()
 	if rt := s.calls[callID]; rt != nil {
 		rt.recordingID = id
@@ -571,6 +583,7 @@ func (s *Service) startRecording(ctx context.Context, callID string, policy dto.
 	}
 }
 
+// stopRecording 关闭录制并用最终文件信息更新元数据。
 func (s *Service) stopRecording(ctx context.Context, callID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -582,7 +595,9 @@ func (s *Service) stopRecording(ctx context.Context, callID string) error {
 	if id == "" {
 		return nil
 	}
+	started := time.Now()
 	if err := s.deps.Media.StopRecording(ctx, id); err != nil {
+		observability.Event(ctx, "recording", "recording.stop", "stop", "error", "recording_stop_failed", started, "recording_id", id)
 		return err
 	}
 	if s.deps.Recordings != nil {
@@ -594,9 +609,11 @@ func (s *Service) stopRecording(ctx context.Context, callID string) error {
 			return err
 		}
 	}
+	observability.Event(ctx, "recording", "recording.stop", "stop", "ok", "", started, "recording_id", id)
 	return nil
 }
 
+// startVoicemail 播放留言提示，按策略录制，并在固定时长后结束通话。
 func (s *Service) startVoicemail(ctx context.Context, callID string) {
 	s.mu.Lock()
 	rt := s.calls[callID]

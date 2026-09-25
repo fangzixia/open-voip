@@ -13,7 +13,9 @@
 - **风格**：REST JSON，版本前缀 `/api/v1`  
 - **Base URL 示例**：`https://cc.internal`  
 - **字符编码**：UTF-8  
-- **时间**：RFC3339 UTC，除非字段说明为本地业务时区  
+- **时间戳**：统一为 UTC 的 `YYYY-MM-DD HH:MM:SS`，例如 `2026-09-25 10:12:35`；请求、响应、WebSocket、Webhook 和 CSV 均使用此格式。数据库和内部计算保留时间类型。无时区后缀，调用方按 UTC 解释。仅日期型业务字段仍为 `YYYY-MM-DD`。
+
+服务端在 JSON 边界使用 `internal/datetime` 统一处理 `time.Time`；纯日期字段使用 `datetime.Date` 或 `datetime:"date"` 标记，不需要生成代码。普通字符串不会被识别或改写为时间。
 
 ---
 
@@ -72,6 +74,13 @@ Authorization: Bearer {access_token}
 | 振铃、状态变更、排队位置 | **WebSocket**（[events.md](../events.md)） |
 | SDP / ICE / Offer-Answer | **REST** Media Signaling（见 OpenAPI tag `MediaSignaling`） |
 
+### 3.1 全链路追踪
+
+- 客户端发送 `X-Trace-ID`；服务端在缺失时生成并通过响应头返回。
+- 使用 `X-Request-ID` 定位单次 HTTP 请求，使用 `call_id`/`leg_id` 定位整通电话和媒体腿。
+- 浏览器通话诊断通过 `POST /api/v1/client-events` 批量上报。
+- 服务器日志位于配置的 `log.dir`，其中 `trace.jsonl` 可直接按 `trace_id` 或 `call_id` 检索。轮转文件 gzip 压缩且默认永久保留。
+
 ---
 
 ## 4. 分页与过滤
@@ -92,7 +101,7 @@ Authorization: Bearer {access_token}
 }
 ```
 
-CDR 等支持 `from`, `to`（ISO8601）、`queue_id`、`agent_id` 过滤（见 OpenAPI）。
+CDR 等支持 `from`, `to`（`YYYY-MM-DD HH:MM:SS`，UTC）、`queue_id`、`agent_id` 过滤（见 OpenAPI）。
 
 ---
 

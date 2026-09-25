@@ -2,10 +2,10 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"open-call/internal/config"
+	"open-call/internal/datetime"
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"
 	"testing"
@@ -28,11 +28,14 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 			t.Error("missing integration secret")
 		}
 		var p auth.Principal
-		if err := json.Unmarshal([]byte(r.Header.Get("X-Principal")), &p); err != nil {
+		if err := datetime.Unmarshal([]byte(r.Header.Get("X-Principal")), &p); err != nil {
 			t.Error(err)
 		}
 		if p.UserID != "user" || p.Role != "agent" || p.AgentID != "seat" {
 			t.Errorf("forged principal survived: %+v", p)
+		}
+		if r.Header.Get("X-Trace-ID") == "" || r.Header.Get("X-Call-ID") != "call" || r.Header.Get("X-Agent-ID") != "seat" {
+			t.Errorf("trace headers missing: %v", r.Header)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
