@@ -60,7 +60,7 @@ type CreateInput struct {
 	ListenAnnounce        *bool    `json:"listen_announce"`
 }
 
-// UpdateInput uses pointers so PATCH preserves omitted booleans and can clear nullable text/IDs.
+// UpdateInput 使用指针区分 PATCH 未提交的字段，并允许清空可空文本与 ID。
 type UpdateInput struct {
 	Name                  *string   `json:"name"`
 	VideoEnabled          *bool     `json:"video_enabled"`

@@ -23,11 +23,13 @@ import (
 	"open-call/internal/layers/biz/agent"
 	"open-call/internal/layers/biz/audit"
 	"open-call/internal/layers/biz/auth"
+	"open-call/internal/layers/biz/authz"
 	"open-call/internal/layers/biz/cdr"
 	"open-call/internal/layers/biz/configio"
 	"open-call/internal/layers/biz/configpub"
 	"open-call/internal/layers/biz/guest"
 	"open-call/internal/layers/biz/ivr"
+	"open-call/internal/layers/biz/oidcauth"
 	"open-call/internal/layers/biz/queue"
 	"open-call/internal/layers/biz/recmeta"
 	"open-call/internal/layers/biz/report"
@@ -85,6 +87,18 @@ func Run(configPath string) error {
 	})
 	agentSvc := agent.NewService(db, wsHub)
 	authSvc := auth.NewService(db, cfg.JWT)
+	authSvc.ConfigureOIDC(cfg.OIDC.Enabled, cfg.OIDC.EmergencyAdmin)
+	if err := authSvc.ValidateEmergencyAdmin(context.Background()); err != nil {
+		return err
+	}
+	authzSvc := authz.NewService(db)
+	oidcSvc, err := oidcauth.NewService(context.Background(), cfg.OIDC, db, authzSvc)
+	if err != nil {
+		return err
+	}
+	if oidcSvc != nil {
+		authSvc.SetOIDCRefresher(oidcSvc.Refresh)
+	}
 	userSvc := user.NewService(db)
 	configSnap := configpub.NewSnapshotService(db)
 	cdrRecorder := cdr.NewRecorderService(db)
@@ -118,23 +132,25 @@ func Run(configPath string) error {
 	})
 
 	apiRouter := apphttp.NewRouter(apphttp.RouterDeps{
-		Config:     *cfg,
-		Auth:       authSvc,
-		Users:      userSvc,
-		Agents:     agentSvc,
-		Queues:     queueSvc,
-		Guests:     guestSvc,
-		CDR:        cdrRecorder,
-		IVR:        ivrSvc,
-		Skills:     skillSvc,
-		Recordings: recMeta,
-		Reports:    reportSvc,
-		Webhooks:   hookSvc,
-		Audit:      auditSvc,
-		ConfigIO:   cfgIO,
-		Snapshots:  configSnap,
-		Hub:        wsHub,
-		Calls:      switchClient,
+		Config:        *cfg,
+		Auth:          authSvc,
+		Authorization: authzSvc,
+		OIDC:          oidcSvc,
+		Users:         userSvc,
+		Agents:        agentSvc,
+		Queues:        queueSvc,
+		Guests:        guestSvc,
+		CDR:           cdrRecorder,
+		IVR:           ivrSvc,
+		Skills:        skillSvc,
+		Recordings:    recMeta,
+		Reports:       reportSvc,
+		Webhooks:      hookSvc,
+		Audit:         auditSvc,
+		ConfigIO:      cfgIO,
+		Snapshots:     configSnap,
+		Hub:           wsHub,
+		Calls:         switchClient,
 		Status: apphttp.StatusProvider{
 			DB:            db,
 			Runtime:       switchClient,

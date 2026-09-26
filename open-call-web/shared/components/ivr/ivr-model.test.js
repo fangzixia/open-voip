@@ -1,3 +1,4 @@
+// 本文件验证ivr model的关键行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { layoutIVR, simulateIVR, validateIVR } from "./ivr-model.js";

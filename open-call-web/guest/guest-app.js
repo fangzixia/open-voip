@@ -1,22 +1,15 @@
+import { NAV, renderApp } from "./views/shell.js";
 import { bindApiFeedback } from "../shared/http-client.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
-import { LitElement, html } from "lit";
+import { LitElement } from "lit";
 import { guestJoin, guestJoinToken, hangupCall, listGuestQueues, respondVideo, sendDtmf } from "../shared/api.js";
 import { setAccessToken, clearAccessToken } from "../shared/auth-store.js";
-import { renderAppShell, renderDialpad, renderFeedback } from "../shared/components/ui.js";
-import { formatDuration } from "../shared/display.js";
 import { parseGuestInvite } from "../shared/guest-invite.js";
-import { shellStyles } from "../shared/shell-styles.js";
+import { appStyles } from "../shared/styles/index.js";
 import { listMediaDevices, microphoneConstraints, replaceInputDevice, setLocalMuted, startMediaSession, stopMedia } from "../shared/webrtc.js";
 import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
 
-const NAV = [
-  { id: "service", label: "选择服务" },
-  { id: "queue", label: "排队状态" },
-  { id: "talk", label: "当前通话" },
-  { id: "list", label: "可进入队列" },
-];
 
 export class GuestApp extends LitElement {
   static properties = {
@@ -42,7 +35,7 @@ export class GuestApp extends LitElement {
     userId: { type: String },
   };
 
-  static styles = shellStyles;
+  static styles = appStyles;
 
   #ws = new BusinessWebSocket();
   #pc = null;
@@ -330,7 +323,7 @@ export class GuestApp extends LitElement {
     try {
       await hangupCall(this.join.call_id);
     } catch {
-      /* ignore */
+      /* 忽略该异常，继续执行后续操作。 */
     }
     this.#cleanup();
     this.step = "ended";
@@ -402,202 +395,32 @@ export class GuestApp extends LitElement {
     }
   }
 
+  async #respondVideo(accept) {
+    if (!this.join?.call_id) return;
+    try {
+      await respondVideo(this.join.call_id, accept);
+      this.videoAsk = null;
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   render() {
-    const waiting = this.step === "perm" || this.step === "wait";
-    return renderAppShell({
-      subtitle: "在线客服",
-      navItems: NAV,
-      activeNav: this.nav,
-      onNavigate: (id) => this.#go(id),
-      breadcrumb: this.#crumb(),
-      badges: { queue: waiting ? 1 : 0 },
-      minimal: true,
-      content: html`
-        ${renderFeedback({ error: this.error })}
-        ${this.nav === "service" ? (this.step === "invite" ? this.#inviteView() : this.step === "ended" ? this.#endedView() : this.#pickView()) : ""}
-        ${this.nav === "queue" ? (waiting ? this.#waitView() : this.#queueIdleView()) : ""}
-        ${this.nav === "talk" ? (this.step === "talk" ? this.#talkView() : this.step === "ended" ? this.#endedView() : html`<div class="panel"><div class="empty-state">当前没有通话，请先在「选择服务」发起。</div></div>`) : ""}
-        ${this.nav === "list" ? this.#listView() : ""}
-      `,
+    return renderApp(this, {
+      crumb: (...args) => this.#crumb(...args),
+      dtmf: (...args) => this.#dtmf(...args),
+      go: (...args) => this.#go(...args),
+      hangup: (...args) => this.#hangup(...args),
+      pick: (...args) => this.#pick(...args),
+      playRemoteAudio: (...args) => this.#playRemoteAudio(...args),
+      respondVideo: (...args) => this.#respondVideo(...args),
+      restart: () => location.reload(),
+      setUserId: (value) => { this.userId = value; },
+      start: (...args) => this.#start(...args),
+      startToken: (...args) => this.#startToken(...args),
+      switchCamera: (...args) => this.#switchCamera(...args),
+      toggle: (...args) => this.#toggle(...args)
     });
-  }
-
-  #inviteView() {
-    const video = this.inviteMedia === "video";
-    return html`
-      <div class="panel h5-invite">
-        <div class="h5-invite-icon" aria-hidden="true">${video ? "▣" : "◉"}</div>
-        <h2>${video ? "视频服务邀请" : "语音服务邀请"}</h2>
-        <p class="muted">点击下方按钮后，浏览器将申请${video ? "摄像头和麦克风" : "麦克风"}权限，并进入服务队列。</p>
-        <ul class="h5-checklist">
-          <li>请使用稳定网络并保持页面开启</li>
-          <li>通话可能因服务质量需要被录音</li>
-          <li>邀请链接仅在有效期内可使用</li>
-        </ul>
-        <button class="h5-start" @click=${() => this.#startToken()}>${video ? "开始视频通话" : "开始语音通话"}</button>
-        <p class="hint">继续即表示您同意使用设备权限完成本次服务。</p>
-      </div>
-    `;
-  }
-
-  #pickView() {
-    const sel = this.selected;
-    return html`
-      <div class="panel">
-        <h3 class="page-title">选择服务</h3>
-        ${this.queues.some((q) => q.video_enabled) ? html`
-          <label>
-            用户标识
-            <input
-              type="text"
-              maxlength="64"
-              autocomplete="username"
-              placeholder="发起视频时必填，例如：客户编号或账号"
-              .value=${this.userId}
-              @input=${(e) => { this.userId = e.target.value; }}
-            />
-          </label>
-          <p class="hint">该标识将作为本次视频通话的访客身份信息。</p>
-        ` : ""}
-        <div class="svc-grid">
-          ${!this.queues.length ? html`<div class="empty-state">暂无可用服务，请稍后重试</div>` : ""}
-          ${this.queues
-            .filter((q) => !q.video_enabled)
-            .map((q) => {
-              const on = sel?.queue?.id === q.id && !sel.video;
-              return html`<div class="svc-card ${on ? "selected" : ""}" role="button" tabindex="0"
-                @keydown=${(e) => { if (e.key === "Enter" || e.key === " ") this.#pick(q, false, false); }}
-                @click=${() => this.#pick(q, false, false)}>
-                <h3>${q.name}</h3>
-                <p class="muted">麦克风通话 · 平均等待约 30 秒</p>
-                <button @click=${(e) => { e.stopPropagation(); this.#start(q, false); }}>开始通话</button>
-              </div>`;
-            })}
-          ${this.queues
-            .filter((q) => q.video_enabled)
-            .map((q) => {
-              const on = sel?.queue?.id === q.id && sel.video;
-              return html`<div class="svc-card ${on ? "selected" : ""}" role="button" tabindex="0"
-                @keydown=${(e) => { if (e.key === "Enter" || e.key === " ") this.#pick(q, true, false); }}
-                @click=${() => this.#pick(q, true, false)}>
-                <h3>${q.name}</h3>
-                <p class="muted">需摄像头</p>
-                <button class="secondary" @click=${(e) => { e.stopPropagation(); this.#start(q, true); }}>开始视频</button>
-              </div>`;
-            })}
-        </div>
-        ${this.queues.some((q) => q.priority_enabled)
-          ? html`<p class="hint">部分队列支持 VIP 优先。</p>
-              ${this.queues
-                .filter((q) => q.priority_enabled)
-                .map((q) => html`<button class="secondary" @click=${() => this.#start(q, false, true)}>${q.name} · VIP 语音</button>`)}`
-          : ""}
-      </div>
-    `;
-  }
-
-  #queueIdleView() {
-    return html`
-      <div class="panel">
-        <h3>排队状态</h3>
-        <dl class="desc">
-          <dt>前方等候</dt>
-          <dd>0 位</dd>
-          <dt>已等待</dt>
-          <dd>00:00</dd>
-          <dt>录音提示</dt>
-          <dd>本通话可能会被录音</dd>
-        </dl>
-      </div>
-    `;
-  }
-
-  #listView() {
-    return html`
-      <div class="panel">
-        <h3>可进入队列</h3>
-        <table>
-          <tr><th>队列名称</th><th>类型</th><th>操作</th></tr>
-          ${this.queues.map(
-            (q) => html`<tr>
-              <td>${q.name}</td>
-              <td>${q.video_enabled ? "语音 / 视频" : "语音"}</td>
-              <td><button class="ghost" @click=${() => this.#start(q, false)}>进入</button></td>
-            </tr>`,
-          )}
-        </table>
-      </div>
-    `;
-  }
-
-  #waitView() {
-    return html`
-      <div class="panel queue-wait">
-        <audio id="queue-audio" autoplay playsinline></audio>
-        ${this.audioPlaybackBlocked ? html`<button @click=${() => this.#playRemoteAudio()}>播放声音</button>` : ""}
-        <h3>排队状态</h3>
-        <p class="muted">${this.permissionHint || "正在等待坐席接听…"}</p>
-        <div class="queue-position" aria-label="前方等候 ${this.position || 0} 位">
-          <div class="queue-position-inner">
-            <strong>${this.position || 0}</strong>
-            <span>前方等候</span>
-          </div>
-        </div>
-        <dl class="desc">
-          <dt>前方等候</dt>
-          <dd>${this.position || 0} 位</dd>
-          <dt>已等待</dt>
-          <dd>${formatDuration(this.waitSec)}</dd>
-          <dt>录音提示</dt>
-          <dd>${this.notice || "本通话可能会被录音"}</dd>
-        </dl>
-        <p class="ivr-pad-label">IVR 请按键：</p>
-        ${renderDialpad((digit) => this.#dtmf(digit))}
-        <div class="toolbar toolbar-spaced">
-          <button class="secondary" @click=${() => this.#hangup()}>结束排队</button>
-        </div>
-      </div>
-    `;
-  }
-
-  #talkView() {
-    return html`
-      <div class="panel guest-talk">
-        <h3>通话中 ${formatDuration(this.elapsed)}</h3>
-        ${this.notice ? html`<p class="notice" role="status" aria-live="polite">${this.notice}</p>` : ""}
-        ${this.videoAsk
-          ? html`<p class="notice" role="status" aria-live="polite">坐席请求开启视频
-              <button @click=${() => { respondVideo(this.join.call_id, true); this.videoAsk = null; }}>同意</button>
-              <button class="secondary" @click=${() => { respondVideo(this.join.call_id, false); this.videoAsk = null; }}>拒绝</button>
-            </p>`
-          : ""}
-        <div class="row">
-          <video id="remote" autoplay muted playsinline aria-label="坐席画面"></video>
-          <audio id="remote-audio" autoplay playsinline></audio>
-          <video id="local" autoplay muted playsinline aria-label="本地预览"></video>
-        </div>
-        ${this.audioPlaybackBlocked ? html`<button @click=${() => this.#playRemoteAudio()}>播放声音</button>` : ""}
-        <div class="toolbar">
-          <button class="secondary" aria-pressed=${this.audioMuted} @click=${() => this.#toggle("audio")}>${this.audioMuted ? "取消静音" : "静音"}</button>
-          ${this.wantVideo
-            ? html`<button class="secondary" aria-pressed=${this.videoMuted} @click=${() => this.#toggle("video")}>${this.videoMuted ? "开摄像头" : "关摄像头"}</button>`
-            : html`<button class="secondary" @click=${() => respondVideo(this.join.call_id, true)}>同意升视频</button>`}
-          ${this.wantVideo ? html`<button class="secondary" @click=${() => this.#switchCamera()}>切换摄像头</button>` : ""}
-          <button class="danger" @click=${() => this.#hangup()}>挂断</button>
-        </div>
-        ${renderDialpad((digit) => this.#dtmf(digit))}
-      </div>
-    `;
-  }
-
-  #endedView() {
-    return html`
-      <div class="panel">
-        <h3>通话已结束</h3>
-        <p class="muted">设备已释放。</p>
-        <button @click=${() => location.reload()}>返回</button>
-      </div>
-    `;
   }
 }
 

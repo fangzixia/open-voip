@@ -1,6 +1,159 @@
+// 本文件负责通话界面样式。
 import { css } from "lit";
 
 export const callStyles = css`
+  .workbench {
+    display: grid;
+    gap: 16px;
+    align-items: start;
+  }
+
+  .incoming-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+  }
+
+  .incoming-bar strong {
+    font-size: 15px;
+  }
+
+  .stage {
+    padding: 28px 20px 20px;
+    text-align: center;
+    min-height: 300px;
+  }
+
+  .stage-timer {
+    letter-spacing: 3px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .stage-meta {
+    margin: 12px 0 22px;
+    font-size: 14px;
+  }
+
+  .stage-videos {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .stage video {
+    width: 100%;
+    max-width: 420px;
+    background: #020617;
+    border-radius: 8px;
+  }
+
+  .stage-videos video#local {
+    max-width: 160px;
+  }
+
+  .stage.share video#remote {
+    max-width: 100%;
+    flex: 2 1 520px;
+    min-height: 240px;
+  }
+
+  video {
+    width: 100%;
+    max-width: 420px;
+    background: #111;
+    border-radius: 8px;
+  }
+
+  .stage-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  button.ctl {
+    width: 56px;
+    margin: 0;
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #e2e8f0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-size: 11px;
+    box-shadow: none;
+  }
+
+  button.ctl:hover:not(:disabled) {
+    background: #334155;
+    border-color: #475569;
+    color: #fff;
+  }
+
+  button.hangup {
+    width: 64px;
+    margin: 0;
+    color: #fff;
+    font-size: 12px;
+  }
+
+  button.hangup:hover:not(:disabled) {
+    background: #ff7875;
+    border-color: #ff7875;
+  }
+
+  .stage-extra {
+    margin-top: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .stage-extra button {
+    background: #1e293b;
+    border-color: #334155;
+    color: #e2e8f0;
+  }
+
+  .stage-extra button:hover:not(:disabled) {
+    background: #334155;
+    border-color: #475569;
+    color: #fff;
+  }
+
+  .stage-extra select {
+    width: auto;
+    background: #1e293b;
+    border-color: #334155;
+    color: #e2e8f0;
+  }
+
+  .dialpad {
+    display: grid;
+    grid-template-columns: repeat(3, 48px);
+    gap: 8px;
+    justify-content: center;
+    margin: 16px auto 0;
+  }
+
+  .dialpad button {
+    width: 48px;
+    margin: 0;
+    background: #1e293b;
+    border-color: #334155;
+    color: #fff;
+  }
+
+
   .workbench {
     grid-template-columns: minmax(0, 1fr) 300px;
   }
@@ -38,6 +191,10 @@ export const callStyles = css`
     border-radius: var(--ov-radius-md);
     background: #1c2030;
     box-shadow: var(--ov-shadow-sm);
+  }
+
+  .guest-talk video {
+    max-width: 100%;
   }
 
   button.ctl,

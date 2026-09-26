@@ -1,3 +1,4 @@
+// 本文件负责界面设计变量。
 import { css } from "lit";
 
 export const tokenStyles = css`

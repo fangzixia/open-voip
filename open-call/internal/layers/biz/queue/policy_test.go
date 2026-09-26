@@ -1,3 +1,4 @@
+// 本文件验证policy的关键行为。
 package queue
 
 import (

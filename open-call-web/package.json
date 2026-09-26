@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test shared/*.test.js admin/*.test.js",
+    "test": "node --test admin/controllers/*.test.js shared/*.test.js shared/components/ivr/*.test.js",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

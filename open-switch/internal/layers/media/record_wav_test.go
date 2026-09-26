@@ -1,3 +1,4 @@
+// 本文件验证record wav的关键行为。
 package media
 
 import (

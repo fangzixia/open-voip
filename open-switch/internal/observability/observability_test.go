@@ -1,3 +1,4 @@
+// 本文件验证指标和追踪初始化的关键行为。
 package observability
 
 import (

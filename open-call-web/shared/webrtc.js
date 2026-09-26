@@ -218,7 +218,7 @@ export function stopMedia(pc, localStream) {
     try {
       s.track?.stop();
     } catch {
-      /* ignore */
+      /* 忽略该异常，继续执行后续操作。 */
     }
   });
   pc?.close();

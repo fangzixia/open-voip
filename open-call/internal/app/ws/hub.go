@@ -292,7 +292,7 @@ func (h *Hub) handleClient(ctx context.Context, cl *client, data []byte) {
 	case "ping":
 		_ = cl.send(ctx, envelope{Type: "pong", TS: datetime.Format(time.Now())})
 	case "call.answer":
-		if h.calls == nil || cl.principal.AgentID == "" {
+		if h.calls == nil || cl.principal.AgentID == "" || !cl.principal.Has("calls.operate") {
 			return
 		}
 		callID, _ := msg.Payload["call_id"].(string)
@@ -302,7 +302,7 @@ func (h *Hub) handleClient(ctx context.Context, cl *client, data []byte) {
 			_ = cl.send(ctx, envelope{Type: "error", Payload: map[string]any{"message": err.Error()}})
 		}
 	case "call.decline":
-		if h.calls == nil || cl.principal.AgentID == "" {
+		if h.calls == nil || cl.principal.AgentID == "" || !cl.principal.Has("calls.operate") {
 			return
 		}
 		callID, _ := msg.Payload["call_id"].(string)
@@ -310,7 +310,7 @@ func (h *Hub) handleClient(ctx context.Context, cl *client, data []byte) {
 		observability.Emit(ctx, "ws.call.decline", nil)
 		_ = h.calls.Decline(ctx, callID, cl.principal.AgentID)
 	case "agent.set_state":
-		if h.agents == nil || cl.principal.AgentID == "" {
+		if h.agents == nil || cl.principal.AgentID == "" || !cl.principal.Has("agents.self") {
 			return
 		}
 		state, _ := msg.Payload["state"].(string)

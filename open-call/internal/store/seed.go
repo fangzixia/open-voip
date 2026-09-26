@@ -10,6 +10,7 @@ import (
 
 	"open-call/internal/config"
 	"open-call/internal/layers/biz/auth"
+	"open-call/internal/layers/biz/authz"
 	"open-call/internal/store/models"
 )
 
@@ -139,6 +140,11 @@ func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) erro
 		}
 		if err := tx.Create(&supUser).Error; err != nil {
 			return err
+		}
+		for _, u := range []models.User{admin, agentUser, agentUser2, supUser} {
+			if err := tx.Create(&authz.UserRole{UserID: u.ID, RoleID: u.Role}).Error; err != nil {
+				return err
+			}
 		}
 		if err := tx.Create(&supAg).Error; err != nil {
 			return err

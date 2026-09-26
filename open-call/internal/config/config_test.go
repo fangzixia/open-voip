@@ -1,3 +1,4 @@
+// 本文件验证服务配置读取与校验的关键行为。
 package config
 
 import (

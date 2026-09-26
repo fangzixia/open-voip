@@ -1,3 +1,4 @@
+// 本文件验证视频录制流程的关键行为。
 package media
 
 import (

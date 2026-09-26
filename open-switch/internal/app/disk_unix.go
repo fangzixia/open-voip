@@ -1,5 +1,7 @@
 //go:build !windows
 
+// 本文件负责Unix 平台磁盘空间查询。
+
 package app
 
 import "syscall"

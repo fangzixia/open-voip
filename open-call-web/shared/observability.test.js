@@ -1,3 +1,4 @@
+// 本文件验证observability的关键行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 

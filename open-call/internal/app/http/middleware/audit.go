@@ -1,3 +1,4 @@
+// 本文件负责请求审计中间件。
 package middleware
 
 import (
@@ -29,8 +30,8 @@ func (w *auditStatusWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
-// AuditMutations records every authenticated state-changing HTTP request. Domain
-// audit records may add richer detail; this record guarantees route coverage.
+// AuditMutations 记录每个已认证且会修改状态的 HTTP 请求。
+// 业务审计可以补充细节，此记录保证所有相关路由都有审计信息。
 func AuditMutations(service *audit.Service) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

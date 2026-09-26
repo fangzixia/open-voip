@@ -1,3 +1,4 @@
+// 本文件验证password的关键行为。
 package auth
 
 import "testing"

@@ -1,3 +1,4 @@
+// 本文件负责交换服务管理接口处理。
 package http
 
 import (
@@ -225,7 +226,7 @@ func (d RouterDeps) handleTURN(w http.ResponseWriter, r *http.Request) {
 
 func (d RouterDeps) handleForceCheckout(w http.ResponseWriter, r *http.Request) {
 	p, ok := principal(r)
-	if !ok || (p.Role != "admin" && p.Role != "supervisor") {
+	if !ok || !p.Has("agents.force_checkout") {
 		writeErr(w, errs.Forbidden("仅管理员或班长可强制签出"))
 		return
 	}
@@ -242,7 +243,7 @@ func (d RouterDeps) handleForceCheckout(w http.ResponseWriter, r *http.Request) 
 
 func (d RouterDeps) handleListen(w http.ResponseWriter, r *http.Request) {
 	p, ok := principal(r)
-	if !ok || p.AgentID == "" || (p.Role != "admin" && p.Role != "supervisor") {
+	if !ok || p.AgentID == "" || !p.Has("calls.listen") {
 		writeErr(w, errs.Forbidden("班长需要坐席资料"))
 		return
 	}

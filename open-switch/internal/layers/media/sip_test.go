@@ -1,3 +1,4 @@
+// 本文件验证sip的关键行为。
 package media
 
 import (

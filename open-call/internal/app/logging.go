@@ -1,3 +1,4 @@
+// 本文件负责应用日志配置。
 package app
 
 import (
@@ -182,7 +183,7 @@ func (r *logResources) Close() error {
 	return first
 }
 
-// newLogger creates stdout + application JSONL + trace JSONL sinks.
+// newLogger 创建标准输出、应用 JSONL 和追踪 JSONL 三类日志目标。
 func newLogger(cfg config.LogConfig) (*slog.Logger, io.Closer, error) {
 	level := slog.LevelInfo
 	switch strings.ToLower(cfg.Level) {

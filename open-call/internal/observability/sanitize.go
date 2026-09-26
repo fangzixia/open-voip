@@ -1,3 +1,4 @@
+// 本文件负责日志敏感信息过滤。
 package observability
 
 import (
@@ -16,7 +17,7 @@ var (
 	secretPattern = regexp.MustCompile(`(?i)\b(jwt|token|password|credential|ice-pwd)\s*[:=]\s*[^\s,;&\r\n]+`)
 )
 
-// SanitizeMap recursively copies fields while removing credentials and SDP ICE passwords.
+// SanitizeMap 递归复制字段，同时移除凭据和 SDP ICE 密码。
 func SanitizeMap(fields map[string]any) map[string]any {
 	if fields == nil {
 		return nil
@@ -66,7 +67,7 @@ func sensitiveKey(key string) bool {
 		strings.Contains(normalized, "password") || strings.Contains(normalized, "credential")
 }
 
-// SanitizeString redacts bearer/JWT material and SDP a=ice-pwd lines.
+// SanitizeString 脱敏 Bearer/JWT 凭据和 SDP a=ice-pwd 字段。
 func SanitizeString(value string) string {
 	value = headerPattern.ReplaceAllString(value, "${1}: "+redacted)
 	value = bearerPattern.ReplaceAllString(value, "Bearer "+redacted)

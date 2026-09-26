@@ -1,11 +1,6 @@
 import { request } from "./http-client.js";
 import { formatDate, formatDateTime } from "./datetime.js";
-export { ApiError } from "./http-client.js";
-export const apiFetch = request;
-
-export function fetchHealth() {
-  return apiFetch("/health", { auth: false, method: "GET" });
-}
+const apiFetch = request;
 
 export function fetchStatus() {
   return apiFetch("/api/v1/status", { method: "GET" });
@@ -17,6 +12,21 @@ export function login(username, password) {
     auth: false,
     body: JSON.stringify({ username, password }),
   });
+}
+export function authOptions() { return apiFetch("/api/v1/auth/options", { auth: false }); }
+export function authMe() { return apiFetch("/api/v1/auth/me"); }
+export function exchangeSSOTicket(ticket) { return apiFetch("/api/v1/auth/oidc/exchange", { method: "POST", auth: false, body: JSON.stringify({ ticket }) }); }
+export function startSSO(returnPath) {
+  const base = new URL(import.meta.env?.VITE_API_BASE || window.__OPEN_VOIP__?.apiBase || window.location.origin, window.location.origin);
+  const url = new URL("/api/v1/auth/oidc/start", base);
+  url.searchParams.set("return_to", returnPath);
+  window.location.assign(url.href);
+}
+export function popSSOTicket() {
+  const hash = window.location.hash.replace(/^#/, "");
+  const ticket = new URLSearchParams(hash).get("sso_ticket");
+  if (ticket) history.replaceState(null, "", window.location.pathname + window.location.search);
+  return ticket;
 }
 
 export function logout() {
@@ -115,6 +125,18 @@ export function listUsers() {
 export function createUser(body) {
   return apiFetch("/api/v1/users", { method: "POST", body: JSON.stringify(body) });
 }
+export function patchUser(id,body) { return apiFetch(`/api/v1/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }); }
+export function revokeUserSessions(id) { return apiFetch(`/api/v1/users/${encodeURIComponent(id)}/revoke-sessions`, { method: "POST" }); }
+export function listRoles() { return apiFetch("/api/v1/roles"); }
+export function listPermissions() { return apiFetch("/api/v1/permissions"); }
+export function saveRole(id,name,permissions) { return apiFetch(`/api/v1/roles/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ name, permissions }) }); }
+export function deleteRole(id) { return apiFetch(`/api/v1/roles/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export function setUserRoles(id,roles) { return apiFetch(`/api/v1/users/${encodeURIComponent(id)}/roles`, { method: "PUT", body: JSON.stringify({ roles }) }); }
+export function listGroupMappings() { return apiFetch("/api/v1/identity/group-mappings"); }
+export function saveGroupMapping(group,roles) { return apiFetch("/api/v1/identity/group-mappings", { method: "PUT", body: JSON.stringify({ group, roles }) }); }
+export function listIdentities(id) { return apiFetch(`/api/v1/users/${encodeURIComponent(id)}/identities`); }
+export function bindIdentity(id,issuer,subject) { return apiFetch(`/api/v1/users/${encodeURIComponent(id)}/identities`, { method: "POST", body: JSON.stringify({ issuer, subject }) }); }
+export function unbindIdentity(id,issuer,subject) { return apiFetch(`/api/v1/users/${encodeURIComponent(id)}/identities?issuer=${encodeURIComponent(issuer)}&subject=${encodeURIComponent(subject)}`, { method: "DELETE" }); }
 
 export function createQueue(body) {
   return apiFetch("/api/v1/queues", { method: "POST", body: JSON.stringify(body) });

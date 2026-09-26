@@ -1,3 +1,4 @@
+// 本文件验证authorization的关键行为。
 package http
 
 import (
@@ -25,10 +26,11 @@ func TestSwitchRejectsUnrelatedPrincipalAndLeg(t *testing.T) {
 		path, principal string
 		status          int
 	}{
-		{"/switch/v1/calls/c", `{"agent_id":"other","role":"agent"}`, 403},
+		{"/switch/v1/calls/c", `{"agent_id":"other","role":"agent","permissions":["calls.read"]}`, 403},
 		{"/switch/v1/calls/c", `{"guest_id":"g","role":"guest"}`, 403},
 		{"/switch/v1/calls/c", `{"guest_id":"g","role":"guest","guest_call_id":"c"}`, 200},
-		{"/switch/v1/calls/c/legs/customer/mute", `{"agent_id":"owner","role":"agent"}`, 403},
+		{"/switch/v1/calls/c", `{"agent_id":"owner","role":"agent","permissions":["calls.read"]}`, 200},
+		{"/switch/v1/calls/c/legs/customer/mute", `{"agent_id":"owner","role":"agent","permissions":["calls.operate"]}`, 403},
 		{"/switch/v1/supervisor/agents/owner/force-check-out", `{"agent_id":"owner","role":"agent"}`, 403},
 	}
 	for _, tc := range cases {

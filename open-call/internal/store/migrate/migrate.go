@@ -10,13 +10,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// Each service owns its migration ledger even when both share a PostgreSQL schema.
-// Their SQL version numbers overlap, so a shared ledger would silently skip migrations.
+// 每个服务独立记录迁移版本，即使共用同一个 PostgreSQL schema。
+// 两个服务的 SQL 版本号可能重复，共用版本表会导致迁移被跳过。
 const migrationsTable = "oc_schema_migrations"
 
-// migrationLockID serializes first boot and upgrades across processes that use
-// the same database. PostgreSQL can otherwise race while two processes both
-// execute CREATE TABLE IF NOT EXISTS for the migration ledger.
+// migrationLockID 对使用同一数据库的进程首次启动与升级进行串行化，
+// 避免两个进程同时创建迁移版本表时产生 PostgreSQL 并发冲突。
+
 const migrationLockID int64 = 0x6f635f6d696772 // "oc_migr"
 
 // ensureMigrationsTableSQL 启动时确保业务服务的版本表存在。

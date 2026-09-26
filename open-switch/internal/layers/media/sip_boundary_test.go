@@ -1,3 +1,4 @@
+// 本文件验证sip boundary的关键行为。
 package media
 
 import (

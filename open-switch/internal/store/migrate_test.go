@@ -1,3 +1,4 @@
+// 本文件验证migrate的关键行为。
 package store
 
 import (

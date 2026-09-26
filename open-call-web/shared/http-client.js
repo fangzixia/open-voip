@@ -1,4 +1,4 @@
-import { getAccessToken, clearAccessToken } from "./auth-store.js";
+import { getAccessToken, getRefreshToken, setAuthTokens, clearAccessToken } from "./auth-store.js";
 import { createId, getCallContext } from "./call-context.js";
 import { reportEvent } from "./observability.js";
 import { getRuntimeConfig } from "./runtime-config.js";
@@ -18,6 +18,31 @@ export class ApiError extends Error {
 }
 
 const messages = { 401: "登录已失效，请重新登录", 403: "没有操作权限", 404: "请求的资源不存在", 429: "请求过于频繁，请稍后重试", 500: "服务器内部错误", 502: "后端服务暂不可用", 503: "服务暂不可用" };
+let refreshing = null;
+async function currentToken(base) {
+  const token = getAccessToken();
+  const refresh = getRefreshToken();
+  if (!token || !refresh) return token;
+  let exp = 0;
+  try { exp = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).exp || 0; } catch { return token; }
+  if (exp * 1000 > Date.now() + 60000) return token;
+  if (!refreshing) refreshing = (async () => {
+    const url = new URL("/api/v1/auth/refresh", base);
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: refresh }) });
+    if (!res.ok) throw new Error("登录已失效，请重新登录");
+    const body = await res.json();
+    const pair = body?.data || body;
+    if (!pair?.access_token) throw new Error("令牌刷新失败");
+    if (getRefreshToken() === refresh) setAuthTokens(pair, { persist: true });
+    return getAccessToken();
+  })().finally(() => { refreshing = null; });
+  try { return await refreshing; } catch {
+    clearAccessToken();
+    const error = new ApiError(401, "登录已失效，请重新登录", null, "UNAUTHORIZED");
+    apiEvents.dispatchEvent(new CustomEvent("unauthorized", { detail: error }));
+    throw error;
+  }
+}
 
 // JSON 与文件请求共用此入口；写请求不会自动重试，以免重复执行。
 export async function request(path, options = {}) {
@@ -26,7 +51,7 @@ export async function request(path, options = {}) {
   const base = new URL(apiBase || window.location.origin, window.location.origin);
   const url = new URL(/^https?:\/\//i.test(path) ? path : `${base.href.replace(/\/$/, "")}/${path.replace(/^\//, "")}`);
   if (url.origin !== base.origin) throw new ApiError(0, "请求地址不属于配置的后端", null, "INVALID_URL");
-  const token = auth ? getAccessToken() : null;
+  const token = auth ? await currentToken(base) : null;
   const headers = new Headers(init.headers);
   const context = getCallContext();
   const requestId = createId();

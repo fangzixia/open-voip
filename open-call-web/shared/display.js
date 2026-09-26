@@ -1,3 +1,4 @@
+// 本文件负责界面展示值的格式化。
 const AGENT_STATE_LABELS = {
   idle: "空闲",
   busy: "示忙",

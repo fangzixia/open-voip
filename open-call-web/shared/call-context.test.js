@@ -1,3 +1,4 @@
+// 本文件验证通话上下文的构建与读取的关键行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { beginTrace, clearCallContext, getCallContext, setCallContext } from "./call-context.js";

@@ -1,3 +1,4 @@
+// 本文件验证rate limit的关键行为。
 package middleware
 
 import (

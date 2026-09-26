@@ -1,3 +1,4 @@
+// 本文件负责可观测性接口处理。
 package observability
 
 import (
@@ -6,7 +7,7 @@ import (
 	"log/slog"
 )
 
-// RedactingHandler applies last-line credential protection to every log sink.
+// RedactingHandler 在写入每个日志目标前再次过滤凭据。
 type RedactingHandler struct{ next slog.Handler }
 
 func NewRedactingHandler(next slog.Handler) slog.Handler { return &RedactingHandler{next: next} }
@@ -99,7 +100,7 @@ func (h *MultiHandler) WithGroup(n string) slog.Handler {
 	return &MultiHandler{handlers: out}
 }
 
-// TraceOnlyHandler writes only records carrying the event field.
+// TraceOnlyHandler 只写入包含 event 字段的追踪记录。
 type TraceOnlyHandler struct{ next slog.Handler }
 
 func NewTraceOnlyHandler(next slog.Handler) slog.Handler { return &TraceOnlyHandler{next: next} }

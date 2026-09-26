@@ -1,3 +1,4 @@
+// 本文件负责Vite 构建配置、入口和运行时接口地址注入。
 import { resolve } from "node:path";
 import { defineConfig, loadEnv } from "vite";
 

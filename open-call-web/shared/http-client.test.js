@@ -1,3 +1,4 @@
+// 本文件验证http client的关键行为。
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 

@@ -1,4 +1,5 @@
-// Package observability provides correlation fields, structured trace events and secret redaction.
+// 本文件负责指标和追踪初始化。
+// Package observability 提供关联字段、结构化追踪事件和敏感信息脱敏。
 package observability
 
 import (
@@ -30,7 +31,7 @@ type contextKey string
 
 const fieldsKey contextKey = "observability.fields"
 
-// Fields is the stable correlation contract shared with open-call.
+// Fields 定义与 open-call 共用的稳定关联字段。
 type Fields struct {
 	TraceID, RequestID, CallID, LegID, AgentID, QueueID string
 }
@@ -85,7 +86,7 @@ func Attrs(ctx context.Context) []any {
 	return out
 }
 
-// Event emits a trace record using the fixed event contract.
+// Event 按固定事件结构输出一条追踪记录。
 func Event(ctx context.Context, component, event, phase, result, reason string, started time.Time, attrs ...any) {
 	args := Attrs(ctx)
 	args = append(args, ComponentKey, component, EventKey, event)
@@ -113,7 +114,7 @@ var (
 	icePwd         = regexp.MustCompile(`(?im)^(a=ice-pwd:)[^\r\n]*`)
 )
 
-// Redact removes credentials while retaining protocol structure useful for diagnosis.
+// Redact 移除凭据并保留排查问题所需的协议结构。
 func Redact(s string) string {
 	s = headerSecret.ReplaceAllString(s, "$1: [REDACTED]")
 	s = bearerSecret.ReplaceAllString(s, "Bearer [REDACTED]")

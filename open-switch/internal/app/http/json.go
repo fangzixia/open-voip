@@ -1,3 +1,4 @@
+// 本文件负责HTTP 请求与响应的 JSON 编解码。
 package http
 
 import (

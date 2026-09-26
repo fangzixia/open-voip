@@ -1,3 +1,4 @@
+// 本文件验证webrtc的关键行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { acquireAgentMedia, addRemoteTrack, microphoneConstraints } from "./webrtc.js";

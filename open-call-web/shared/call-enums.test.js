@@ -1,3 +1,4 @@
+// 本文件验证通话状态和类型常量的关键行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { callResultLabel, sessionTypeLabel } from "./call-enums.js";

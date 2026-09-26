@@ -1,3 +1,4 @@
+// 本文件负责运行状态接口处理。
 package http
 
 import (

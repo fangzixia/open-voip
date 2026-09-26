@@ -1,3 +1,4 @@
+// 本文件负责SIP 注册与呼叫认证。
 package media
 
 import (

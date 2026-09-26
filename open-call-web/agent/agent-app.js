@@ -1,63 +1,21 @@
+import { NAV, renderApp } from "./views/shell.js";
 import { bindApiFeedback } from "../shared/http-client.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { formatDateTime } from "../shared/datetime.js";
-import { LitElement, html } from "lit";
-import {
-  answerCall,
- fetchMyCalls,
-  checkIn,
-  checkOut,
-  conferenceInvite,
-  createGuestSession,
-  downgradeVideo,
-  fetchAgentMe,
-  fetchLiveReport,
-  getCall,
-  hangupCall,
-  holdCall,
-  listAgents,
-  listQueues,
-  listenCall,
-  login,
-  logout,
-  outboundCall,
-  requestVideo,
-  screenShare,
-  sendDtmf,
-  setAgentState,
-  transferCall,
-  completeTransfer,
-  wrapUp,
-} from "../shared/api.js";
-import { clearAccessToken, getAccessToken, setAccessToken } from "../shared/auth-store.js";
-import { sessionTypeLabel } from "../shared/call-enums.js";
-import { renderAppShell, renderDialpad, renderEmptyTable, renderFeedback, renderLoginLayout } from "../shared/components/ui.js";
-import { agentStateLabel, agentStateTone, formatDuration } from "../shared/display.js";
-import { shellStyles } from "../shared/shell-styles.js";
-import {
-  applyAudioOutput,
-  isWebRTCSupported,
-  listMediaDevices,
-  replaceInputDevice,
-  setLocalMuted,
-  startMediaSession,
-  startScreenShare,
-  stopMedia,
-} from "../shared/webrtc.js";
+import { LitElement } from "lit";
+import { answerCall, authMe, authOptions, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, screenShare, sendDtmf, setAgentState, startSSO, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
+import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
+import { appStyles } from "../shared/styles/index.js";
+import { applyAudioOutput, listMediaDevices, replaceInputDevice, setLocalMuted, startMediaSession, startScreenShare, stopMedia,  } from "../shared/webrtc.js";
 import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
 
-const NAV = [
-  { id: "desk", label: "工作台" },
-  { id: "inbound", label: "呼入" },
-  { id: "outbound", label: "外呼" },
-  { id: "queue", label: "队列签入" },
-  { id: "device", label: "设备" },
-];
 
 export class AgentApp extends LitElement {
   static properties = {
     error: { type: String },
+    authOptions: { type: Object },
+    permissions: { type: Array },
     username: { type: String },
     password: { type: String },
     me: { type: Object },
@@ -95,7 +53,7 @@ export class AgentApp extends LitElement {
     live: { type: Object },
   };
 
-  static styles = shellStyles;
+  static styles = appStyles;
 
   #ws = new BusinessWebSocket();
   #pc = null;
@@ -107,11 +65,15 @@ export class AgentApp extends LitElement {
   #clockTimer = null;
   #mediaConnecting = false;
 
+  get hasLocal() { return !!this.#local; }
+
   constructor() {
     super();
     this.error = "";
-    this.username = "agent1";
-    this.password = "changeme";
+    this.authOptions = null;
+    this.permissions = [];
+    this.username = "";
+    this.password = "";
     this.me = null;
     this.queues = [];
     this.selectedQueues = [];
@@ -153,7 +115,10 @@ export class AgentApp extends LitElement {
     this._unbindApi = bindApiFeedback(this, () => { this.#ws.disconnect(); this.#endLocal(); this.me = null; });
     this.#tickClock();
     this.#clockTimer = setInterval(() => this.#tickClock(), 1000);
-    if (getAccessToken()) this.#restore();
+    authOptions().then((v) => { this.authOptions = v || {}; }).catch(() => { this.authOptions = { unavailable: true }; this.error = "无法读取登录方式"; });
+    const ticket = popSSOTicket();
+    if (ticket) this.#completeSSO(ticket);
+    else if (getAccessToken()) this.#restore();
   }
 
   disconnectedCallback() {
@@ -171,11 +136,15 @@ export class AgentApp extends LitElement {
 
   async #restore() {
     try {
+      const identity = await authMe();
+      this.permissions = identity.permissions || [];
+      const can = (code) => this.permissions.includes(code);
       this.me = await fetchAgentMe();
       setCallContext({ agent_id: this.me.id, role: this.me.role || "agent" });
-      this.queues = (await listQueues()).items || [];
+      this.queues = can("queues.read") ? (await listQueues()).items || [] : [];
       this.devices = await listMediaDevices();
-      this.agents = (await listAgents()).items || [];
+      this.agents = can("agents.read") ? (await listAgents()).items || [] : [];
+      if (!can("calls.operate") && ["inbound", "outbound"].includes(this.nav)) this.nav = "queue";
       try {
         this.live = await fetchLiveReport();
       } catch {
@@ -194,12 +163,14 @@ export class AgentApp extends LitElement {
     ev.preventDefault();
     try {
       const tokens = await login(this.username, this.password);
-      setAccessToken(tokens.access_token, { persist: true });
+      setAuthTokens(tokens, { persist: true });
       await this.#restore();
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e);
     }
   }
+
+  async #completeSSO(ticket) { try { const tokens = await exchangeSSOTicket(ticket); setAuthTokens(tokens, { persist: true }); await this.#restore(); } catch (e) { this.error = e instanceof Error ? e.message : String(e); } }
 
   #connectWs() {
     this.#ws.disconnect();
@@ -747,301 +718,63 @@ export class AgentApp extends LitElement {
     return this.call?.queue_name || this.incoming?.queue_name || "—";
   }
 
+  #navigate(id) {
+    this.nav = id;
+    if (id === "desk" && this.#pc) this.#bindVideos();
+  }
+
+  #respondVideo(accept) {
+    if (this.call?.id) this.#ws.send("video.respond", { call_id: this.call.id, accept });
+  }
+
   render() {
-    if (!this.me) return this.#loginView();
-    const state = this.me.session?.state || "offline";
-    return renderAppShell({
-      subtitle: "坐席工作台",
-      navItems: NAV,
-      activeNav: this.nav,
-      onNavigate: (id) => {
-        this.nav = id;
-        if (id === "desk" && this.#pc) this.#bindVideos();
-      },
-      breadcrumb: this.#crumb(),
-      badges: { inbound: this.incoming ? 1 : 0 },
-      topbar: html`
-          <span class="topbar-meta">${this.clock}</span>
-          <span class="topbar-meta">${this.me.display_name || this.me.extension} · ${this.me.extension || ""}</span>
-          <span class="tag ${agentStateTone(state)}">${agentStateLabel(state)}</span>
-          <button @click=${() => this.#logout()}>退出</button>
-      `,
-      content: html`
-        ${renderFeedback({ error: this.error, notice: this.notice })}
-        ${this.nav === "desk" ? this.#deskView(state) : ""}
-        ${this.nav === "inbound" ? this.#inboundView() : ""}
-        ${this.nav === "outbound" ? this.#outboundView() : ""}
-        ${this.nav === "queue" ? this.#queueView(state) : ""}
-        ${this.nav === "device" ? this.#deviceView() : ""}
-      `,
+    return renderApp(this, {
+      answer: (...args) => this.#answer(...args),
+      askVideo: (...args) => this.#askVideo(...args),
+      bindVideos: (...args) => this.#bindVideos(...args),
+      completeXfer: (...args) => this.#completeXfer(...args),
+      conf: (...args) => this.#conf(...args),
+      copyGuestLink: (...args) => this.#copyGuestLink(...args),
+      crumb: (...args) => this.#crumb(...args),
+      decline: (...args) => this.#decline(...args),
+      dial: (...args) => this.#dial(...args),
+      doCheckIn: (...args) => this.#doCheckIn(...args),
+      doCheckOut: (...args) => this.#doCheckOut(...args),
+      downgrade: (...args) => this.#downgrade(...args),
+      dtmf: (...args) => this.#dtmf(...args),
+      hangup: (...args) => this.#hangup(...args),
+      hold: (...args) => this.#hold(...args),
+      listen: (...args) => this.#listen(...args),
+      login: (...args) => this.#login(...args),
+      startSSO: () => startSSO("/agent/"),
+      logout: (...args) => this.#logout(...args),
+      makeLink: (...args) => this.#makeLink(...args),
+      navigate: (...args) => this.#navigate(...args),
+      onCamChange: (...args) => this.#onCamChange(...args),
+      onMicChange: (...args) => this.#onMicChange(...args),
+      onSpeakerChange: (...args) => this.#onSpeakerChange(...args),
+      playRemoteAudio: (...args) => this.#playRemoteAudio(...args),
+      preview: (...args) => this.#preview(...args),
+      respondVideo: (...args) => this.#respondVideo(...args),
+      setBusyReason: (value) => { this.busyReason = value; },
+      setDest: (value) => { this.dest = value; },
+      setUsername: (value) => { this.username = value; },
+      setPassword: (value) => { this.password = value; },
+      setGuestMedia: (value) => { this.guestMedia = value; },
+      setIdle: (...args) => this.#setIdle(...args),
+      setSelectedQueues: (value) => { this.selectedQueues = value; },
+      setShowPad: (value) => { this.showPad = value; },
+      setWrapNotes: (value) => { this.wrapNotes = value; },
+      setXferMode: (value) => { this.xferMode = value; },
+      share: (...args) => this.#share(...args),
+      stageCaller: (...args) => this.#stageCaller(...args),
+      stageQueue: (...args) => this.#stageQueue(...args),
+      submitWrap: (...args) => this.#submitWrap(...args),
+      toggleBusy: (...args) => this.#toggleBusy(...args),
+      toggleMute: (...args) => this.#toggleMute(...args),
+      waitingCount: (...args) => this.#waitingCount(...args),
+      xfer: (...args) => this.#xfer(...args)
     });
-  }
-
-  #loginView() {
-    return renderLoginLayout({
-      subtitle: "坐席工作台",
-      title: "坐席登录",
-      hint: `WebRTC：${isWebRTCSupported() ? "支持" : "不支持"}`,
-      onSubmit: (event) => this.#login(event),
-      error: this.error,
-      fields: html`
-        <div class="field">
-          <label for="agent-username">用户名</label>
-          <input id="agent-username" autocomplete="username" .value=${this.username} @input=${(e) => (this.username = e.target.value)} />
-        </div>
-        <div class="field">
-          <label for="agent-password">密码</label>
-          <input id="agent-password" type="password" autocomplete="current-password" .value=${this.password} @input=${(e) => (this.password = e.target.value)} />
-        </div>
-      `,
-    });
-  }
-
-  #deskView(state) {
-    const inCall = !!this.call;
-    return html`
-      <div class="panel">
-        <div class="toolbar tight">
-          <button @click=${() => this.#doCheckIn()}>签入</button>
-          <button class="secondary" @click=${() => this.#doCheckOut()}>签出</button>
-          <button class="${state === "idle" ? "" : "secondary"}" @click=${() => this.#setIdle()}>示闲</button>
-          <button class="${state === "busy" ? "" : "secondary"}" @click=${() => this.#toggleBusy()}>示忙</button>
-        </div>
-        ${this.incoming && !inCall ? this.#incomingBar() : ""}
-        ${!inCall && this.pendingWrapId ? this.#acwPanel() : ""}
-        <div class="workbench">
-          ${this.#stagePanel(inCall)}
-          ${this.#sideCard()}
-        </div>
-        <h4>近期通话</h4>
-        <table>
-          <tr>
-            <th>时间</th>
-            <th>主叫</th>
-            <th>队列</th>
-            <th>结果</th>
-            <th>时长</th>
-          </tr>
-          ${this.recentCalls.length
-            ? this.recentCalls.map(
-                (c) => html`<tr>
-                  <td>${c.time}</td>
-                  <td>${c.caller}</td>
-                  <td>${c.queue}</td>
-                  <td>${c.result}</td>
-                  <td>${formatDuration(c.duration)}</td>
-                </tr>`,
-              )
-            : renderEmptyTable(5, "暂无本会话通话记录")}
-        </table>
-        <div class="pager">共 ${this.recentCalls.length} 条</div>
-      </div>
-    `;
-  }
-
-  #incomingBar() {
-    return html`
-      <div class="incoming-bar">
-        <strong>来电</strong>
-        <span>${this.incoming.caller || "未知主叫"}</span>
-        <span class="muted">${this.incoming.queue_name || "—"} · ${sessionTypeLabel(this.incoming.session_type)}</span>
-        <span class="spacer"></span>
-        <button @click=${() => this.#answer()}>接听</button>
-        <button class="danger" @click=${() => this.#decline()}>拒接</button>
-      </div>
-    `;
-  }
-
-  #acwPanel() {
-    return html`
-      <div class="incoming-bar">
-        <strong>事后处理</strong>
-        <span class="muted">通话 ${this.pendingWrapId}</span>
-        <textarea class="acw-notes" .value=${this.wrapNotes} @input=${(e) => (this.wrapNotes = e.target.value)} placeholder="填写通话小结"></textarea>
-        <button @click=${() => this.#submitWrap()}>提交小结并示闲</button>
-      </div>
-    `;
-  }
-
-  #stagePanel(inCall) {
-    return html`
-      <div class="stage ${this.sharing ? "share" : ""}">
-        <div class="stage-timer">${formatDuration(this.elapsed)}</div>
-        <div class="stage-meta">
-          ${this.#stageCaller()}
-          ${this.#stageQueue() !== "—" ? html` · ${this.#stageQueue()}` : ""}
-          ${this.call?.session_type ? html` · ${sessionTypeLabel(this.call.session_type)}` : ""}
-          ${this.held ? html` · 保持` : ""}
-          ${!inCall ? html` · 空闲` : ""}
-        </div>
-        ${this.videoAsk && inCall
-          ? html`<p class="notice">对端请求升视频
-              <button @click=${() => this.#ws.send("video.respond", { call_id: this.call.id, accept: true })}>同意</button>
-              <button class="secondary" @click=${() => this.#ws.send("video.respond", { call_id: this.call.id, accept: false })}>拒绝</button>
-            </p>`
-          : ""}
-        ${inCall && this.cameraUnavailable
-          ? html`<p class="notice">本机没有可用摄像头，已用麦克风接通；仍可观看访客视频。</p>`
-          : ""}
-        ${inCall && this.audioPlaybackBlocked
-          ? html`<p class="notice">浏览器已暂停通话声音 <button @click=${() => this.#playRemoteAudio()}>播放声音</button></p>`
-          : ""}
-        ${inCall || this.#local
-          ? html`<div class="stage-videos">
-              ${inCall ? html`<video id="remote" autoplay muted playsinline></video><audio id="remote-audio" autoplay playsinline></audio>` : ""}
-              <video id="local" autoplay muted playsinline></video>
-            </div>`
-          : ""}
-        <div class="stage-controls">
-          <button class="ctl ${this.audioMuted ? "on" : ""}" ?disabled=${!inCall} @click=${() => this.#toggleMute("audio")}>${this.audioMuted ? "取消静音" : "静音"}</button>
-          <button class="ctl ${this.held ? "on" : ""}" ?disabled=${!inCall} @click=${() => this.#hold()}>${this.held ? "恢复" : "保持"}</button>
-          <button class="ctl ${this.showPad ? "on" : ""}" ?disabled=${!inCall} @click=${() => (this.showPad = !this.showPad)}>键盘</button>
-          <button class="ctl" ?disabled=${!inCall} @click=${() => this.#xfer()}>转接</button>
-          <button class="hangup" ?disabled=${!inCall} @click=${() => this.#hangup()}>挂断</button>
-        </div>
-        ${this.showPad && inCall ? renderDialpad((digit) => this.#dtmf(digit)) : ""}
-        ${inCall
-          ? html`<div class="stage-extra">
-              <button ?disabled=${this.cameraUnavailable} @click=${() => this.#toggleMute("video")}>${this.cameraUnavailable ? "无摄像头" : this.videoMuted ? "开摄像头" : "关摄像头"}</button>
-              <button @click=${() => this.#share()}>屏幕共享</button>
-              <button @click=${() => this.#askVideo()}>升视频</button>
-              <button @click=${() => this.#downgrade()}>降为语音</button>
-              <select .value=${this.xferMode} @change=${(e) => (this.xferMode = e.target.value)}>
-                <option value="blind">盲转</option>
-                <option value="consult">咨询转</option>
-              </select>
-              ${this.consulting ? html`<button @click=${() => this.#completeXfer()}>完成转接</button>` : ""}
-              <button @click=${() => this.#conf()}>邀请三方</button>
-              <button @click=${() => this.#submitWrap()}>提交小结</button>
-            </div>
-            <textarea class="wrap-notes" .value=${this.wrapNotes} @input=${(e) => (this.wrapNotes = e.target.value)} placeholder="通话小结"></textarea>`
-          : ""}
-      </div>
-    `;
-  }
-
-  #sideCard() {
-    return html`
-      <div>
-        <div class="panel side-panel">
-          <h3>外呼</h3>
-          <div class="field">
-            <label>目标号码</label>
-            <input .value=${this.dest} @input=${(e) => (this.dest = e.target.value)} placeholder="bob / 分机 / 号码" />
-          </div>
-          <button @click=${() => this.#dial()}>拨出</button>
-        </div>
-        <div class="panel">
-          <h3>排队</h3>
-          <p class="queue-count">${this.#waitingCount()} <span class="queue-count-unit">人</span></p>
-        </div>
-      </div>
-    `;
-  }
-
-  #inboundView() {
-    return html`
-      <div class="panel">
-        <h3>呼入</h3>
-        ${this.incoming
-          ? this.#incomingBar()
-          : html`<p class="muted">当前没有振铃来电。签入队列后，来电会显示在此处，也可在工作台接听。</p>`}
-      </div>
-    `;
-  }
-
-  #outboundView() {
-    return html`
-      <div class="panel">
-        <h3>外呼</h3>
-        <div class="form-inline">
-          <div class="field">
-            <label>目标号码</label>
-            <input .value=${this.dest} @input=${(e) => (this.dest = e.target.value)} placeholder="bob / 分机 / 号码" />
-          </div>
-          <button @click=${() => this.#dial()}>拨出</button>
-          <select aria-label="访客邀请媒体" .value=${this.guestMedia} @change=${(e) => (this.guestMedia = e.target.value)}>
-            <option value="video">视频邀请</option>
-            <option value="audio">语音邀请</option>
-          </select>
-          <button class="secondary" @click=${() => this.#makeLink()}>入会链接</button>
-          ${this.me.role === "supervisor" || this.me.role === "admin"
-            ? html`<button class="secondary" @click=${() => this.#listen()}>监听（填 call_id）</button>`
-            : ""}
-        </div>
-        ${this.guestLink ? html`
-          <div class="invite-link">
-            <label for="guest-link">H5 访客链接${this.guestExpiresAt ? `（有效至 ${this.guestExpiresAt}）` : ""}</label>
-            <input id="guest-link" readonly .value=${this.guestLink} />
-            <button class="secondary" @click=${() => this.#copyGuestLink()}>复制链接</button>
-          </div>` : ""}
-        <p class="hint">分机互拨填写对方分机；SIP 软电话填写 bob；PSTN 填 8 位以上号码。</p>
-      </div>
-    `;
-  }
-
-  #queueView(state) {
-    return html`
-      <div class="panel">
-        <h3>队列签入</h3>
-        ${this.queues.map(
-          (q) => html`<label class="check"
-            ><input
-              type="checkbox"
-              .checked=${this.selectedQueues.includes(q.id)}
-              @change=${(e) => {
-                if (e.target.checked) this.selectedQueues = [...this.selectedQueues, q.id];
-                else this.selectedQueues = this.selectedQueues.filter((id) => id !== q.id);
-              }}
-            />
-            ${q.name} ${q.video_enabled ? "(视频)" : "(语音)"}</label
-          >`,
-        )}
-        <div class="toolbar">
-          <button @click=${() => this.#doCheckIn()}>签入</button>
-          <button class="secondary" @click=${() => this.#doCheckOut()}>签出</button>
-          <button class="secondary" @click=${() => this.#toggleBusy()}>${state === "busy" ? "示闲" : "示忙"}</button>
-        </div>
-        <div class="field field-narrow">
-          <label>示忙原因</label>
-          <select .value=${this.busyReason} @change=${(e) => (this.busyReason = e.target.value)}>
-            <option value="break">小休</option>
-            <option value="training">培训</option>
-            <option value="meeting">会议</option>
-          </select>
-        </div>
-      </div>
-    `;
-  }
-
-  #deviceView() {
-    return html`
-      <div class="panel">
-        <h3>设备</h3>
-        <div class="form-inline">
-          <div class="field">
-            <label>麦克风</label>
-            <select @change=${(e) => this.#onMicChange(e.target.value)}>
-              ${this.devices.audioInputs.map((d) => html`<option value=${d.deviceId} ?selected=${d.deviceId === this.audioDeviceId}>${d.label || d.deviceId}</option>`)}
-            </select>
-          </div>
-          <div class="field">
-            <label>摄像头</label>
-            <select @change=${(e) => this.#onCamChange(e.target.value)}>
-              ${this.devices.videoInputs.map((d) => html`<option value=${d.deviceId} ?selected=${d.deviceId === this.videoDeviceId}>${d.label || d.deviceId}</option>`)}
-            </select>
-          </div>
-          <div class="field">
-            <label>扬声器</label>
-            <select @change=${(e) => this.#onSpeakerChange(e.target.value)}>
-              ${this.devices.audioOutputs.map((d) => html`<option value=${d.deviceId} ?selected=${d.deviceId === this.speakerDeviceId}>${d.label || d.deviceId || "默认"}</option>`)}
-            </select>
-          </div>
-          <button class="secondary" ?disabled=${!this.devices.videoInputs.length} @click=${() => this.#preview()}>预览摄像头</button>
-        </div>
-        ${this.#local && !this.call ? html`<video id="local" autoplay muted playsinline></video>` : ""}
-      </div>
-    `;
   }
 }
 

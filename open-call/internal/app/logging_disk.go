@@ -1,3 +1,4 @@
+// 本文件负责磁盘日志文件配置。
 package app
 
 import (

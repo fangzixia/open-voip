@@ -1,4 +1,5 @@
-// Package config loads and validates the open-call control-plane configuration.
+// 本文件负责服务配置读取与校验。
+// Package config 读取并校验业务服务配置。
 package config
 
 import (
@@ -15,6 +16,7 @@ type Config struct {
 	Database    DatabaseConfig    `yaml:"database"`
 	Recordings  RecordingsConfig  `yaml:"recordings"`
 	JWT         JWTConfig         `yaml:"jwt"`
+	OIDC        OIDCConfig        `yaml:"oidc"`
 	Log         LogConfig         `yaml:"log"`
 	TLS         TLSConfig         `yaml:"tls"`
 	Webhook     WebhookConfig     `yaml:"webhook"`
@@ -36,7 +38,7 @@ type DatabaseConfig struct {
 	DSN string `yaml:"dsn"`
 }
 
-// RecordingsConfig contains business retention policy only. Files belong to open-switch.
+// RecordingsConfig 仅包含业务保留策略，录音文件由 open-switch 管理。
 type RecordingsConfig struct {
 	RetainDays    int    `yaml:"retain_days"`
 	NotifyMessage string `yaml:"notify_message"`
@@ -58,6 +60,19 @@ type JWTConfig struct {
 	SigningKey    string `yaml:"signing_key"`
 }
 
+type OIDCConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	Issuer         string   `yaml:"issuer"`
+	ClientID       string   `yaml:"client_id"`
+	ClientSecret   string   `yaml:"client_secret"`
+	RedirectURL    string   `yaml:"redirect_url"`
+	FrontendURL    string   `yaml:"frontend_url"`
+	GroupsClaim    string   `yaml:"groups_claim"`
+	Scopes         []string `yaml:"scopes"`
+	EmergencyAdmin string   `yaml:"emergency_admin"`
+	EncryptionKey  string   `yaml:"encryption_key"`
+}
+
 type LogConfig struct {
 	Level      string `yaml:"level"`
 	Format     string `yaml:"format"`
@@ -72,7 +87,7 @@ type TLSConfig struct {
 	KeyFile  string `yaml:"key_file"`
 }
 
-// Bootstrap is deliberately opt-in. Production does not silently create known users.
+// Bootstrap 必须显式启用，生产环境不会自动创建预设用户。
 type BootstrapConfig struct {
 	Enabled       bool   `yaml:"enabled"`
 	AdminPassword string `yaml:"admin_password"`
@@ -156,6 +171,18 @@ func (c *Config) Validate() error {
 		for name, password := range map[string]string{"admin_password": c.Bootstrap.AdminPassword, "agent_password": c.Bootstrap.AgentPassword} {
 			if len(password) < 12 || strings.EqualFold(password, "changeme") {
 				problems = append(problems, "bootstrap."+name+" 至少 12 字符且不能为 changeme")
+			}
+		}
+	}
+	if c.OIDC.Enabled {
+		if c.OIDC.Issuer == "" || c.OIDC.ClientID == "" || c.OIDC.ClientSecret == "" || c.OIDC.RedirectURL == "" || c.OIDC.FrontendURL == "" || c.OIDC.GroupsClaim == "" || c.OIDC.EmergencyAdmin == "" || len(c.OIDC.EncryptionKey) < 32 {
+			problems = append(problems, "oidc 配置缺少 issuer、客户端、回调、前端地址、组声明、应急管理员或加密密钥")
+		}
+		for _, raw := range []string{c.OIDC.Issuer, c.OIDC.RedirectURL, c.OIDC.FrontendURL} {
+			u, err := url.Parse(raw)
+			if err != nil || u.Scheme != "https" || u.Host == "" {
+				problems = append(problems, "OIDC 地址必须是完整 HTTPS URL")
+				break
 			}
 		}
 	}

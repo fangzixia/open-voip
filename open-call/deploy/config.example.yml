@@ -25,6 +25,19 @@ jwt:
   # 示例仅用于通过配置校验，部署前必须替换为随机生成的密钥。
   signing_key: "example-only-32-byte-signing-key-change-me"
 
+# 启用后员工只通过 OIDC 登录；emergency_admin 是唯一保留密码登录的账号。
+oidc:
+  enabled: false
+  issuer: "https://id.example.com/realms/contact-center"
+  client_id: "open-voip"
+  client_secret: "REPLACE_WITH_CLIENT_SECRET"
+  redirect_url: "https://cc.example.com/api/v1/auth/oidc/callback"
+  frontend_url: "https://cc.example.com"
+  groups_claim: "groups"
+  scopes: ["openid", "profile", "email", "offline_access"]
+  emergency_admin: "admin"
+  encryption_key: "REPLACE_WITH_32_PLUS_RANDOM_CHARACTERS"
+
 log:
   level: info
   format: json

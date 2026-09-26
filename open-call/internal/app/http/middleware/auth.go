@@ -38,11 +38,6 @@ func Auth(a Authenticator) func(http.Handler) http.Handler {
 				writeAuthError(w, errs.Forbidden("必须先修改临时密码"))
 				return
 			}
-			// 临时密码账号只允许修改密码或退出，避免弱临时凭证访问业务数据。
-			if p.MustChangePassword && r.URL.Path != "/api/v1/auth/change-password" && r.URL.Path != "/api/v1/auth/logout" {
-				writeAuthError(w, errs.Forbidden("必须先修改临时密码"))
-				return
-			}
 			ctx := WithPrincipal(r.Context(), p)
 			ctx = observability.With(ctx, observability.Context{AgentID: p.AgentID, CallID: p.GuestCallID})
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -84,6 +79,24 @@ func RequireRoles(roles ...string) func(http.Handler) http.Handler {
 				return
 			}
 			if _, ok := allow[p.Role]; !ok {
+				writeAuthError(w, errs.Forbidden("无权限"))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequirePermission 校验当前角色分配产生的有效权限。
+func RequirePermission(code string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p, ok := PrincipalFromContext(r.Context())
+			if !ok {
+				writeAuthError(w, errs.Unauthorized("未认证或令牌失效"))
+				return
+			}
+			if !p.Has(code) {
 				writeAuthError(w, errs.Forbidden("无权限"))
 				return
 			}

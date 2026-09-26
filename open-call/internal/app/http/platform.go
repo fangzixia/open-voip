@@ -1,3 +1,4 @@
+// 本文件负责平台回调接口。
 package http
 
 import (

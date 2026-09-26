@@ -1,3 +1,4 @@
+// 本文件验证界面展示值的格式化的关键行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { agentStateLabel, agentStateTone, formatDuration } from "./display.js";

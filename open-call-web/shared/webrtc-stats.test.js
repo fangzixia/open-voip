@@ -1,3 +1,4 @@
+// 本文件验证WebRTC 媒体统计采集与指标换算的关键行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { extractWebRTCStats } from "./webrtc-stats.js";

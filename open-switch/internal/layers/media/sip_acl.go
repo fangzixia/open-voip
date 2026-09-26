@@ -1,3 +1,4 @@
+// 本文件负责SIP 接入地址访问控制。
 package media
 
 import (

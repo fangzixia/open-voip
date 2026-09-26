@@ -1,4 +1,5 @@
-// Package observability provides lightweight, structured end-to-end tracing.
+// 本文件负责请求链路追踪。
+// Package observability 提供轻量级结构化全链路追踪。
 package observability
 
 import (
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-// Context contains correlation identifiers shared by HTTP, WebSocket and service calls.
+// Context 保存 HTTP、WebSocket 与服务调用共用的关联标识。
 type Context struct {
 	TraceID         string `json:"trace_id,omitempty"`
 	RequestID       string `json:"request_id,omitempty"`
@@ -25,14 +26,14 @@ type Context struct {
 
 type contextKey struct{}
 
-// With stores tracing fields in ctx. Non-empty values override existing fields.
+// With 将追踪字段写入上下文，非空值会覆盖已有字段。
 func With(ctx context.Context, fields Context) context.Context {
 	current := From(ctx)
 	merge(&current, fields)
 	return context.WithValue(ctx, contextKey{}, current)
 }
 
-// From returns tracing fields from ctx.
+// From 从上下文读取追踪字段。
 func From(ctx context.Context) Context {
 	if ctx == nil {
 		return Context{}
@@ -65,7 +66,7 @@ func merge(dst *Context, src Context) {
 	}
 }
 
-// NewID returns a cryptographically random 128-bit lowercase hexadecimal ID.
+// NewID 生成加密安全的 128 位小写十六进制标识。
 func NewID() string {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err == nil {
@@ -74,7 +75,7 @@ func NewID() string {
 	return strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
 }
 
-// NormalizeID accepts conservative printable correlation IDs and rejects oversized/untrusted values.
+// NormalizeID 只接受符合格式与长度限制的可打印关联标识。
 func NormalizeID(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || len(value) > 128 {
@@ -89,7 +90,7 @@ func NormalizeID(value string) string {
 	return value
 }
 
-// Event is one trace JSONL record.
+// Event 表示一条 JSONL 格式的追踪记录。
 type Event struct {
 	Timestamp       string         `json:"timestamp"`
 	Name            string         `json:"event"`
@@ -105,7 +106,7 @@ type Event struct {
 	Fields          map[string]any `json:"fields,omitempty"`
 }
 
-// Recorder serializes trace events as JSONL.
+// Recorder 将追踪事件序列化为 JSONL。
 type Recorder struct {
 	mu sync.Mutex
 	w  io.Writer
@@ -113,7 +114,7 @@ type Recorder struct {
 
 func NewRecorder(w io.Writer) *Recorder { return &Recorder{w: w} }
 
-// Write emits one sanitized event.
+// Write 输出一条已脱敏的追踪事件。
 func (r *Recorder) Write(ctx context.Context, name string, fields map[string]any) error {
 	if r == nil || r.w == nil {
 		return nil
@@ -144,14 +145,14 @@ var global struct {
 	recorder *Recorder
 }
 
-// SetRecorder configures the process-wide trace sink.
+// SetRecorder 配置进程级追踪记录目标。
 func SetRecorder(recorder *Recorder) {
 	global.Lock()
 	global.recorder = recorder
 	global.Unlock()
 }
 
-// Emit writes to the process-wide trace sink.
+// Emit 向进程级追踪目标写入事件。
 func Emit(ctx context.Context, name string, fields map[string]any) {
 	global.RLock()
 	recorder := global.recorder

@@ -1,3 +1,4 @@
+// 本文件验证client的关键行为。
 package switchapi
 
 import (

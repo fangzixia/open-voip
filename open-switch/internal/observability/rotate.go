@@ -1,3 +1,4 @@
+// 本文件负责日志轮转规则。
 package observability
 
 import (
@@ -10,7 +11,7 @@ import (
 	"time"
 )
 
-// RotatingWriter rotates by size and gzip-compresses archives. Archives are never deleted.
+// RotatingWriter 按文件大小轮转日志并用 gzip 压缩归档，归档文件不会自动删除。
 type RotatingWriter struct {
 	mu       sync.Mutex
 	path     string

@@ -1,3 +1,4 @@
+// 本文件负责访客排队接口处理。
 package http
 
 import (
@@ -144,7 +145,7 @@ func (d RouterDeps) handleGuestSessions(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, errs.Unauthorized("未认证或令牌失效"))
 		return
 	}
-	if p.Role != "admin" && p.Role != "agent" && p.Role != "supervisor" {
+	if !p.Has("guest.issue") {
 		writeErr(w, errs.Forbidden("无权限"))
 		return
 	}

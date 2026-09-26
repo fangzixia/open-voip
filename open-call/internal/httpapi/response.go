@@ -1,4 +1,4 @@
-// Package httpapi defines the common CC/Switch JSON response contract.
+// Package httpapi 定义业务服务与交换服务共用的 JSON 响应结构。
 package httpapi
 
 import (
@@ -63,7 +63,7 @@ func write(w http.ResponseWriter, status int, body Response) {
 	_, _ = w.Write(append(raw, '\n'))
 }
 
-// RequestID keeps the same ID across the browser, CC and Switch.
+// RequestID 在浏览器、业务服务与交换服务之间保持一致。
 func RequestID(next http.Handler) http.Handler {
 	instrumented := chimw.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := chimw.GetReqID(r.Context())
@@ -135,7 +135,7 @@ func MethodNotAllowed(w http.ResponseWriter, r *http.Request) {
 	Failure(w, 405, "method_not_allowed", "请求方法不允许")
 }
 
-// Decode accepts the unified response and legacy peers during a rolling upgrade.
+// Decode 在滚动升级期间同时兼容统一响应和旧版服务响应。
 func Decode(res *http.Response, out any) error {
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {

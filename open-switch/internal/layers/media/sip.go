@@ -844,8 +844,8 @@ func (u *sipUA) upsertBindingLocked(b sipBinding) {
 	list := u.binds[b.AOR]
 	for i := range list {
 		if uriEqual(list[i].Contact, b.Contact) {
-			// A refreshed contact becomes the preferred target. Otherwise a stale
-			// first registration can keep receiving every ACD offer.
+			// 更新后的 Contact 应优先接收呼叫，否则旧注册记录可能
+			// 持续收到所有 ACD 邀约。
 			updated := append([]sipBinding{b}, list[:i]...)
 			u.binds[b.AOR] = append(updated, list[i+1:]...)
 			return

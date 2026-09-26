@@ -451,7 +451,7 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 	return dto.LocalOffer{SDP: ld.SDP, Type: "offer"}, nil
 }
 
-// A late subscriber needs a fresh keyframe to decode an already running video stream.
+// 后加入的订阅者需要新关键帧才能解码正在传输的视频流。
 func (s *Service) requestVideoKeyframes(callID, joiningLeg string) {
 	r := s.getRoom(callID)
 	if r == nil {

@@ -1,3 +1,4 @@
+// 本文件验证boundary integration的关键行为。
 package queue_test
 
 import (

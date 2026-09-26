@@ -1,3 +1,4 @@
+// 本文件验证datetime的关键行为。
 package datetime
 
 import (

@@ -48,6 +48,11 @@ func (d RouterDeps) handleUserPatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if d.Config.OIDC.Enabled && d.isEmergencyAdmin(r, chi.URLParam(r, "userId")) &&
+		((in.Disabled != nil && *in.Disabled) || (in.Role != nil && *in.Role != "admin")) {
+		writeErr(w, errs.Forbidden("不可禁用或移除应急管理员角色"))
+		return
+	}
 	out, err := d.Users.Update(r.Context(), chi.URLParam(r, "userId"), in)
 	if err != nil {
 		writeErr(w, err)
@@ -57,11 +62,20 @@ func (d RouterDeps) handleUserPatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d RouterDeps) handleUserDelete(w http.ResponseWriter, r *http.Request) {
+	if d.Config.OIDC.Enabled && d.isEmergencyAdmin(r, chi.URLParam(r, "userId")) {
+		writeErr(w, errs.Forbidden("不可删除应急管理员"))
+		return
+	}
 	if err := d.Users.Delete(r.Context(), chi.URLParam(r, "userId")); err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, nil)
+}
+
+func (d RouterDeps) isEmergencyAdmin(r *http.Request, id string) bool {
+	u, err := d.Users.Get(r.Context(), id)
+	return err == nil && u.Username == d.Config.OIDC.EmergencyAdmin
 }
 
 func (d RouterDeps) handleUserResetPassword(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +170,7 @@ func (d RouterDeps) ensureSelfAgent(r *http.Request, agentID string) error {
 	if !ok {
 		return errs.Unauthorized("未认证或令牌失效")
 	}
-	if p.Role == "admin" {
+	if p.Has("agents.force_checkout") {
 		return nil
 	}
 	if p.AgentID == "" || p.AgentID != agentID {

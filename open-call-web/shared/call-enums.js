@@ -1,3 +1,4 @@
+// 本文件负责通话状态和类型常量。
 const CALL_RESULT_LABELS = {
   answered: "已接通",
   abandoned: "已放弃",

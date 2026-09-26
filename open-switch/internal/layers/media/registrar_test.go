@@ -1,3 +1,4 @@
+// 本文件验证registrar的关键行为。
 package media
 
 import (

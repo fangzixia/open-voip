@@ -12,6 +12,7 @@ import (
 
 	"open-call/internal/app/http/middleware"
 	"open-call/internal/config"
+	"open-call/internal/errs"
 )
 
 // WrapSwitchBFF 将 /api/v1/calls 与相关 supervisor 通话路径代理到 open-switch。
@@ -47,7 +48,23 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		httpapi.Failure(w, http.StatusBadGateway, "switch_unavailable", "交换服务暂不可用")
 	}
-	protected := middleware.Auth(auth)(proxy)
+	protected := middleware.Auth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := middleware.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.Error(w, errs.Unauthorized("未认证"))
+			return
+		}
+		code := switchPermission(r.Method, r.URL.Path)
+		if !p.IsGuest() && !p.Has(code) {
+			httpapi.Error(w, errs.Forbidden("无权限"))
+			return
+		}
+		if p.IsGuest() && (strings.Contains(r.URL.Path, "/supervisor/") || strings.HasSuffix(r.URL.Path, "/outbound") || strings.HasPrefix(r.URL.Path, "/switch/v1/ivr-assets")) {
+			httpapi.Error(w, errs.Forbidden("无权限"))
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
 
 	origins := []string{}
 	if len(allowedOrigins) > 0 {
@@ -62,6 +79,25 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		r.URL.Path = mapSwitchPath(r.URL.Path)
 		protected.ServeHTTP(w, r)
 	}))))
+}
+
+func switchPermission(method, path string) string {
+	if strings.HasPrefix(path, "/switch/v1/ivr-assets") {
+		if method == http.MethodGet {
+			return "ivr.read"
+		}
+		return "ivr.write"
+	}
+	if strings.Contains(path, "/supervisor/agents/") {
+		return "agents.force_checkout"
+	}
+	if strings.Contains(path, "/supervisor/calls/") {
+		return "calls.listen"
+	}
+	if method == http.MethodGet {
+		return "calls.read"
+	}
+	return "calls.operate"
 }
 
 func switchCallID(path string) string {

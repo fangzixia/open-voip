@@ -1,6 +1,111 @@
+// 本文件负责页面布局样式。
 import { css } from "lit";
 
 export const layoutStyles = css`
+  .layout {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .brand-mark {
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .brand-sub {
+    color: rgba(255, 255, 255, 0.65);
+    font-weight: 400;
+    font-size: 13px;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .topbar-meta {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+  }
+
+  .topbar button {
+    margin: 0;
+    height: 28px;
+    padding: 0 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    color: #fff;
+    border-radius: 2px;
+  }
+
+  .topbar button:hover {
+    border-color: #1890ff;
+    color: #1890ff;
+  }
+
+  .layout-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .sidebar {
+    flex-shrink: 0;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    text-align: left;
+  }
+
+  .nav-badge {
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: #ff4d4f;
+    color: #fff;
+    font-size: 11px;
+    line-height: 16px;
+    text-align: center;
+  }
+
+  .nav-item.active .nav-badge {
+    background: #fff;
+    color: #1890ff;
+  }
+
+  .content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .breadcrumb strong {
+    font-weight: 500;
+  }
+
   .topbar {
     height: 56px;
     padding: env(safe-area-inset-top, 0) var(--ov-space-6) 0;
@@ -112,55 +217,18 @@ export const layoutStyles = css`
     color: var(--ov-text-secondary);
   }
 
-  .panel {
-    padding: var(--ov-space-5);
-    margin-bottom: var(--ov-space-4);
-    border: 1px solid var(--ov-border);
-    border-radius: var(--ov-radius-lg);
-    background: var(--ov-surface);
-    box-shadow: var(--ov-shadow-sm);
-  }
-
-  .panel h3,
-  .panel h4,
-  .page-title {
-    color: var(--ov-text);
-    letter-spacing: -0.01em;
-  }
-
-  .panel h3::before,
-  .panel h4::before {
-    content: "";
-    display: inline-block;
-    width: 3px;
-    height: 14px;
-    margin-right: 8px;
-    border-radius: 2px;
-    vertical-align: -2px;
-    background: var(--ov-primary);
-  }
-
-  .login-page {
-    background:
-      radial-gradient(circle at 20% 15%, rgba(91, 91, 214, 0.08), transparent 32%),
-      radial-gradient(circle at 80% 80%, rgba(49, 185, 210, 0.07), transparent 30%),
-      var(--ov-bg);
-  }
-
-  .login-card {
-    width: min(390px, 100%);
-    padding: 32px;
-    border: 1px solid var(--ov-border);
-    border-radius: var(--ov-radius-lg);
-    box-shadow: var(--ov-shadow-md);
-  }
-
   @media (max-width: 960px) {
+    .layout-body {
+      flex-direction: column;
+    }
+
     .topbar {
       padding: 0 14px;
     }
 
     .sidebar {
+      display: flex;
+      overflow-x: auto;
       width: 100%;
       padding: 8px 12px;
       border-right: 0;
@@ -169,6 +237,7 @@ export const layoutStyles = css`
     }
 
     .nav-item {
+      flex: 0 0 auto;
       scroll-snap-align: start;
     }
 
@@ -192,15 +261,6 @@ export const layoutStyles = css`
 
     .content {
       padding: 12px;
-    }
-
-    .panel {
-      padding: 14px;
-    }
-
-    .form-inline .field {
-      flex: 1 1 100%;
-      min-width: 0;
     }
   }
 `;

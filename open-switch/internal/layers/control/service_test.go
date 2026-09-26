@@ -1,3 +1,4 @@
+// 本文件验证外部身份登录流程与本地账号绑定的关键行为。
 package control
 
 import (

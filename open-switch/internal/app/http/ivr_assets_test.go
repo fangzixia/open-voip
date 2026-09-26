@@ -1,3 +1,4 @@
+// 本文件验证IVR 媒体资源接口处理的关键行为。
 package http
 
 import (

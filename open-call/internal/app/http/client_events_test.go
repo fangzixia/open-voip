@@ -1,3 +1,4 @@
+// 本文件验证client events的关键行为。
 package http
 
 import (

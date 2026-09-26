@@ -13,6 +13,7 @@ import (
 
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"
+	"open-call/internal/layers/biz/authz"
 	"open-call/internal/store/models"
 )
 
@@ -22,6 +23,7 @@ type DTO struct {
 	SIPUsername        string    `json:"sip_username,omitempty"`
 	ID                 string    `json:"id"`
 	Username           string    `json:"username"`
+	Email              string    `json:"email,omitempty"`
 	DisplayName        string    `json:"display_name,omitempty"`
 	Role               string    `json:"role"`
 	Disabled           bool      `json:"disabled"`
@@ -30,18 +32,21 @@ type DTO struct {
 	VideoCapable       bool      `json:"video_capable,omitempty"`
 	MustChangePassword bool      `json:"must_change_password"`
 	CreatedAt          time.Time `json:"created_at"`
+	Roles              []string  `json:"roles"`
 }
 
 // CreateInput 创建用户。
 type CreateInput struct {
-	TerminalType string `json:"terminal_type"`
-	SIPUsername  string `json:"sip_username"`
-	Username     string `json:"username"`
-	Password     string `json:"password"`
-	Role         string `json:"role"`
-	DisplayName  string `json:"display_name"`
-	Extension    string `json:"extension"`
-	VideoCapable bool   `json:"video_capable"`
+	TerminalType string   `json:"terminal_type"`
+	SIPUsername  string   `json:"sip_username"`
+	Username     string   `json:"username"`
+	Email        string   `json:"email"`
+	Password     string   `json:"password"`
+	Role         string   `json:"role"`
+	Roles        []string `json:"roles"`
+	DisplayName  string   `json:"display_name"`
+	Extension    string   `json:"extension"`
+	VideoCapable bool     `json:"video_capable"`
 }
 
 // UpdateInput 更新用户。
@@ -51,6 +56,7 @@ type UpdateInput struct {
 	Role         *string `json:"role"`
 	Disabled     *bool   `json:"disabled"`
 	DisplayName  *string `json:"display_name"`
+	Email        *string `json:"email"`
 	VideoCapable *bool   `json:"video_capable"`
 	Extension    *string `json:"extension"`
 }
@@ -115,6 +121,10 @@ func (s *Service) Get(ctx context.Context, id string) (DTO, error) {
 // Create 创建用户；role=agent 时同时创建坐席。
 func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	in.Username = strings.TrimSpace(in.Username)
+	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
+	if !validEmail(in.Email) {
+		return DTO{}, errs.InvalidRequest("邮箱格式无效")
+	}
 	in.Role = strings.TrimSpace(in.Role)
 	if in.Username == "" || in.Password == "" {
 		return DTO{}, errs.InvalidRequest("用户名与密码必填")
@@ -122,10 +132,33 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	if err := auth.ValidatePassword(in.Password); err != nil {
 		return DTO{}, err
 	}
-	if in.Role != "admin" && in.Role != "supervisor" && in.Role != "agent" {
-		return DTO{}, errs.InvalidRequest("角色无效")
+	roleIDs := in.Roles
+	if len(roleIDs) == 0 {
+		roleIDs = []string{in.Role}
 	}
-	if in.Role == "agent" && strings.TrimSpace(in.Extension) == "" {
+	if len(roleIDs) == 0 || (len(roleIDs) == 1 && strings.TrimSpace(roleIDs[0]) == "") {
+		return DTO{}, errs.InvalidRequest("至少需要一个角色")
+	}
+	seenRoles := map[string]bool{}
+	for _, id := range roleIDs {
+		if id == "" || seenRoles[id] {
+			return DTO{}, errs.InvalidRequest("角色列表无效")
+		}
+		seenRoles[id] = true
+	}
+	if in.Role != "" && in.Role != "admin" && in.Role != "supervisor" && in.Role != "agent" {
+		return DTO{}, errs.InvalidRequest("旧版角色字段无效")
+	}
+	if in.Role == "" {
+		in.Role = "agent"
+		for _, candidate := range []string{"admin", "supervisor", "agent"} {
+			if seenRoles[candidate] {
+				in.Role = candidate
+				break
+			}
+		}
+	}
+	if len(in.Roles) == 0 && in.Role == "agent" && strings.TrimSpace(in.Extension) == "" {
 		return DTO{}, errs.InvalidRequest("坐席必须设置分机号")
 	}
 	if in.TerminalType == "" {
@@ -142,6 +175,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	u := models.User{
 		ID:           uuid.New().String(),
 		Username:     in.Username,
+		Email:        in.Email,
 		PasswordHash: hash,
 		Role:         in.Role,
 		DisplayName:  in.DisplayName,
@@ -150,10 +184,22 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 		UpdatedAt:    now,
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&authz.Role{}).Where("id IN ?", roleIDs).Count(&count).Error; err != nil {
+			return err
+		}
+		if int(count) != len(roleIDs) {
+			return errs.InvalidRequest("包含未知角色")
+		}
 		if err := tx.Create(&u).Error; err != nil {
 			return err
 		}
-		if in.Role == "agent" || (in.Role == "supervisor" && in.Extension != "") {
+		for _, roleID := range roleIDs {
+			if err := tx.Create(&authz.UserRole{UserID: u.ID, RoleID: roleID}).Error; err != nil {
+				return err
+			}
+		}
+		if strings.TrimSpace(in.Extension) != "" {
 			ag := models.Agent{
 				ID:           uuid.New().String(),
 				UserID:       u.ID,
@@ -169,7 +215,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	})
 	if err != nil {
 		if isUnique(err) {
-			return DTO{}, errs.Conflict("用户名或分机号已存在", "")
+			return DTO{}, errs.Conflict("用户名、邮箱或分机号已存在", "")
 		}
 		return DTO{}, err
 	}
@@ -203,6 +249,13 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 	if in.DisplayName != nil {
 		updates["display_name"] = *in.DisplayName
 	}
+	if in.Email != nil {
+		email := strings.ToLower(strings.TrimSpace(*in.Email))
+		if !validEmail(email) {
+			return DTO{}, errs.InvalidRequest("邮箱格式无效")
+		}
+		updates["email"] = email
+	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var ag models.Agent
 		agErr := tx.Where("user_id = ?", id).First(&ag).Error
@@ -215,7 +268,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 			if err := tx.Model(&models.AgentSession{}).Where("agent_id = ? AND state <> ?", ag.ID, "offline").Count(&active).Error; err != nil {
 				return err
 			}
-			terminalChange := in.TerminalType != nil || in.SIPUsername != nil || in.VideoCapable != nil || in.Extension != nil || targetRole == "admin"
+			terminalChange := in.TerminalType != nil || in.SIPUsername != nil || in.VideoCapable != nil || in.Extension != nil
 			if terminalChange && active > 0 {
 				return errs.Conflict("请先签出再修改坐席角色或终端", "")
 			}
@@ -232,14 +285,12 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 				}
 			}
 		}
-		needsAgent := targetRole == "agent" || (targetRole == "supervisor" && (hasAgent || (in.Extension != nil && strings.TrimSpace(*in.Extension) != "")))
+		// 坐席身份由坐席记录决定，与旧版 role 字段无关。
+		needsAgent := hasAgent || (in.Extension != nil && strings.TrimSpace(*in.Extension) != "")
 		if needsAgent && !hasAgent {
 			ext := ""
 			if in.Extension != nil {
 				ext = strings.TrimSpace(*in.Extension)
-			}
-			if targetRole == "agent" && ext == "" {
-				return errs.InvalidRequest("转换为坐席角色时必须提供 extension")
 			}
 			kind, sipName, video := "webrtc", "", false
 			if in.TerminalType != nil {
@@ -261,13 +312,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 			}
 			hasAgent = true
 		}
-		if hasAgent && targetRole == "admin" {
-			if err := tx.Delete(&ag).Error; err != nil {
-				return err
-			}
-			hasAgent = false
-		}
-		if hasAgent && targetRole != "admin" {
+		if hasAgent {
 			if in.TerminalType != nil {
 				ag.TerminalType = *in.TerminalType
 			}
@@ -289,6 +334,14 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 			}
 		}
 		if authChanged {
+			if in.Role != nil && targetRole != u.Role {
+				if err := tx.Where("user_id = ?", id).Delete(&authz.UserRole{}).Error; err != nil {
+					return err
+				}
+				if err := tx.Create(&authz.UserRole{UserID: id, RoleID: targetRole}).Error; err != nil {
+					return err
+				}
+			}
 			updates["auth_version"] = gorm.Expr("auth_version + 1")
 			now := time.Now().UTC()
 			if err := tx.Model(&models.AuthSession{}).Where("user_id = ? AND revoked_at IS NULL", id).Update("revoked_at", now).Error; err != nil {
@@ -297,6 +350,9 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		}
 		return tx.Model(&u).Updates(updates).Error
 	}); err != nil {
+		if isUnique(err) {
+			return DTO{}, errs.Conflict("邮箱或分机号已存在", "")
+		}
 		return DTO{}, err
 	}
 	return s.Get(ctx, id)
@@ -364,12 +420,18 @@ func (s *Service) toDTO(ctx context.Context, u models.User) (DTO, error) {
 	out := DTO{
 		ID:                 u.ID,
 		Username:           u.Username,
+		Email:              u.Email,
 		DisplayName:        u.DisplayName,
 		Role:               u.Role,
 		Disabled:           u.Disabled,
 		MustChangePassword: u.MustChangePassword,
 		CreatedAt:          u.CreatedAt,
 	}
+	roles, err := authz.NewService(s.db).UserRoles(ctx, u.ID)
+	if err != nil {
+		return DTO{}, err
+	}
+	out.Roles = roles
 	var ag models.Agent
 	if err := s.db.WithContext(ctx).Where("user_id = ?", u.ID).First(&ag).Error; err == nil {
 		out.AgentID = ag.ID
@@ -387,6 +449,10 @@ func isUnique(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique")
+}
+
+func validEmail(value string) bool {
+	return value == "" || (len(value) <= 320 && strings.Count(value, "@") == 1 && !strings.ContainsAny(value, " \t\r\n"))
 }
 
 func validateTerminal(kind, username, extension string, video bool) error {

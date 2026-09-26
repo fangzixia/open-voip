@@ -1,3 +1,4 @@
+// 本文件验证应用日志配置的关键行为。
 package app
 
 import (

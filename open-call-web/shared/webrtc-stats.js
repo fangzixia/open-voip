@@ -1,3 +1,4 @@
+// 本文件负责WebRTC 媒体统计采集与指标换算。
 const counters = new WeakMap();
 
 const values = (report) => {

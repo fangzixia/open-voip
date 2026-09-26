@@ -155,7 +155,7 @@ func (d RouterDeps) authorizeCall(r *http.Request, callID string) error {
 	if !ok {
 		return errs.Unauthorized("未认证或令牌失效")
 	}
-	if p.Role == "admin" || p.Role == "supervisor" {
+	if p.Has("calls.listen") {
 		return nil
 	}
 	view, err := d.Signaling.GetCall(r.Context(), callID)

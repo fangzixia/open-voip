@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"open-call/internal/config"
 	"open-call/internal/errs"
+	"open-call/internal/layers/biz/authz"
 	"open-call/internal/store/models"
 )
 
@@ -22,6 +24,7 @@ import (
 type Principal struct {
 	UserID             string    `json:"user_id,omitempty"`
 	Role               string    `json:"role,omitempty"`
+	Permissions        []string  `json:"permissions,omitempty"`
 	AgentID            string    `json:"agent_id,omitempty"`
 	GuestID            string    `json:"guest_id,omitempty"`
 	GuestCallID        string    `json:"guest_call_id,omitempty"`
@@ -33,6 +36,14 @@ type Principal struct {
 
 // IsGuest 返回当前主体是否为访客。
 func (p Principal) IsGuest() bool { return p.Role == "guest" }
+func (p Principal) Has(code string) bool {
+	for _, v := range p.Permissions {
+		if v == code {
+			return true
+		}
+	}
+	return false
+}
 
 // TokenPair 是登录或刷新成功后的令牌响应。
 type TokenPair struct {
@@ -71,15 +82,69 @@ type jwtClaims struct {
 
 // Service 负责账号登录、令牌轮换、会话撤销与访客令牌认证。
 type Service struct {
-	db  *gorm.DB
-	cfg config.JWTConfig
+	db             *gorm.DB
+	cfg            config.JWTConfig
+	authorization  *authz.Service
+	emergencyAdmin string
+	oidcEnabled    bool
+	oidcRefresh    func(context.Context, string, string) (string, []string, error)
 }
 
 // NewService 创建认证服务。
-func NewService(db *gorm.DB, cfg config.JWTConfig) *Service { return &Service{db: db, cfg: cfg} }
+func NewService(db *gorm.DB, cfg config.JWTConfig) *Service {
+	return &Service{db: db, cfg: cfg, authorization: authz.NewService(db)}
+}
+func (s *Service) ConfigureOIDC(enabled bool, emergencyAdmin string) {
+	s.oidcEnabled = enabled
+	s.emergencyAdmin = emergencyAdmin
+}
+func (s *Service) ValidateEmergencyAdmin(ctx context.Context) error {
+	if !s.oidcEnabled {
+		return nil
+	}
+	var u models.User
+	if err := s.db.WithContext(ctx).Where("username = ? AND disabled = false", s.emergencyAdmin).First(&u).Error; err != nil {
+		return fmt.Errorf("OIDC 应急管理员不存在或已禁用: %w", err)
+	}
+	var n int64
+	if err := s.db.WithContext(ctx).Table("oc_user_roles").Where("user_id = ? AND role_id = 'admin'", u.ID).Count(&n).Error; err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("OIDC 应急管理员必须拥有内置 admin 角色")
+	}
+	return nil
+}
+func (s *Service) SetOIDCRefresher(fn func(context.Context, string, string) (string, []string, error)) {
+	s.oidcRefresh = fn
+}
+
+func (s *Service) IssueOIDC(ctx context.Context, user models.User, encryptedRefresh, subject string, meta SessionMeta) (TokenPair, error) {
+	if user.Disabled {
+		return TokenPair{}, errs.Unauthorized("账号已禁用")
+	}
+	agentID, err := s.agentID(ctx, user)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	now := time.Now().UTC()
+	sid := uuid.NewString()
+	pair, jti, exp, err := s.buildPair(user, agentID, sid, now)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	row := models.AuthSession{ID: sid, UserID: user.ID, RefreshJTI: jti, UserAgent: truncate(meta.UserAgent, 256), RemoteIP: truncate(meta.RemoteIP, 64), CreatedAt: now, LastSeenAt: now, ExpiresAt: exp, Provider: "oidc", ProviderRefreshToken: encryptedRefresh, ProviderSubject: subject}
+	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return TokenPair{}, err
+	}
+	return pair, nil
+}
 
 // Login 校验凭证并创建一条可独立撤销的登录会话。
 func (s *Service) Login(ctx context.Context, username, password string, meta ...SessionMeta) (TokenPair, error) {
+	if s.oidcEnabled && strings.TrimSpace(username) != s.emergencyAdmin {
+		return TokenPair{}, errs.Unauthorized("请使用单点登录")
+	}
 	var user models.User
 	if err := s.db.WithContext(ctx).Where("username = ?", strings.TrimSpace(username)).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -89,6 +154,15 @@ func (s *Service) Login(ctx context.Context, username, password string, meta ...
 	}
 	if user.Disabled {
 		return TokenPair{}, errs.Unauthorized("账号已禁用")
+	}
+	if s.oidcEnabled {
+		var n int64
+		if err := s.db.WithContext(ctx).Table("oc_user_roles ur").Where("ur.user_id = ? AND ur.role_id = ?", user.ID, "admin").Count(&n).Error; err != nil {
+			return TokenPair{}, err
+		}
+		if n == 0 {
+			return TokenPair{}, errs.Unauthorized("应急账号必须具有管理员角色")
+		}
 	}
 	if err := VerifyPassword(password, user.PasswordHash); err != nil {
 		return TokenPair{}, err
@@ -123,6 +197,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 		return TokenPair{}, errs.Unauthorized("令牌无效")
 	}
 	var pair TokenPair
+	var rejection error
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 锁定会话后再校验旧 JTI，确保同一刷新令牌只能成功轮换一次。
 		if revoked(tx, claims.ID) {
@@ -140,6 +215,52 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 		if err := tx.First(&user, "id = ?", claims.Subject).Error; err != nil || user.Disabled || user.AuthVersion != claims.AuthVersion {
 			return errs.Unauthorized("账号状态已变化，请重新登录")
 		}
+		if s.oidcEnabled && session.Provider != "oidc" && user.Username != s.emergencyAdmin {
+			return errs.Unauthorized("请使用单点登录")
+		}
+		var refreshedProviderToken string
+		if session.Provider == "oidc" {
+			var roleIDs []string
+			var refreshErr error
+			if s.oidcRefresh == nil || session.ProviderRefreshToken == "" {
+				refreshErr = errs.Unauthorized("请重新完成单点登录")
+			} else {
+				refreshedProviderToken, roleIDs, refreshErr = s.oidcRefresh(ctx, session.ProviderRefreshToken, session.ProviderSubject)
+			}
+			if refreshErr == nil && len(roleIDs) > 0 {
+				current, err := authz.NewService(tx).UserRoles(ctx, user.ID)
+				if err != nil {
+					return err
+				}
+				if !sameStrings(current, roleIDs) {
+					if err := tx.Where("user_id = ?", user.ID).Delete(&authz.UserRole{}).Error; err != nil {
+						return err
+					}
+					for _, roleID := range roleIDs {
+						if err := tx.Create(&authz.UserRole{UserID: user.ID, RoleID: roleID}).Error; err != nil {
+							return err
+						}
+					}
+					user.AuthVersion++
+					if err := tx.Model(&user).Update("auth_version", user.AuthVersion).Error; err != nil {
+						return err
+					}
+					if err := tx.Model(&models.AuthSession{}).Where("user_id = ? AND id <> ? AND revoked_at IS NULL", user.ID, session.ID).Update("revoked_at", now).Error; err != nil {
+						return err
+					}
+				}
+			}
+			if refreshErr != nil || len(roleIDs) == 0 {
+				if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Update("auth_version", gorm.Expr("auth_version + 1")).Error; err != nil {
+					return err
+				}
+				if err := revokeUserSessions(tx, user.ID); err != nil {
+					return err
+				}
+				rejection = errs.Unauthorized("外部授权已失效，请重新登录")
+				return nil
+			}
+		}
 		agentID, err := agentIDWithDB(tx, user)
 		if err != nil {
 			return err
@@ -153,9 +274,34 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 		if err != nil {
 			return err
 		}
-		return tx.Model(&session).Updates(map[string]any{"refresh_jti": newJTI, "last_seen_at": now, "expires_at": refreshExp}).Error
+		updates := map[string]any{"refresh_jti": newJTI, "last_seen_at": now, "expires_at": refreshExp}
+		if session.Provider == "oidc" {
+			updates["provider_refresh_token"] = refreshedProviderToken
+		}
+		return tx.Model(&session).Updates(updates).Error
 	})
+	if rejection != nil {
+		return TokenPair{}, rejection
+	}
 	return pair, err
+}
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := map[string]int{}
+	for _, v := range a {
+		m[v]++
+	}
+	for _, v := range b {
+		m[v]--
+	}
+	for _, n := range m {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // Logout 撤销当前访问令牌及其登录会话。
@@ -197,11 +343,18 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 		if claims.SessionID == "" || s.db.WithContext(ctx).Where("id = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?", claims.SessionID, user.ID, time.Now().UTC()).First(&session).Error != nil {
 			return Principal{}, errs.Unauthorized("登录会话已失效")
 		}
+		if s.oidcEnabled && session.Provider != "oidc" && user.Username != s.emergencyAdmin {
+			return Principal{}, errs.Unauthorized("请使用单点登录")
+		}
 		agentID, err := s.agentID(ctx, user)
 		if err != nil {
 			return Principal{}, err
 		}
-		return Principal{UserID: user.ID, Role: user.Role, AgentID: agentID, JTI: claims.ID,
+		permissions, err := s.authorization.Permissions(ctx, user.ID)
+		if err != nil {
+			return Principal{}, err
+		}
+		return Principal{UserID: user.ID, Role: user.Role, Permissions: permissions, AgentID: agentID, JTI: claims.ID,
 			SessionID: session.ID, MustChangePassword: user.MustChangePassword, ExpiresAt: claims.ExpiresAt.Time}, nil
 	}
 	return s.authenticateGuest(ctx, token)
@@ -276,6 +429,12 @@ func (s *Service) RevokeAllSessions(ctx context.Context, userID string) error {
 // CleanupExpired 删除已过期的撤销记录和登录会话。
 func (s *Service) CleanupExpired(ctx context.Context) error {
 	now := time.Now().UTC()
+	if err := s.db.WithContext(ctx).Exec("DELETE FROM oc_oidc_flows WHERE expires_at < ?", now).Error; err != nil {
+		return err
+	}
+	if err := s.db.WithContext(ctx).Exec("DELETE FROM oc_oidc_tickets WHERE expires_at < ?", now).Error; err != nil {
+		return err
+	}
 	if err := s.db.WithContext(ctx).Where("expires_at < ?", now).Delete(&models.JWTRevocation{}).Error; err != nil {
 		return err
 	}
@@ -353,12 +512,9 @@ func (s *Service) agentID(ctx context.Context, user models.User) (string, error)
 }
 
 func agentIDWithDB(db *gorm.DB, user models.User) (string, error) {
-	if user.Role != "agent" && user.Role != "supervisor" {
-		return "", nil
-	}
 	var ag models.Agent
 	err := db.Where("user_id = ?", user.ID).First(&ag).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) && user.Role == "supervisor" {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", nil
 	}
 	if err != nil {

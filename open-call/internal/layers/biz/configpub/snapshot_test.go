@@ -1,3 +1,4 @@
+// 本文件验证snapshot的关键行为。
 package configpub
 
 import "testing"

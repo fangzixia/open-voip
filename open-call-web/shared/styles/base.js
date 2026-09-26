@@ -1,7 +1,10 @@
+// 本文件负责基础页面样式。
 import { css } from "lit";
 
 export const baseStyles = css`
   :host {
+    display: block;
+    min-height: 100vh;
     color: var(--ov-text);
     background: var(--ov-bg);
     font-family: Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -10,6 +13,14 @@ export const baseStyles = css`
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  button {
+    cursor: pointer;
   }
 
   button,

@@ -80,7 +80,7 @@ func (d RouterDeps) handleClientEvents(w http.ResponseWriter, r *http.Request) {
 		if event.CallID == "" {
 			continue
 		}
-		if p.Role == "admin" || p.Role == "supervisor" {
+		if p.Has("status.read") {
 			continue
 		}
 		if p.AgentID == "" || d.Calls == nil {

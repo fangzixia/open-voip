@@ -1,4 +1,13 @@
+// 本文件负责前端通用界面组件。
 import { html, nothing } from "lit";
+
+function renderBrand(subtitle) {
+  return html`<div class="brand">
+    <span class="brand-mark" aria-hidden="true">OV</span>
+    <span>Open VoIP</span>
+    <span class="brand-sub">${subtitle}</span>
+  </div>`;
+}
 
 export function renderFeedback({ error = "", notice = "" } = {}) {
   return html`
@@ -21,11 +30,7 @@ export function renderAppShell({
   return html`
     <div class="layout">
       <header class="topbar">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true">OV</span>
-          <span>Open VoIP</span>
-          <span class="brand-sub">${subtitle}</span>
-        </div>
+        ${renderBrand(subtitle)}
         <span class="spacer"></span>
         ${topbar}
       </header>
@@ -56,22 +61,19 @@ export function renderAppShell({
   `;
 }
 
-export function renderLoginLayout({ subtitle, title, hint, onSubmit, fields, error = "" }) {
+export function renderLoginLayout({ subtitle, title, hint, onSubmit, fields, error = "", showSubmit = true, extraActions = "" }) {
   return html`
     <div class="login-page">
       <header class="topbar">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true">OV</span>
-          <span>Open VoIP</span>
-          <span class="brand-sub">${subtitle}</span>
-        </div>
+        ${renderBrand(subtitle)}
       </header>
       <div class="login-wrap">
         <form class="login-card" aria-label="${title}" @submit=${onSubmit}>
           <h2>${title}</h2>
           <p class="hint">${hint}</p>
           ${fields}
-          <button type="submit">登录</button>
+          ${showSubmit ? html`<button type="submit">登录</button>` : ""}
+          ${extraActions}
           ${error ? html`<p class="error login-error" role="alert">${error}</p>` : nothing}
         </form>
       </div>
@@ -87,8 +89,4 @@ export function renderDialpad(onDigit, { disabled = false } = {}) {
       )}
     </div>
   `;
-}
-
-export function renderEmptyTable(colspan, message) {
-  return html`<tr><td colspan=${colspan}><div class="empty-state">${message}</div></td></tr>`;
 }

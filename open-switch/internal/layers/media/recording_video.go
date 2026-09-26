@@ -1,3 +1,4 @@
+// 本文件负责视频录制流程。
 package media
 
 import (
@@ -17,8 +18,8 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
-// Each RTP source has its own writer. Combining independent SSRCs in one OGG
-// or IVF writer doubles timestamps and can produce undecodable video.
+// 每个 RTP 来源使用独立写入器；将不同 SSRC 合并到同一个 OGG
+// 或 IVF 写入器会扰乱时间戳，导致视频无法解码。
 type recordedTrack struct {
 	legID   string
 	kind    string

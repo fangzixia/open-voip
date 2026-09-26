@@ -1,3 +1,4 @@
+// 本文件验证HTTP 响应结构与错误转换的关键行为。
 package httpapi
 
 import (

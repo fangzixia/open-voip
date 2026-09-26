@@ -12,16 +12,19 @@ import (
 
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"
+	"open-call/internal/layers/biz/authz"
 	"open-call/internal/store/models"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // Bundle 是可校验、可事务恢复的组织业务配置。
 type Bundle struct {
 	SchemaVersion int                           `json:"schema_version"`
 	ExportedAt    time.Time                     `json:"exported_at"`
 	Users         []UserDump                    `json:"users"`
+	Roles         []authz.RoleDTO               `json:"roles,omitempty"`
+	GroupMappings []authz.GroupRole             `json:"group_mappings,omitempty"`
 	Agents        []models.Agent                `json:"agents"`
 	Queues        []models.Queue                `json:"queues"`
 	Skills        []models.Skill                `json:"skills"`
@@ -36,11 +39,13 @@ type Bundle struct {
 
 // UserDump 不包含密码哈希；新恢复的账号会禁用并要求管理员重置密码。
 type UserDump struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	Role        string `json:"role"`
-	DisplayName string `json:"display_name"`
-	Disabled    bool   `json:"disabled"`
+	ID          string   `json:"id"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email,omitempty"`
+	Role        string   `json:"role"`
+	Roles       []string `json:"roles,omitempty"`
+	DisplayName string   `json:"display_name"`
+	Disabled    bool     `json:"disabled"`
 }
 
 // ImportOptions 控制配置导入行为。
@@ -73,7 +78,20 @@ func (s *Service) Export(ctx context.Context) (Bundle, error) {
 		return out, err
 	}
 	for _, user := range users {
-		out.Users = append(out.Users, UserDump{ID: user.ID, Username: user.Username, Role: user.Role, DisplayName: user.DisplayName, Disabled: user.Disabled})
+		ids, err := authz.NewService(s.db).UserRoles(ctx, user.ID)
+		if err != nil {
+			return out, err
+		}
+		out.Users = append(out.Users, UserDump{ID: user.ID, Username: user.Username, Email: user.Email, Role: user.Role, Roles: ids, DisplayName: user.DisplayName, Disabled: user.Disabled})
+	}
+	var err error
+	out.Roles, err = authz.NewService(s.db).ListRoles(ctx)
+	if err != nil {
+		return out, err
+	}
+	out.GroupMappings, err = authz.NewService(s.db).ListMappings(ctx)
+	if err != nil {
+		return out, err
 	}
 	queries := []struct {
 		target any
@@ -122,7 +140,7 @@ func validate(bundle Bundle, options ImportOptions) (ImportReport, error) {
 		"users": len(bundle.Users), "agents": len(bundle.Agents), "skills": len(bundle.Skills), "queues": len(bundle.Queues),
 		"ivr_flows": len(bundle.IVRFlows), "ivr_versions": len(bundle.IVRVersions), "dids": len(bundle.DIDs), "webhooks": len(bundle.Webhooks),
 	}}
-	if bundle.SchemaVersion != schemaVersion {
+	if bundle.SchemaVersion != schemaVersion && bundle.SchemaVersion != 2 {
 		return report, errs.InvalidRequest(fmt.Sprintf("不支持的 schema_version %d，当前为 %d", bundle.SchemaVersion, schemaVersion))
 	}
 	users, agents, skills, queues, flows := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -190,6 +208,23 @@ func validate(bundle Bundle, options ImportOptions) (ImportReport, error) {
 }
 
 func importTransaction(tx *gorm.DB, bundle Bundle, options ImportOptions, report *ImportReport) error {
+	for _, dump := range bundle.Roles {
+		if dump.BuiltIn {
+			continue
+		}
+		role := authz.Role{ID: dump.ID, Name: dump.Name, BuiltIn: false, CreatedAt: time.Now().UTC()}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"name"})}).Create(&role).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("role_id = ?", dump.ID).Delete(&authz.RolePermission{}).Error; err != nil {
+			return err
+		}
+		for _, code := range dump.Permissions {
+			if err := tx.Create(&authz.RolePermission{RoleID: dump.ID, PermissionCode: code}).Error; err != nil {
+				return err
+			}
+		}
+	}
 	for _, dump := range bundle.Users {
 		var existing models.User
 		err := tx.First(&existing, "id = ?", dump.ID).Error
@@ -199,7 +234,7 @@ func importTransaction(tx *gorm.DB, bundle Bundle, options ImportOptions, report
 			if hashErr != nil {
 				return hashErr
 			}
-			row := models.User{ID: dump.ID, Username: dump.Username, PasswordHash: hash, Role: dump.Role, DisplayName: dump.DisplayName,
+			row := models.User{ID: dump.ID, Username: dump.Username, Email: dump.Email, PasswordHash: hash, Role: dump.Role, DisplayName: dump.DisplayName,
 				Disabled: true, AuthVersion: 1, MustChangePassword: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 			if err := tx.Create(&row).Error; err != nil {
 				return err
@@ -207,10 +242,27 @@ func importTransaction(tx *gorm.DB, bundle Bundle, options ImportOptions, report
 		} else if err != nil {
 			return err
 		} else {
-			if err := tx.Model(&existing).Updates(map[string]any{"username": dump.Username, "role": dump.Role, "display_name": dump.DisplayName,
+			if err := tx.Model(&existing).Updates(map[string]any{"username": dump.Username, "email": dump.Email, "role": dump.Role, "display_name": dump.DisplayName,
 				"disabled": dump.Disabled, "auth_version": gorm.Expr("auth_version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
 				return err
 			}
+		}
+		roles := dump.Roles
+		if len(roles) == 0 {
+			roles = []string{dump.Role}
+		}
+		if err := tx.Where("user_id = ?", dump.ID).Delete(&authz.UserRole{}).Error; err != nil {
+			return err
+		}
+		for _, id := range roles {
+			if err := tx.Create(&authz.UserRole{UserID: dump.ID, RoleID: id}).Error; err != nil {
+				return err
+			}
+		}
+	}
+	for _, mapping := range bundle.GroupMappings {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&mapping).Error; err != nil {
+			return err
 		}
 	}
 	for i := range bundle.Skills {

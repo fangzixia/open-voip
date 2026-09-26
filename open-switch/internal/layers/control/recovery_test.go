@@ -1,3 +1,4 @@
+// 本文件验证recovery的关键行为。
 package control
 
 import (

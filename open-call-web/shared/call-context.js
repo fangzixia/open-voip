@@ -1,3 +1,4 @@
+// 本文件负责通话上下文的构建与读取。
 const makeId = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const bytes = new Uint8Array(16);

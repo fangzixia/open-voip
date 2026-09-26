@@ -1,3 +1,4 @@
+// 本文件验证请求链路追踪的关键行为。
 package observability
 
 import (

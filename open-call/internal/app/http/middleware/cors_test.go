@@ -1,3 +1,4 @@
+// 本文件验证cors的关键行为。
 package middleware
 
 import (

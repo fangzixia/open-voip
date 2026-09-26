@@ -1,3 +1,4 @@
+// 本文件验证bff的关键行为。
 package http
 
 import (
@@ -14,10 +15,13 @@ import (
 type bffAuth struct{}
 
 func (bffAuth) Authenticate(_ context.Context, token string) (auth.Principal, error) {
+	if token == "readonly" {
+		return auth.Principal{UserID: "viewer", Role: "custom", Permissions: []string{"calls.read"}}, nil
+	}
 	if token != "valid" {
 		return auth.Principal{}, errs.Unauthorized("invalid")
 	}
-	return auth.Principal{UserID: "user", AgentID: "seat", Role: "agent"}, nil
+	return auth.Principal{UserID: "user", AgentID: "seat", Role: "agent", Permissions: []string{"calls.operate"}}, nil
 }
 
 func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
@@ -42,7 +46,7 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 	defer upstream.Close()
 	local := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusAccepted) })
 	h := WrapSwitchBFF(config.IntegrationConfig{Secret: "internal-secret", SwitchBaseURL: upstream.URL}, bffAuth{}, local)
-	for _, token := range []string{"", "invalid", "valid"} {
+	for _, token := range []string{"", "invalid", "readonly", "valid"} {
 		req := httptest.NewRequest("POST", "/api/v1/calls/call/hangup", nil)
 		req.Header.Set("X-Principal", `{"UserID":"forged","Role":"admin"}`)
 		if token != "" {
@@ -53,6 +57,8 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 		want := http.StatusUnauthorized
 		if token == "valid" {
 			want = http.StatusNoContent
+		} else if token == "readonly" {
+			want = http.StatusForbidden
 		}
 		if rec.Code != want {
 			t.Fatalf("token=%q status=%d body=%s", token, rec.Code, rec.Body.String())
