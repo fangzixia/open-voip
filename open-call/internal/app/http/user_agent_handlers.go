@@ -49,7 +49,8 @@ func (d RouterDeps) handleUserPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.Config.OIDC.Enabled && d.isEmergencyAdmin(r, chi.URLParam(r, "userId")) &&
-		((in.Disabled != nil && *in.Disabled) || (in.Role != nil && *in.Role != "admin")) {
+		((in.Disabled != nil && *in.Disabled) || (in.Role != nil && *in.Role != "admin") ||
+			(in.LoginName != nil && *in.LoginName != d.Config.OIDC.EmergencyAdmin)) {
 		writeErr(w, errs.Forbidden("不可禁用或移除应急管理员角色"))
 		return
 	}
@@ -75,7 +76,7 @@ func (d RouterDeps) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 
 func (d RouterDeps) isEmergencyAdmin(r *http.Request, id string) bool {
 	u, err := d.Users.Get(r.Context(), id)
-	return err == nil && u.Username == d.Config.OIDC.EmergencyAdmin
+	return err == nil && u.LoginName == d.Config.OIDC.EmergencyAdmin
 }
 
 func (d RouterDeps) handleUserResetPassword(w http.ResponseWriter, r *http.Request) {

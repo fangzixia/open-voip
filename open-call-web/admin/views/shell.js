@@ -62,7 +62,7 @@ export function renderApp(host, operations) {
     breadcrumb: actions.crumb(),
     topbar: html`
       <span class="topbar-meta">${host.clock}</span>
-      <span class="topbar-meta">管理员</span>
+      <span class="topbar-meta">${host.me?.username || "用户"}</span>
       <button @click=${actions.logout}>退出</button>
     `,
     content: html`
@@ -89,7 +89,7 @@ export function renderApp(host, operations) {
       ${host.nav === "audit" ? page(renderAudit, ["audit"], []) : ""}
       ${host.nav === "identity" ? page(renderIdentity,
         ["agentProfileDraft", "groupMappings", "identities", "identityInput", "me", "newIdentityUser", "newMapping", "newRole", "permissionsCatalog", "roles", "selectedUser", "users"],
-        ["bindIdentity", "createIdentityUser", "deleteRole", "editRole", "revokeSessions", "saveAgentProfile", "saveDisplayName", "saveEmail", "saveMapping", "saveRole", "saveUserRoles", "selectUser", "toggleDisabled", "toggleMappingRole", "toggleNewUserRole", "togglePermission", "toggleUserRole", "unbindIdentity", "updateAgentProfile", "updateIdentityInput", "updateMapping", "updateNewIdentityUser", "updateRole"]) : ""}
+        ["bindIdentity", "createIdentityUser", "deleteRole", "editRole", "revokeSessions", "saveAgentProfile", "saveUsername", "saveLoginName", "saveEmployeeNo", "saveMapping", "saveRole", "saveUserRoles", "selectUser", "toggleDisabled", "toggleMappingRole", "toggleNewUserRole", "togglePermission", "toggleUserRole", "unbindIdentity", "updateAgentProfile", "updateIdentityInput", "updateMapping", "updateNewIdentityUser", "updateRole"]) : ""}
     `,
   });
 }

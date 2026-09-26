@@ -27,18 +27,13 @@
 POST /api/v1/auth/login
 Content-Type: application/json
 
-{"username":"agent1","password":"***"}
+{"login_name":"agent1","password":"***"}
 ```
 
 响应：
 
 ```json
-{
-  "access_token": "eyJ...",
-  "refresh_token": "eyJ...",
-  "expires_in": 3600,
-  "token_type": "Bearer"
-}
+{"code":"OK","message":"成功","data":{"access_token":"eyJ...","refresh_token":"eyJ...","expires_in":3600,"token_type":"Bearer"},"request_id":"..."}
 ```
 
 ### 2.2 调用受保护 API
@@ -110,11 +105,7 @@ CDR 等支持 `from`, `to`（`YYYY-MM-DD HH:MM:SS`，UTC）、`queue_id`、`agen
 标准 HTTP 状态码 + JSON body，详见 [errors.md](./errors.md)。
 
 ```json
-{
-  "error": "invalid_request",
-  "message": "队列不存在",
-  "details": {}
-}
+{"code":"INVALID_REQUEST","message":"请求参数无效","data":null,"request_id":"...","error":"invalid_request"}
 ```
 
 业务错误可含 `code`（如 `AGENT_NOT_VIDEO_CAPABLE`）。
@@ -129,7 +120,7 @@ CDR 等支持 `from`, `to`（`YYYY-MM-DD HH:MM:SS`，UTC）、`queue_id`、`agen
 | supervisor | 班长：监听、强制签出、录音下载 |
 | agent | 签入、通话、小结 |
 
-现有 `x-roles` 记录迁移前内置角色的初始访问范围；运行时以服务端权限目录及角色分配为准。新增管理接口使用 `x-permission` 标识所需权限。OIDC 登录使用 `/api/v1/auth/oidc/start`、`callback`、`exchange`，管理端可通过 `/api/v1/auth/me` 获取当前权限。
+现有 `x-roles` 记录迁移前内置角色的初始访问范围；运行时以服务端权限目录及角色分配为准。新增管理接口使用 `x-permission` 标识所需权限。OIDC 登录使用 `/api/v1/auth/oidc/start`、`callback`、`exchange`，统一员工页通过 `/api/v1/auth/me` 获取当前权限并显示可用功能。用户属性为 `username`（展示名）、`login_name`（登录凭证）和 `employee_no`（工号），不使用邮箱。
 
 ---
 

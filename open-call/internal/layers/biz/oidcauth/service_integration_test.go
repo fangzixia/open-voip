@@ -58,7 +58,7 @@ func TestOIDCLoginTicketAndGroupRefresh(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]any{"kty": "RSA", "kid": "test-key", "use": "sig", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(e)}}})
 		case "/token":
 			_ = r.ParseForm()
-			claims := jwt.MapClaims{"iss": issuer, "aud": "open-voip-test", "sub": "user-sub-1", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(), "preferred_username": "oidc-user", "name": "OIDC User", "groups": groups}
+			claims := jwt.MapClaims{"iss": issuer, "aud": "open-voip-test", "sub": "user-sub-1", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(), "preferred_username": "oidc-user", "name": "OIDC User", "employee_no": "OIDC001", "groups": groups}
 			if r.Form.Get("grant_type") == "authorization_code" {
 				claims["nonce"] = nonce
 			}
@@ -94,7 +94,7 @@ func TestOIDCLoginTicketAndGroupRefresh(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		start, err := svc.Start(ctx, "/agent/")
+		start, err := svc.Start(ctx)
 		if err != nil {
 			return err
 		}
@@ -111,7 +111,7 @@ func TestOIDCLoginTicketAndGroupRefresh(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if path != "/agent/" || ticket == "" {
+		if path != "/" || ticket == "" {
 			t.Fatal("callback did not return one-time ticket")
 		}
 		if _, _, err := svc.Callback(ctx, state, "test-code"); err == nil {
@@ -211,7 +211,7 @@ func TestProviderOutageDoesNotBlockServiceConstruction(t *testing.T) {
 	if err != nil || svc == nil {
 		t.Fatalf("OIDC service construction failed during outage: %v", err)
 	}
-	if _, err := svc.Start(context.Background(), "/admin/"); err == nil {
+	if _, err := svc.Start(context.Background()); err == nil {
 		t.Fatal("login start should fail when provider is unavailable")
 	}
 }

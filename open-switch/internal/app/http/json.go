@@ -8,8 +8,6 @@ import (
 	"open-switch/internal/httpapi"
 	"strconv"
 
-	"open-switch/internal/app/http/middleware"
-	"open-switch/internal/authctx"
 	"open-switch/internal/errs"
 )
 
@@ -34,8 +32,4 @@ func pageParams(r *http.Request) (page, size int) {
 	page, _ = strconv.Atoi(r.URL.Query().Get("page"))
 	size, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
 	return page, size
-}
-
-func principal(r *http.Request) (authctx.Principal, bool) {
-	return middleware.PrincipalFromContext(r.Context())
 }

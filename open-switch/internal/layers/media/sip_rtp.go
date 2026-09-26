@@ -272,13 +272,13 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 			continue
 		}
 		r.mu.RLock()
-		for _, p := range r.peers {
-			if p.audioOut != nil && !p.held {
+		for legID, p := range r.peers {
+			if p.audioOut != nil && !p.held && r.canForward(rtpSess.legID, legID) {
 				_, _ = p.audioOut.Write(raw)
 			}
 		}
 		for dst := range r.sipRTP {
-			if dst != rtpSess && !dst.blocked() {
+			if dst != rtpSess && !dst.blocked() && r.canForward(rtpSess.legID, dst.legID) {
 				dst.writePCMU(raw)
 			}
 		}

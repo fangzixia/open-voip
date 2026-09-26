@@ -43,6 +43,8 @@ type Config struct {
 
 // IntegrationConfig open-switch 调用业务 Platform API 的配置。
 type IntegrationConfig struct {
+	// Mode call_center 沿用 Platform 适配；external 由可信控制器下发通话命令。
+	Mode string `yaml:"mode"`
 	// Secret 与业务系统共享的服务间密钥。
 	Secret string `yaml:"secret"`
 	// PlatformBaseURL open-call Platform API 根地址，如 http://127.0.0.1:8080。
@@ -255,7 +257,10 @@ func (c *Config) Validate() error {
 	if c.Recordings.VideoFormat != "webm" && c.Recordings.VideoFormat != "mp4" {
 		errs = append(errs, "recordings.video_format 必须为 webm 或 mp4")
 	}
-	if strings.TrimSpace(c.Integration.PlatformBaseURL) == "" {
+	if c.Integration.Mode != "call_center" && c.Integration.Mode != "external" {
+		errs = append(errs, "integration.mode 必须为 call_center 或 external")
+	}
+	if c.Integration.Mode == "call_center" && strings.TrimSpace(c.Integration.PlatformBaseURL) == "" {
 		errs = append(errs, "integration.platform_base_url 不能为空")
 	}
 	if len(strings.TrimSpace(c.Integration.Secret)) < 8 {
@@ -373,6 +378,9 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Integration.Mode == "" {
+		c.Integration.Mode = "call_center"
+	}
 	if strings.TrimSpace(c.Log.Dir) == "" {
 		c.Log.Dir = "./logs/open-switch"
 	}

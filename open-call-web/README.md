@@ -1,8 +1,8 @@
 # open-call-web（Lit + Vite）
 
-坐席 / 访客 / 管理三端静态 UI，对接 **open-call** 的 `/api/v1`（通话经 BFF 代理至 open-switch）。
+员工使用根路径 `/` 的单页入口，按 `/auth/me` 权限显示管理功能和坐席工作台；访客仍使用 `/guest/`。页面对接 **open-call** 的 `/api/v1`（通话经 BFF 代理至 open-switch）。
 
-启用后端 OIDC 后，管理端与坐席端登录页显示“统一身份平台登录”。回调将一次性票据放在 URL 片段，页面立即清除片段并向后端交换本项目令牌；管理端保留应急管理员密码入口。
+启用后端 OIDC 后，统一登录页显示“统一身份平台登录”。回调将一次性票据放在根路径 URL 片段，页面立即清除片段并向后端交换本项目令牌；保留应急管理员密码入口。
 
 ## 前端结构
 
@@ -20,7 +20,7 @@
 ```bash
 cd open-call-web
 npm install
-npm run dev    # http://127.0.0.1:5173/agent/ 、 /guest/ 、 /admin/
+npm run dev    # http://127.0.0.1:5173/ 、 /guest/
 ```
 
 未设置 `VITE_API_BASE` 时，开发服务器把 `/api`、`/health` 代理到 `http://127.0.0.1:8080`。

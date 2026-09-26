@@ -34,7 +34,7 @@ oidc:
   redirect_url: "https://cc.example.com/api/v1/auth/oidc/callback"
   frontend_url: "https://cc.example.com"
   groups_claim: "groups"
-  scopes: ["openid", "profile", "email", "offline_access"]
+  scopes: ["openid", "profile", "offline_access"]
   emergency_admin: "admin"
   encryption_key: "REPLACE_WITH_32_PLUS_RANDOM_CHARACTERS"
 

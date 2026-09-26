@@ -13,22 +13,22 @@ import (
 
 func (d RouterDeps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		LoginName string `json:"login_name"`
+		Password  string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
 		return
 	}
-	pair, err := d.Auth.Login(r.Context(), body.Username, body.Password, auth.SessionMeta{
+	pair, err := d.Auth.Login(r.Context(), body.LoginName, body.Password, auth.SessionMeta{
 		UserAgent: r.UserAgent(), RemoteIP: clientIP(r),
 	})
 	if err != nil {
-		d.writeAudit(r.Context(), "", "login", body.Username, map[string]string{"outcome": "failure", "remote_ip": clientIP(r)})
+		d.writeAudit(r.Context(), "", "login", body.LoginName, map[string]string{"outcome": "failure", "remote_ip": clientIP(r)})
 		writeErr(w, err)
 		return
 	}
-	d.writeAudit(r.Context(), "", "login", body.Username, map[string]string{"outcome": "success", "remote_ip": clientIP(r)})
+	d.writeAudit(r.Context(), "", "login", body.LoginName, map[string]string{"outcome": "success", "remote_ip": clientIP(r)})
 	writeJSON(w, http.StatusOK, pair)
 }
 

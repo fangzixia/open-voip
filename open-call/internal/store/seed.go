@@ -39,6 +39,7 @@ func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) erro
 	admin := models.User{
 		ID:           uuid.New().String(),
 		Username:     "admin",
+		EmployeeNo:   "ADMIN001",
 		PasswordHash: adminHash,
 		Role:         "admin",
 		DisplayName:  "管理员",
@@ -48,6 +49,7 @@ func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) erro
 	agentUser := models.User{
 		ID:           uuid.New().String(),
 		Username:     "agent1",
+		EmployeeNo:   "AGENT001",
 		PasswordHash: agentHash,
 		Role:         "agent",
 		DisplayName:  "坐席一",
@@ -65,6 +67,7 @@ func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) erro
 	agentUser2 := models.User{
 		ID:           uuid.New().String(),
 		Username:     "agent2",
+		EmployeeNo:   "AGENT002",
 		PasswordHash: agentHash,
 		Role:         "agent",
 		DisplayName:  "坐席二",
@@ -82,6 +85,7 @@ func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) erro
 	supUser := models.User{
 		ID:           uuid.New().String(),
 		Username:     "supervisor",
+		EmployeeNo:   "SUPERVISOR001",
 		PasswordHash: agentHash,
 		Role:         "supervisor",
 		DisplayName:  "班长",

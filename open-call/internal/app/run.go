@@ -118,6 +118,7 @@ func Run(configPath string) error {
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	go monitorLogDisk(workerCtx, log, cfg.Log.Dir)
+	go consumeSwitchEvents(workerCtx, db, switchClient, wsHub, log)
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 

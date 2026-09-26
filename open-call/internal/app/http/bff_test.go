@@ -3,12 +3,16 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"open-call/internal/config"
-	"open-call/internal/datetime"
 	"open-call/internal/errs"
+	"open-call/internal/httpapi"
 	"open-call/internal/layers/biz/auth"
+	"open-call/internal/ports"
+	"open-call/internal/ports/dto"
+	"strings"
 	"testing"
 )
 
@@ -24,20 +28,69 @@ func (bffAuth) Authenticate(_ context.Context, token string) (auth.Principal, er
 	return auth.Principal{UserID: "user", AgentID: "seat", Role: "agent", Permissions: []string{"calls.operate"}}, nil
 }
 
+func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
+	forwarded := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/switch/v1/internal/calls/") {
+			id := strings.TrimPrefix(r.URL.Path, "/switch/v1/internal/calls/")
+			view := ports.CallView{ID: id, AgentID: "other", Legs: []ports.LegView{
+				{ID: "own-leg", Role: dto.LegRoleAgent, AgentID: "seat"},
+				{ID: "foreign-leg", Role: dto.LegRoleAgent, AgentID: "other"},
+			}}
+			if id == "foreign" {
+				view.Legs = nil
+			}
+			httpapi.Write(w, http.StatusOK, view)
+			return
+		}
+		forwarded++
+		if r.URL.Path == "/switch/v1/calls/outbound" {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["agent_id"] != "seat" {
+				t.Errorf("outbound actor not replaced: %v %v", body, err)
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	h := WrapSwitchBFF(config.IntegrationConfig{Secret: "internal-secret", SwitchBaseURL: upstream.URL}, bffAuth{}, http.NotFoundHandler())
+	cases := []struct {
+		path, body string
+		want       int
+	}{
+		{"/api/v1/calls/foreign/hangup", `{}`, http.StatusForbidden},
+		{"/api/v1/calls/owned/legs/foreign-leg/offer", `{}`, http.StatusForbidden},
+		{"/api/v1/calls/owned/legs/own-leg/offer", `{}`, http.StatusNoContent},
+		{"/api/v1/calls/outbound", `{"agent_id":"other"}`, http.StatusNoContent},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Authorization", "Bearer valid")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("%s: got %d, want %d: %s", tc.path, rec.Code, tc.want, rec.Body.String())
+		}
+	}
+	if forwarded != 2 {
+		t.Fatalf("forwarded %d requests, want 2", forwarded)
+	}
+}
+
 func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 	requests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
 		if r.Header.Get("Authorization") != "Bearer internal-secret" {
 			t.Error("missing integration secret")
 		}
-		var p auth.Principal
-		if err := datetime.Unmarshal([]byte(r.Header.Get("X-Principal")), &p); err != nil {
-			t.Error(err)
+		if r.Header.Get("X-Principal") != "" {
+			t.Error("end-user principal must not reach switch")
 		}
-		if p.UserID != "user" || p.Role != "agent" || p.AgentID != "seat" {
-			t.Errorf("forged principal survived: %+v", p)
+		if r.URL.Path == "/switch/v1/internal/calls/call" {
+			httpapi.Write(w, http.StatusOK, ports.CallView{ID: "call", AgentID: "seat"})
+			return
 		}
+		requests++
 		if r.Header.Get("X-Trace-ID") == "" || r.Header.Get("X-Call-ID") != "call" || r.Header.Get("X-Agent-ID") != "seat" {
 			t.Errorf("trace headers missing: %v", r.Header)
 		}

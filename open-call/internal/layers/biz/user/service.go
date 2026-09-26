@@ -23,8 +23,8 @@ type DTO struct {
 	SIPUsername        string    `json:"sip_username,omitempty"`
 	ID                 string    `json:"id"`
 	Username           string    `json:"username"`
-	Email              string    `json:"email,omitempty"`
-	DisplayName        string    `json:"display_name,omitempty"`
+	LoginName          string    `json:"login_name"`
+	EmployeeNo         string    `json:"employee_no"`
 	Role               string    `json:"role"`
 	Disabled           bool      `json:"disabled"`
 	AgentID            string    `json:"agent_id,omitempty"`
@@ -39,12 +39,12 @@ type DTO struct {
 type CreateInput struct {
 	TerminalType string   `json:"terminal_type"`
 	SIPUsername  string   `json:"sip_username"`
+	LoginName    string   `json:"login_name"`
 	Username     string   `json:"username"`
-	Email        string   `json:"email"`
+	EmployeeNo   string   `json:"employee_no"`
 	Password     string   `json:"password"`
 	Role         string   `json:"role"`
 	Roles        []string `json:"roles"`
-	DisplayName  string   `json:"display_name"`
 	Extension    string   `json:"extension"`
 	VideoCapable bool     `json:"video_capable"`
 }
@@ -55,8 +55,9 @@ type UpdateInput struct {
 	SIPUsername  *string `json:"sip_username"`
 	Role         *string `json:"role"`
 	Disabled     *bool   `json:"disabled"`
-	DisplayName  *string `json:"display_name"`
-	Email        *string `json:"email"`
+	Username     *string `json:"username"`
+	LoginName    *string `json:"login_name"`
+	EmployeeNo   *string `json:"employee_no"`
 	VideoCapable *bool   `json:"video_capable"`
 	Extension    *string `json:"extension"`
 }
@@ -120,14 +121,15 @@ func (s *Service) Get(ctx context.Context, id string) (DTO, error) {
 
 // Create 创建用户；role=agent 时同时创建坐席。
 func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
+	in.LoginName = strings.TrimSpace(in.LoginName)
 	in.Username = strings.TrimSpace(in.Username)
-	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
-	if !validEmail(in.Email) {
-		return DTO{}, errs.InvalidRequest("邮箱格式无效")
-	}
+	in.EmployeeNo = strings.TrimSpace(in.EmployeeNo)
 	in.Role = strings.TrimSpace(in.Role)
-	if in.Username == "" || in.Password == "" {
-		return DTO{}, errs.InvalidRequest("用户名与密码必填")
+	if in.LoginName == "" || in.Username == "" || in.EmployeeNo == "" || in.Password == "" {
+		return DTO{}, errs.InvalidRequest("用户名、登录名、工号与密码必填")
+	}
+	if len(in.LoginName) > 64 || len(in.Username) > 128 || len(in.EmployeeNo) > 64 {
+		return DTO{}, errs.InvalidRequest("用户属性超过长度限制")
 	}
 	if err := auth.ValidatePassword(in.Password); err != nil {
 		return DTO{}, err
@@ -174,11 +176,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	now := time.Now().UTC()
 	u := models.User{
 		ID:           uuid.New().String(),
-		Username:     in.Username,
-		Email:        in.Email,
+		Username:     in.LoginName,
+		EmployeeNo:   in.EmployeeNo,
 		PasswordHash: hash,
 		Role:         in.Role,
-		DisplayName:  in.DisplayName,
+		DisplayName:  in.Username,
 		AuthVersion:  1,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -215,7 +217,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	})
 	if err != nil {
 		if isUnique(err) {
-			return DTO{}, errs.Conflict("用户名、邮箱或分机号已存在", "")
+			return DTO{}, errs.Conflict("登录名、工号或分机号已存在", "")
 		}
 		return DTO{}, err
 	}
@@ -246,15 +248,27 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		updates["disabled"] = *in.Disabled
 		authChanged = authChanged || *in.Disabled != u.Disabled
 	}
-	if in.DisplayName != nil {
-		updates["display_name"] = *in.DisplayName
-	}
-	if in.Email != nil {
-		email := strings.ToLower(strings.TrimSpace(*in.Email))
-		if !validEmail(email) {
-			return DTO{}, errs.InvalidRequest("邮箱格式无效")
+	if in.Username != nil {
+		name := strings.TrimSpace(*in.Username)
+		if name == "" || len(name) > 128 {
+			return DTO{}, errs.InvalidRequest("用户名无效或超过长度限制")
 		}
-		updates["email"] = email
+		updates["display_name"] = name
+	}
+	if in.LoginName != nil {
+		name := strings.TrimSpace(*in.LoginName)
+		if name == "" || len(name) > 64 {
+			return DTO{}, errs.InvalidRequest("登录名无效或超过长度限制")
+		}
+		updates["username"] = name
+		authChanged = authChanged || name != u.Username
+	}
+	if in.EmployeeNo != nil {
+		no := strings.TrimSpace(*in.EmployeeNo)
+		if no == "" || len(no) > 64 {
+			return DTO{}, errs.InvalidRequest("工号无效或超过长度限制")
+		}
+		updates["employee_no"] = no
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var ag models.Agent
@@ -351,7 +365,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		return tx.Model(&u).Updates(updates).Error
 	}); err != nil {
 		if isUnique(err) {
-			return DTO{}, errs.Conflict("邮箱或分机号已存在", "")
+			return DTO{}, errs.Conflict("登录名、工号或分机号已存在", "")
 		}
 		return DTO{}, err
 	}
@@ -419,9 +433,9 @@ func (s *Service) ResetPassword(ctx context.Context, id string) (string, error) 
 func (s *Service) toDTO(ctx context.Context, u models.User) (DTO, error) {
 	out := DTO{
 		ID:                 u.ID,
-		Username:           u.Username,
-		Email:              u.Email,
-		DisplayName:        u.DisplayName,
+		Username:           u.DisplayName,
+		LoginName:          u.Username,
+		EmployeeNo:         u.EmployeeNo,
 		Role:               u.Role,
 		Disabled:           u.Disabled,
 		MustChangePassword: u.MustChangePassword,
@@ -449,10 +463,6 @@ func isUnique(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique")
-}
-
-func validEmail(value string) bool {
-	return value == "" || (len(value) <= 320 && strings.Count(value, "@") == 1 && !strings.ContainsAny(value, " \t\r\n"))
 }
 
 func validateTerminal(kind, username, extension string, video bool) error {

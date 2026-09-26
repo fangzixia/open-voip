@@ -9,6 +9,7 @@
 | [technical-design.md](./technical-design.md) | 实现级设计 |
 | [implementation-plan.md](./implementation-plan.md) | 实施计划 |
 | [api/](./api/) | OpenAPI（REST 对接） |
+| [权限登录系统对接说明.md](./权限登录系统对接说明.md) | 登录、OIDC 与 RBAC 对接流程 |
 | [events.md](./events.md) | WebSocket 事件 |
 
 应用代码见 **[../open-call/](../open-call/)**、**[../open-switch/](../open-switch/)** 与 **[../open-call-web/](../open-call-web/)**（前端）。

@@ -19,7 +19,16 @@ func (d RouterDeps) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user_id": p.UserID, "agent_id": p.AgentID, "roles": roles, "permissions": p.Permissions})
+	user, err := d.Users.Get(r.Context(), p.UserID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user_id": p.UserID, "agent_id": p.AgentID, "username": user.Username,
+		"login_name": user.LoginName, "employee_no": user.EmployeeNo,
+		"roles": roles, "permissions": p.Permissions,
+	})
 }
 
 func (d RouterDeps) handlePermissionList(w http.ResponseWriter, r *http.Request) {

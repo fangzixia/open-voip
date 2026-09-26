@@ -9,9 +9,12 @@ import (
 
 // CallView 供 HTTP 返回的通话视图。
 type CallView struct {
-	CreatedAt    time.Time `json:"created_at"`
-	Caller       string    `json:"caller"`
-	TerminalType string    `json:"terminal_type,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	Caller       string     `json:"caller"`
+	Callee       string     `json:"callee"`
+	AnsweredAt   *time.Time `json:"answered_at,omitempty"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	TerminalType string     `json:"terminal_type,omitempty"`
 	// ID 通话 ID。
 	ID string `json:"id"`
 	// State FSM 状态。

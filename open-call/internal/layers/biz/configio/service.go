@@ -16,7 +16,7 @@ import (
 	"open-call/internal/store/models"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 // Bundle 是可校验、可事务恢复的组织业务配置。
 type Bundle struct {
@@ -39,13 +39,32 @@ type Bundle struct {
 
 // UserDump 不包含密码哈希；新恢复的账号会禁用并要求管理员重置密码。
 type UserDump struct {
-	ID          string   `json:"id"`
-	Username    string   `json:"username"`
-	Email       string   `json:"email,omitempty"`
-	Role        string   `json:"role"`
-	Roles       []string `json:"roles,omitempty"`
-	DisplayName string   `json:"display_name"`
-	Disabled    bool     `json:"disabled"`
+	ID                string   `json:"id"`
+	Username          string   `json:"username"`
+	LoginName         string   `json:"login_name,omitempty"`
+	EmployeeNo        string   `json:"employee_no,omitempty"`
+	LegacyDisplayName string   `json:"display_name,omitempty"`
+	LegacyEmail       string   `json:"email,omitempty"` // 仅接受历史导入，导出时始终为空
+	Role              string   `json:"role"`
+	Roles             []string `json:"roles,omitempty"`
+	Disabled          bool     `json:"disabled"`
+}
+
+func importLoginName(user UserDump) string {
+	if user.LoginName != "" {
+		return user.LoginName
+	}
+	return user.Username // 兼容 v2/v3 导出中的登录名
+}
+
+func importUsername(user UserDump) string {
+	if user.LoginName != "" {
+		return user.Username
+	}
+	if user.LegacyDisplayName != "" {
+		return user.LegacyDisplayName
+	}
+	return user.Username
 }
 
 // ImportOptions 控制配置导入行为。
@@ -82,7 +101,7 @@ func (s *Service) Export(ctx context.Context) (Bundle, error) {
 		if err != nil {
 			return out, err
 		}
-		out.Users = append(out.Users, UserDump{ID: user.ID, Username: user.Username, Email: user.Email, Role: user.Role, Roles: ids, DisplayName: user.DisplayName, Disabled: user.Disabled})
+		out.Users = append(out.Users, UserDump{ID: user.ID, Username: user.DisplayName, LoginName: user.Username, EmployeeNo: user.EmployeeNo, Role: user.Role, Roles: ids, Disabled: user.Disabled})
 	}
 	var err error
 	out.Roles, err = authz.NewService(s.db).ListRoles(ctx)
@@ -140,13 +159,13 @@ func validate(bundle Bundle, options ImportOptions) (ImportReport, error) {
 		"users": len(bundle.Users), "agents": len(bundle.Agents), "skills": len(bundle.Skills), "queues": len(bundle.Queues),
 		"ivr_flows": len(bundle.IVRFlows), "ivr_versions": len(bundle.IVRVersions), "dids": len(bundle.DIDs), "webhooks": len(bundle.Webhooks),
 	}}
-	if bundle.SchemaVersion != schemaVersion && bundle.SchemaVersion != 2 {
+	if bundle.SchemaVersion != schemaVersion && bundle.SchemaVersion != 3 && bundle.SchemaVersion != 2 {
 		return report, errs.InvalidRequest(fmt.Sprintf("不支持的 schema_version %d，当前为 %d", bundle.SchemaVersion, schemaVersion))
 	}
 	users, agents, skills, queues, flows := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, user := range bundle.Users {
-		if user.ID == "" || strings.TrimSpace(user.Username) == "" {
-			return report, errs.InvalidRequest("用户 id 与 username 必填")
+		if user.ID == "" || strings.TrimSpace(importLoginName(user)) == "" {
+			return report, errs.InvalidRequest("用户 id 与 login_name 必填")
 		}
 		if user.Role != "admin" && user.Role != "supervisor" && user.Role != "agent" {
 			return report, errs.InvalidRequest("用户角色无效: " + user.Username)
@@ -234,7 +253,7 @@ func importTransaction(tx *gorm.DB, bundle Bundle, options ImportOptions, report
 			if hashErr != nil {
 				return hashErr
 			}
-			row := models.User{ID: dump.ID, Username: dump.Username, Email: dump.Email, PasswordHash: hash, Role: dump.Role, DisplayName: dump.DisplayName,
+			row := models.User{ID: dump.ID, Username: importLoginName(dump), EmployeeNo: dump.EmployeeNo, PasswordHash: hash, Role: dump.Role, DisplayName: importUsername(dump),
 				Disabled: true, AuthVersion: 1, MustChangePassword: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 			if err := tx.Create(&row).Error; err != nil {
 				return err
@@ -242,7 +261,7 @@ func importTransaction(tx *gorm.DB, bundle Bundle, options ImportOptions, report
 		} else if err != nil {
 			return err
 		} else {
-			if err := tx.Model(&existing).Updates(map[string]any{"username": dump.Username, "email": dump.Email, "role": dump.Role, "display_name": dump.DisplayName,
+			if err := tx.Model(&existing).Updates(map[string]any{"username": importLoginName(dump), "employee_no": dump.EmployeeNo, "role": dump.Role, "display_name": importUsername(dump),
 				"disabled": dump.Disabled, "auth_version": gorm.Expr("auth_version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
 				return err
 			}

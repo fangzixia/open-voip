@@ -27,6 +27,20 @@ func TestValidateRejectsShortIntegrationSecret(t *testing.T) {
 	}
 }
 
+func TestExternalModeDoesNotRequirePlatformAPI(t *testing.T) {
+	cfg := validBase()
+	cfg.Integration.Mode = "external"
+	cfg.Integration.PlatformBaseURL = ""
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Integration.Mode = "call_center"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("call center mode must require Platform API")
+	}
+}
+
 func TestSIPEnabledRequiresExternalIPAndTrunk(t *testing.T) {
 	cfg := validBase()
 	cfg.SIP.Enabled = true

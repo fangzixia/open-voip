@@ -42,6 +42,21 @@ func (s *CallStore) InsertCall(ctx context.Context, rec ports.CallRecord) error 
 	return s.db.WithContext(ctx).Create(&row).Error
 }
 
+// InsertDirectCall records the call and its first leg atomically.
+func (s *CallStore) InsertDirectCall(ctx context.Context, rec ports.CallRecord, leg ports.CallLegRecord) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		store := &CallStore{db: tx}
+		if err := store.InsertCall(ctx, rec); err != nil {
+			return err
+		}
+		return store.InsertLeg(ctx, leg)
+	})
+}
+
+func (s *CallStore) DeleteLeg(ctx context.Context, callID, legID string) error {
+	return s.db.WithContext(ctx).Where("call_id = ? AND id = ?", callID, legID).Delete(&models.CallLeg{}).Error
+}
+
 func (s *CallStore) UpdateCall(ctx context.Context, rec ports.CallRecord) error {
 	updates := map[string]any{
 		"state":  rec.State,

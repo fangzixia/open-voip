@@ -14,7 +14,7 @@ func (d RouterDeps) handleAuthOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d RouterDeps) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
-	target, err := d.OIDC.Start(r.Context(), r.URL.Query().Get("return_to"))
+	target, err := d.OIDC.Start(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return

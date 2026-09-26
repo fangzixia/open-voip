@@ -84,6 +84,7 @@ func NewService(deps Deps) *Service {
 }
 
 var _ ports.CallControlPort = (*Service)(nil)
+var _ ports.DirectControlPort = (*Service)(nil)
 var _ ports.SignalingPort = (*Service)(nil)
 
 // StartInbound 幂等创建呼入及客户通话腿，并按营业时间和队列配置进入 IVR 或排队。
@@ -388,6 +389,11 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	if err := s.stopRecording(ctx, callID); err != nil {
 		return err
 	}
+	if rt.recordingID != "" {
+		if meta, err := s.deps.Media.RecordingInfo(ctx, rt.recordingID); err == nil {
+			_ = s.publishCall(ctx, callID, "recording.stopped", "", map[string]any{"call_id": callID, "recording_id": rt.recordingID, "file_path": meta.FilePath, "file_size": meta.FileSize})
+		}
+	}
 	s.mu.Lock()
 	rt.rec.EndedAt = new(time.Now().UTC())
 	s.mu.Unlock()
@@ -489,7 +495,7 @@ func (s *Service) GetCall(ctx context.Context, callID string) (ports.CallView, e
 	if err != nil {
 		return ports.CallView{}, err
 	}
-	return toView(&runtimeCall{rec: rec, legs: legs}), nil
+	return toView(&runtimeCall{rec: rec, legs: legs, caller: rec.Caller, callee: rec.Callee, answeredAt: rec.AnsweredAt}), nil
 }
 
 // JoinWebRTC 校验通话腿和当前状态，再向媒体层申请本地 Offer。
@@ -513,7 +519,7 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string) (dto.Loc
 		return dto.LocalOffer{}, errs.NotFound("通话腿不存在")
 	}
 	preAnswerCustomer := role == dto.LegRoleCustomer && (view.State == stateQueued || view.State == stateRinging)
-	if !preAnswerCustomer && view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
+	if !preAnswerCustomer && view.State != stateCreated && view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
 		return dto.LocalOffer{}, errs.Conflict("当前状态无法加入媒体", "")
 	}
 	return s.deps.Media.JoinWebRTC(ctx, callID, legID, role)
@@ -832,7 +838,7 @@ func (s *Service) publishCall(ctx context.Context, callID, typ, agentID string, 
 			continue
 		}
 		seen[id] = struct{}{}
-		_ = s.deps.CallEvents.PublishCallEvent(ctx, ports.CallEvent{Type: typ, AgentID: id, Payload: payload})
+		_ = s.deps.CallEvents.PublishCallEvent(ctx, ports.CallEvent{Type: typ, CallID: callID, AgentID: id, TargetOnly: true, Payload: payload})
 	}
 	return err
 }
@@ -840,7 +846,7 @@ func (s *Service) publishCall(ctx context.Context, callID, typ, agentID string, 
 func toView(rt *runtimeCall) ports.CallView {
 	v := ports.CallView{
 		ID:        rt.rec.ID,
-		CreatedAt: rt.rec.CreatedAt, Caller: rt.caller,
+		CreatedAt: rt.rec.CreatedAt, Caller: rt.caller, Callee: rt.callee, AnsweredAt: rt.answeredAt, EndedAt: rt.rec.EndedAt,
 		State:           rt.rec.State,
 		Direction:       rt.rec.Direction,
 		SessionType:     rt.rec.SessionType,

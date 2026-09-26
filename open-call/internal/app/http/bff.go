@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"open-call/internal/datetime"
 	"open-call/internal/httpapi"
+	"open-call/internal/integration/switchapi"
 	"open-call/internal/observability"
 	"strings"
 	"time"
@@ -25,18 +25,16 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	proxy.Transport = transport
+	switchClient := switchapi.NewClient(cfg)
 	origDirector := proxy.Director
 	proxy.Director = func(r *http.Request) {
 		origDirector(r)
-		// 身份头只能由已验证的用户主体生成，禁止透传浏览器提供的身份。
+		// Switch 只接受服务命令；删除浏览器伪造的身份提示头。
 		r.Header.Del("X-Principal")
+		r.Header.Del("X-Agent-ID")
 		r.Header.Set("Authorization", "Bearer "+cfg.Secret)
-		if p, ok := middleware.PrincipalFromContext(r.Context()); ok {
-			b, _ := datetime.Marshal(p)
-			r.Header.Set("X-Principal", string(b))
-			if p.AgentID != "" {
-				r.Header.Set("X-Agent-ID", p.AgentID)
-			}
+		if p, ok := middleware.PrincipalFromContext(r.Context()); ok && p.AgentID != "" {
+			r.Header.Set("X-Agent-ID", p.AgentID)
 		}
 		if traceID := observability.From(r.Context()).TraceID; traceID != "" {
 			r.Header.Set("X-Trace-ID", traceID)
@@ -61,6 +59,10 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		}
 		if p.IsGuest() && (strings.Contains(r.URL.Path, "/supervisor/") || strings.HasSuffix(r.URL.Path, "/outbound") || strings.HasPrefix(r.URL.Path, "/switch/v1/ivr-assets")) {
 			httpapi.Error(w, errs.Forbidden("无权限"))
+			return
+		}
+		if err := prepareSwitchRequest(r, p, switchClient); err != nil {
+			httpapi.Error(w, err)
 			return
 		}
 		proxy.ServeHTTP(w, r)

@@ -61,7 +61,7 @@ export function renderAppShell({
   `;
 }
 
-export function renderLoginLayout({ subtitle, title, hint, onSubmit, fields, error = "", showSubmit = true, extraActions = "" }) {
+export function renderLoginLayout({ subtitle, title, hint, onSubmit, fields, error = "", showSubmit = true, submitLabel = "登录", extraActions = "" }) {
   return html`
     <div class="login-page">
       <header class="topbar">
@@ -72,7 +72,7 @@ export function renderLoginLayout({ subtitle, title, hint, onSubmit, fields, err
           <h2>${title}</h2>
           <p class="hint">${hint}</p>
           ${fields}
-          ${showSubmit ? html`<button type="submit">登录</button>` : ""}
+          ${showSubmit ? html`<button type="submit">${submitLabel}</button>` : ""}
           ${extraActions}
           ${error ? html`<p class="error login-error" role="alert">${error}</p>` : nothing}
         </form>

@@ -180,8 +180,8 @@ func (c *Config) Validate() error {
 		}
 		for _, raw := range []string{c.OIDC.Issuer, c.OIDC.RedirectURL, c.OIDC.FrontendURL} {
 			u, err := url.Parse(raw)
-			if err != nil || u.Scheme != "https" || u.Host == "" {
-				problems = append(problems, "OIDC 地址必须是完整 HTTPS URL")
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				problems = append(problems, "OIDC 地址必须是完整 HTTP 或 HTTPS URL")
 				break
 			}
 		}

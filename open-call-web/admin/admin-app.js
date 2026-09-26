@@ -143,7 +143,7 @@ export class AdminApp extends LitElement {
 
   async #logout() {
     try { await logout(); } catch (e) { this.error = e.message; }
-    finally { clearAccessToken(); this.authed = false; }
+    finally { clearAccessToken(); this.authed = false; this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true })); }
   }
 
   /** 加载管理端总览所需的队列、坐席、话单和配置数据。 */
@@ -312,7 +312,7 @@ export class AdminApp extends LitElement {
       idleAgents: (...args) => this.#idleAgents(...args),
       load: (...args) => this.#load(...args),
       login: (...args) => this.#login(...args),
-      startSSO: () => startSSO("/admin/"),
+      startSSO: () => startSSO(),
       ...identityActions(this, () => this.#load()),
       logout: (...args) => this.#logout(...args),
       playRec: (...args) => this.#playRec(...args),

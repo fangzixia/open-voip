@@ -17,6 +17,7 @@ import (
 	apphttp "open-switch/internal/app/http"
 	"open-switch/internal/config"
 	"open-switch/internal/errs"
+	"open-switch/internal/integration/external"
 	"open-switch/internal/integration/platform"
 	"open-switch/internal/layers/control"
 	"open-switch/internal/layers/media"
@@ -67,20 +68,28 @@ func Run(configPath string) error {
 		return fmt.Errorf("媒体层: %w", err)
 	}
 
-	platformClient := platform.NewClient(cfg.Integration)
-	platformClient.EnableOutbox(db)
+	eventStore := store.CallEvents{DB: db}
+	null := external.Null{}
+	controlDeps := control.Deps{
+		Media: mediaSvc, ACD: null, Config: null, Agents: null,
+		RecordingPolicy: null, CDR: null, Recordings: null,
+		CallEvents: external.EventPublisher{Store: eventStore},
+	}
+	var platformClient *platform.Client
+	if cfg.Integration.Mode == "call_center" {
+		platformClient = platform.NewClient(cfg.Integration)
+		platformClient.EnableOutbox(db)
+		controlDeps.ACD = platformClient
+		controlDeps.Config = platformClient
+		controlDeps.Agents = platformClient
+		controlDeps.RecordingPolicy = platformClient
+		controlDeps.CDR = platformClient
+		controlDeps.Recordings = platformClient
+		// open-call consumes the same durable cursor as third-party controllers.
+	}
 	callStore := store.NewCallStore(db)
-	callControl := control.NewService(control.Deps{
-		Media:           mediaSvc,
-		ACD:             platformClient,
-		Config:          platformClient,
-		Agents:          platformClient,
-		RecordingPolicy: platformClient,
-		CDR:             platformClient,
-		Calls:           callStore,
-		CallEvents:      platform.NewEventPublisher(platformClient),
-		Recordings:      platformClient,
-	})
+	controlDeps.Calls = callStore
+	callControl := control.NewService(controlDeps)
 
 	if err := callControl.Recover(context.Background()); err != nil {
 		return fmt.Errorf("遗留通话恢复: %w", err)
@@ -106,31 +115,51 @@ func Run(configPath string) error {
 		}
 		return id, "", nil
 	}
-	mediaSvc.SetDeviceHandler(func(ctx context.Context, destination, from, callID string) (string, string, error) {
-		qid, err := platformClient.ResolveDID(ctx, destination)
-		if err == nil {
+	if cfg.Integration.Mode == "external" {
+		createSIP := func(ctx context.Context, direction, destination, from, callID string) (string, string, error) {
+			view, err := callControl.CreateDirect(ctx, dto.DirectCallRequest{CallID: callID, Direction: direction, Caller: from, Callee: destination, SessionType: dto.SessionTypeAudio, InitialLegRole: dto.LegRolePSTN})
+			if err != nil {
+				return "", "", err
+			}
+			return view.ID, view.Legs[0].ID, nil
+		}
+		mediaSvc.SetInboundHandler(func(ctx context.Context, did, from, callID string) (string, string, error) {
+			return createSIP(ctx, "inbound", did, from, callID)
+		})
+		mediaSvc.SetDeviceHandler(func(ctx context.Context, destination, from, callID string) (string, string, error) {
+			return createSIP(ctx, "outbound", destination, from, callID)
+		})
+	} else {
+		mediaSvc.SetDeviceHandler(func(ctx context.Context, destination, from, callID string) (string, string, error) {
+			qid, err := platformClient.ResolveDID(ctx, destination)
+			if err == nil {
+				return startInbound(ctx, qid, from, callID)
+			}
+			var apiErr *errs.APIError
+			if !errors.As(err, &apiErr) || apiErr.HTTP != http.StatusNotFound {
+				return "", "", err
+			}
+			return callControl.SIPSource(ctx, callID, from, destination)
+		})
+		mediaSvc.SetInboundHandler(func(ctx context.Context, did, from, callID string) (string, string, error) {
+			qid, err := platformClient.ResolveDID(ctx, did)
+			if err != nil {
+				return "", "", err
+			}
 			return startInbound(ctx, qid, from, callID)
-		}
-		var apiErr *errs.APIError
-		if !errors.As(err, &apiErr) || apiErr.HTTP != http.StatusNotFound {
-			return "", "", err
-		}
-		return callControl.SIPSource(ctx, callID, from, destination)
-	})
-	mediaSvc.SetInboundHandler(func(ctx context.Context, did, from, callID string) (string, string, error) {
-		qid, err := platformClient.ResolveDID(ctx, did)
-		if err != nil {
-			return "", "", err
-		}
-		return startInbound(ctx, qid, from, callID)
-	})
+		})
+	}
 
 	deps := apphttp.RouterDeps{
 		Config:      *cfg,
 		CallControl: callControl,
 		Signaling:   callControl,
 	}
-	router := apphttp.NewSwitchRouter(apphttp.SwitchRouterDeps{Config: *cfg, RouterDeps: deps, Runtime: callControl})
+	switchDeps := apphttp.SwitchRouterDeps{Config: *cfg, RouterDeps: deps, Runtime: callControl, Events: &eventStore}
+	if cfg.Integration.Mode == "external" {
+		switchDeps.Direct = callControl
+	}
+	router := apphttp.NewSwitchRouter(switchDeps)
 
 	srv := &http.Server{
 		Addr:              cfg.Server.Listen,
@@ -141,7 +170,9 @@ func Run(configPath string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go monitorLogDisk(ctx, log, cfg.Log.Dir)
-	go platformClient.RunOutbox(ctx)
+	if platformClient != nil {
+		go platformClient.RunOutbox(ctx)
+	}
 	go callControl.Run(ctx)
 	go func() {
 		if err := mediaSvc.ServeSIP(ctx); err != nil {

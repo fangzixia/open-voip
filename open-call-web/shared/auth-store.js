@@ -1,16 +1,11 @@
 /**
- * 访问令牌本地持久化。三端使用不同 key，避免同一浏览器串用 JWT。
+ * 访问令牌本地持久化。员工单页与访客页使用不同 key。
  */
 
 function appScope() {
-  try {
-    const p = String(location.pathname || "").replace(/\\/g, "/");
-    if (p.includes("/admin")) return "admin";
-    if (p.includes("/guest")) return "guest";
-  } catch {
-    /* 忽略该异常，继续执行后续操作。 */
-  }
-  return "agent";
+  try { if (String(location.pathname || "").includes("/guest")) return "guest"; }
+  catch { /* 忽略该异常，继续执行后续操作。 */ }
+  return "staff";
 }
 
 const STORAGE_KEY = `open_voip.access_token.${appScope()}`;

@@ -8,8 +8,8 @@ type User struct {
 	ID string `gorm:"type:uuid;primaryKey;comment:用户主键 UUID"`
 	// Username 登录名，全局唯一。
 	Username string `gorm:"size:64;uniqueIndex;not null;comment:登录用户名"`
-	// Email 用于识别需要管理员显式绑定的外部同邮箱账号。
-	Email string `gorm:"size:320;not null;default:''"`
+	// EmployeeNo 工号；历史账号迁移后可为空，新账号由业务层校验。
+	EmployeeNo string `gorm:"size:64;not null;default:'';comment:工号"`
 	// PasswordHash argon2id 编码后的密码哈希。
 	PasswordHash string `gorm:"size:255;not null;comment:argon2id 密码哈希"`
 	// Role 角色：admin / supervisor / agent。

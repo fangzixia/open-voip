@@ -45,5 +45,5 @@ func (c *Client) OpenRecordingAs(ctx context.Context, callID, id, path, format s
 
 // DeleteRecording 请求 Switch 删除指定录音文件。
 func (c *Client) DeleteRecording(ctx context.Context, callID, id, path string) error {
-	return c.do(ctx, http.MethodDelete, recordingPath(callID, id, path), nil, "", nil)
+	return c.do(ctx, http.MethodDelete, recordingPath(callID, id, path), nil, nil)
 }

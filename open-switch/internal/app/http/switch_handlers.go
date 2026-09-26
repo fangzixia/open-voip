@@ -11,12 +11,8 @@ import (
 )
 
 func (d RouterDeps) handleOutbound(w http.ResponseWriter, r *http.Request) {
-	p, ok := principal(r)
-	if !ok || p.AgentID == "" {
-		writeErr(w, errs.Forbidden("仅坐席可外呼"))
-		return
-	}
 	var body struct {
+		AgentID     string `json:"agent_id"`
 		Destination string `json:"destination"`
 		TrunkID     string `json:"trunk_id"`
 	}
@@ -24,7 +20,11 @@ func (d RouterDeps) handleOutbound(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	id, err := d.CallControl.Outbound(r.Context(), dto.OutboundRequest{AgentID: p.AgentID, Destination: body.Destination, TrunkID: body.TrunkID})
+	if body.AgentID == "" {
+		writeErr(w, errs.InvalidRequest("agent_id 必填"))
+		return
+	}
+	id, err := d.CallControl.Outbound(r.Context(), dto.OutboundRequest{AgentID: body.AgentID, Destination: body.Destination, TrunkID: body.TrunkID})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -90,16 +90,22 @@ func (d RouterDeps) handleVideoRequest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	from := ""
-	if p, ok := principal(r); ok {
-		view, _ := d.Signaling.GetCall(r.Context(), chi.URLParam(r, "callId"))
-		for _, l := range view.Legs {
-			if l.AgentID == p.AgentID || (p.IsGuest() && l.Role == "customer") {
-				from = l.ID
-			}
-		}
+	var body struct {
+		FromLegID string `json:"from_leg_id"`
 	}
-	if err := d.CallControl.RequestVideo(r.Context(), chi.URLParam(r, "callId"), from); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if body.FromLegID == "" {
+		writeErr(w, errs.InvalidRequest("from_leg_id 必填"))
+		return
+	}
+	if err := d.authorizeLeg(r, chi.URLParam(r, "callId"), body.FromLegID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := d.CallControl.RequestVideo(r.Context(), chi.URLParam(r, "callId"), body.FromLegID); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -209,10 +215,10 @@ func (d RouterDeps) handleTURN(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	p, _ := principal(r)
-	sub := p.UserID
+	sub := r.URL.Query().Get("subject")
 	if sub == "" {
-		sub = p.GuestID
+		writeErr(w, errs.InvalidRequest("subject 必填"))
+		return
 	}
 	cfg, err := d.Signaling.IssueTURNCredentials(r.Context(), chi.URLParam(r, "callId"), sub)
 	if err != nil {
@@ -225,11 +231,6 @@ func (d RouterDeps) handleTURN(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d RouterDeps) handleForceCheckout(w http.ResponseWriter, r *http.Request) {
-	p, ok := principal(r)
-	if !ok || !p.Has("agents.force_checkout") {
-		writeErr(w, errs.Forbidden("仅管理员或班长可强制签出"))
-		return
-	}
 	var body struct {
 		Policy string `json:"policy"`
 	}
@@ -242,12 +243,18 @@ func (d RouterDeps) handleForceCheckout(w http.ResponseWriter, r *http.Request) 
 }
 
 func (d RouterDeps) handleListen(w http.ResponseWriter, r *http.Request) {
-	p, ok := principal(r)
-	if !ok || p.AgentID == "" || !p.Has("calls.listen") {
-		writeErr(w, errs.Forbidden("班长需要坐席资料"))
+	var body struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, err)
 		return
 	}
-	legID, err := d.CallControl.SupervisorListen(r.Context(), chi.URLParam(r, "callId"), p.AgentID)
+	if body.AgentID == "" {
+		writeErr(w, errs.InvalidRequest("agent_id 必填"))
+		return
+	}
+	legID, err := d.CallControl.SupervisorListen(r.Context(), chi.URLParam(r, "callId"), body.AgentID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -256,12 +263,18 @@ func (d RouterDeps) handleListen(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d RouterDeps) handleDecline(w http.ResponseWriter, r *http.Request) {
-	p, ok := principal(r)
-	if !ok || p.AgentID == "" {
-		writeErr(w, errs.Forbidden("仅坐席可拒接"))
+	var body struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, err)
 		return
 	}
-	if err := d.CallControl.Decline(r.Context(), chi.URLParam(r, "callId"), p.AgentID); err != nil {
+	if body.AgentID == "" {
+		writeErr(w, errs.InvalidRequest("agent_id 必填"))
+		return
+	}
+	if err := d.CallControl.Decline(r.Context(), chi.URLParam(r, "callId"), body.AgentID); err != nil {
 		writeErr(w, err)
 		return
 	}

@@ -170,10 +170,12 @@ func NewEventPublisher(c *Client) *EventPublisher {
 // PublishCallEvent 实现 CallEventPublisher。
 func (p *EventPublisher) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 	body := map[string]any{
+		"event_id": ev.ID,
+		"seq":      ev.Seq,
 		"type":     ev.Type,
 		"call_id":  ev.CallID,
 		"agent_id": ev.AgentID,
 		"payload":  ev.Payload,
 	}
-	return p.client.doJSON(ctx, http.MethodPost, "/platform/v1/events/call", body, nil)
+	return p.client.enqueue(ctx, "/platform/v1/events/call", body)
 }

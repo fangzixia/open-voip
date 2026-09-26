@@ -2,6 +2,8 @@
 
 呼叫中心服务：坐席/队列/ACD、CDR、对浏览器 **REST/WS**，并通过 BFF 代理通话信令到 open-switch。
 
+配套的 open-switch 使用 `integration.mode: call_center`。open-call 在 BFF 校验终端用户对通话及媒体腿的权限，向 Switch 下发显式 `agent_id` / `from_leg_id` 等字段，并从 `/switch/v1/events` 按持久游标消费事件。Switch 不读取 `X-Principal`；部署时两端服务密钥须一致。
+
 - 对接说明：[../docs/open-switch对接说明.md](../docs/open-switch对接说明.md)
 - 浏览器 API 契约：[../docs/api/openapi.yaml](../docs/api/openapi.yaml)
 - 配置示例：[deploy/config.example.yml](deploy/config.example.yml)
@@ -19,9 +21,9 @@ go run ./cmd/open-call -config deploy/config.example.yml
 
 ## 权限与单点登录
 
-升级会把现有 admin、supervisor、agent 用户迁移为内置角色，并保留用户和坐席 ID。管理员可在管理端“用户与权限”维护自定义角色、功能操作权限、用户角色和外部组映射。坐席是否可签入取决于其坐席资料；OIDC 自动创建的用户须由管理员补齐分机及终端信息。
+升级会把现有 admin、supervisor、agent 用户迁移为内置角色，并保留用户和坐席 ID。员工通过统一 Web 入口登录，页面根据权限显示管理功能和坐席工作台。管理员可在“用户与权限”维护自定义角色、功能操作权限、用户角色和外部组映射。坐席是否可签入取决于其坐席资料；OIDC 自动创建的用户须由管理员补齐分机及终端信息。
 
-启用 `oidc` 前，先配置身份平台的 issuer、client ID/secret、回调地址、`groups_claim` 和加密密钥，并确认身份平台在令牌刷新时提供最新组声明。刷新时会同步外部组对应的角色；若无法获取最新组信息或已无映射角色，当前会话失效，用户需重新登录。组未映射角色时拒绝登录；已有同名或同邮箱账号需管理员通过稳定的 `issuer + sub` 显式绑定。仅 `emergency_admin` 保留密码登录，且该用户必须启用并拥有内置 admin 角色。身份平台离线时服务仍可启动，应急管理员可使用密码入口。退出仅撤销本项目会话。
+启用 `oidc` 前，先配置身份平台的 issuer、client ID/secret、回调地址、`groups_claim` 和加密密钥，并确认身份平台提供 `employee_no` 工号和最新组声明。OIDC 地址支持 HTTP 或 HTTPS。刷新时会同步外部组对应的角色；若无法获取最新组信息或已无映射角色，当前会话失效，用户需重新登录。组未映射角色时拒绝登录；已有相同登录名或工号的账号需管理员通过稳定的 `issuer + sub` 显式绑定。仅 `emergency_admin` 保留密码登录，且该用户必须启用并拥有内置 admin 角色。身份平台离线时服务仍可启动，应急管理员可使用密码入口。退出仅撤销本项目会话。
 
 升级与端到端验收步骤见 [安装说明](deploy/INSTALL.md) 和 [SIP 生产验收](../docs/sip-production-acceptance.md)。
 

@@ -18,9 +18,8 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       rollupOptions: {
         input: {
-          agent: resolve(__dirname, "agent/index.html"),
+          app: resolve(__dirname, "index.html"),
           guest: resolve(__dirname, "guest/index.html"),
-          admin: resolve(__dirname, "admin/index.html"),
         },
       },
     },

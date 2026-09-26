@@ -4,13 +4,13 @@ import {
 } from "../../shared/api.js";
 
 export function newIdentityUserDraft() {
-  return { username: "", email: "", display_name: "", password: "", roles: [], role: "agent", extension: "", terminal_type: "webrtc", video_capable: true };
+  return { username: "", login_name: "", employee_no: "", password: "", roles: [], role: "agent", extension: "", terminal_type: "webrtc", video_capable: true };
 }
 
 export function createUserPayload(draft, canReadRoles) {
   const extension = draft.extension.trim();
   return {
-    username: draft.username, display_name: draft.display_name, email: draft.email, password: draft.password,
+    username: draft.username, login_name: draft.login_name, employee_no: draft.employee_no, password: draft.password,
     ...(canReadRoles ? { roles: draft.roles } : { role: draft.role }),
     extension, terminal_type: draft.terminal_type,
     sip_username: draft.terminal_type === "sip" && extension ? extension : "",
@@ -70,8 +70,9 @@ export function identityActions(host, reload) {
       try { await refreshIdentities(); }
       catch (error) { host.error = error instanceof Error ? error.message : String(error); }
     },
-    saveDisplayName: (id, displayName) => run(() => patchUser(id, { display_name: displayName })),
-    saveEmail: (id, email) => run(() => patchUser(id, { email })),
+    saveUsername: (id, username) => run(() => patchUser(id, { username })),
+    saveLoginName: (id, login_name) => run(() => patchUser(id, { login_name })),
+    saveEmployeeNo: (id, employee_no) => run(() => patchUser(id, { employee_no })),
     updateAgentProfile: (patch) => { host.agentProfileDraft = { ...host.agentProfileDraft, ...patch }; },
     saveAgentProfile: (id) => run(() => patchUser(id, {
       ...host.agentProfileDraft,

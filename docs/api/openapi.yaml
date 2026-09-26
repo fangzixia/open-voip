@@ -238,11 +238,6 @@ paths:
       tags: [ Auth ]
       security: []
       summary: 开始 OIDC 授权码登录
-      parameters:
-        - name: return_to
-          in: query
-          required: true
-          schema: { type: string, enum: [ "/admin/", "/agent/" ] }
       responses:
         "302": { description: 跳转身份平台并设置 HttpOnly state Cookie }
 
@@ -252,7 +247,7 @@ paths:
       security: []
       summary: 验证 OIDC 回调并签发一次性票据
       responses:
-        "302": { description: 跳转管理或坐席端，票据仅位于 URL 片段 }
+        "302": { description: 跳转统一 Web 入口 /，票据仅位于 URL 片段 }
 
   /api/v1/auth/oidc/exchange:
     post:
@@ -276,7 +271,7 @@ paths:
       tags: [ Auth ]
       summary: 当前用户及有效角色、权限
       responses:
-        "200": { description: data 含 user_id、agent_id、roles、permissions }
+        "200": { description: data 含 user_id、agent_id、username、login_name、employee_no、roles、permissions }
 
   /api/v1/roles:
     get:
@@ -3314,9 +3309,9 @@ components:
 
     LoginRequest:
       type: object
-      required: [ username, password ]
+      required: [ login_name, password ]
       properties:
-        username:
+        login_name:
           type: string
         password:
           type: string
@@ -3333,6 +3328,8 @@ components:
         token_type:
           type: string
           default: Bearer
+        must_change_password:
+          type: boolean
 
     User:
       type: object
@@ -3348,11 +3345,13 @@ components:
           type: string
         username:
           type: string
-        email:
+          description: 页面展示用用户名
+        login_name:
           type: string
-          format: email
-        display_name:
+          description: 本地登录名
+        employee_no:
           type: string
+          description: 工号
         role:
           type: string
           enum: [ admin, supervisor, agent ]
@@ -3361,6 +3360,8 @@ components:
           type: array
           items: { type: string }
         disabled:
+          type: boolean
+        must_change_password:
           type: boolean
         agent_id:
           type: string
@@ -3374,7 +3375,7 @@ components:
 
     UserCreate:
       type: object
-      required: [ username, password ]
+      required: [ username, login_name, employee_no, password ]
       properties:
         terminal_type:
           type: string
@@ -3385,9 +3386,10 @@ components:
           description: SIP 终端须与 extension 相同，凭证由交换服务配置
         username:
           type: string
-        email:
+        login_name:
           type: string
-          format: email
+        employee_no:
+          type: string
         password:
           type: string
         role:
@@ -3398,8 +3400,6 @@ components:
           type: array
           minItems: 1
           items: { type: string }
-        display_name:
-          type: string
         extension:
           type: string
           description: role=agent 时必填
@@ -3418,10 +3418,11 @@ components:
           description: SIP 终端须与 extension 相同，凭证由交换服务配置
         role:
           type: string
-        email:
+        username:
           type: string
-          format: email
-        display_name:
+        login_name:
+          type: string
+        employee_no:
           type: string
         extension:
           type: string

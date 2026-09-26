@@ -297,8 +297,10 @@ func unique(in []string) []string {
 }
 
 // NewOIDCUser 仅在稳定外部身份尚未绑定时创建用户。
-func (s *Service) NewOIDCUser(ctx context.Context, issuer, subject, username, email, name string, roles []string) (models.User, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+func (s *Service) NewOIDCUser(ctx context.Context, issuer, subject, loginName, username, employeeNo string, roles []string) (models.User, error) {
+	loginName = strings.TrimSpace(loginName)
+	username = strings.TrimSpace(username)
+	employeeNo = strings.TrimSpace(employeeNo)
 	var u models.User
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var identity Identity
@@ -308,17 +310,14 @@ func (s *Service) NewOIDCUser(ctx context.Context, issuer, subject, username, em
 			return err
 		}
 		var count int64
-		query := tx.Model(&models.User{}).Where("LOWER(username) = LOWER(?)", username)
-		if email != "" {
-			query = query.Or("LOWER(email) = ? OR LOWER(username) = ?", email, email)
-		}
+		query := tx.Model(&models.User{}).Where("LOWER(username) = LOWER(?) OR employee_no = ?", loginName, employeeNo)
 		if err := query.Count(&count).Error; err != nil {
 			return err
 		}
 		if count > 0 {
-			return errs.Conflict("同名或同邮箱用户已存在，请管理员先绑定外部身份", "")
+			return errs.Conflict("同登录名或工号用户已存在，请管理员先绑定外部身份", "")
 		}
-		u = models.User{ID: uuid.NewString(), Username: username, Email: email, PasswordHash: "!oidc-only", Role: "agent", DisplayName: name, AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		u = models.User{ID: uuid.NewString(), Username: loginName, EmployeeNo: employeeNo, PasswordHash: "!oidc-only", Role: "agent", DisplayName: username, AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		if err := tx.Create(&u).Error; err != nil {
 			return err
 		}

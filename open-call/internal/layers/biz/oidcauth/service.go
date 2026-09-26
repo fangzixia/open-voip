@@ -79,7 +79,7 @@ func (s *Service) ensureProvider(ctx context.Context) error {
 	}
 	scopes := s.cfg.Scopes
 	if len(scopes) == 0 {
-		scopes = []string{oidc.ScopeOpenID, "profile", "email", "offline_access"}
+		scopes = []string{oidc.ScopeOpenID, "profile", "offline_access"}
 	}
 	s.oauth = oauth2.Config{ClientID: s.cfg.ClientID, ClientSecret: s.cfg.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: s.cfg.RedirectURL, Scopes: scopes}
 	s.verifier = provider.Verifier(&oidc.Config{ClientID: s.cfg.ClientID})
@@ -87,13 +87,10 @@ func (s *Service) ensureProvider(ctx context.Context) error {
 	return nil
 }
 
-// Start 只允许跳转到受信任的前端路径，并保存 state、nonce 与 PKCE 验证值。
-func (s *Service) Start(ctx context.Context, returnPath string) (string, error) {
+// Start 固定回跳统一前端入口，并保存 state、nonce 与 PKCE 验证值。
+func (s *Service) Start(ctx context.Context) (string, error) {
 	if err := s.ensureProvider(ctx); err != nil {
 		return "", err
-	}
-	if returnPath != "/admin/" && returnPath != "/agent/" {
-		return "", errs.InvalidRequest("登录回跳路径无效")
 	}
 	state, err := random(32)
 	if err != nil {
@@ -104,7 +101,7 @@ func (s *Service) Start(ctx context.Context, returnPath string) (string, error) 
 		return "", err
 	}
 	verifier := oauth2.GenerateVerifier()
-	row := flow{StateHash: digest(state), Nonce: nonce, Verifier: verifier, ReturnPath: returnPath, ExpiresAt: time.Now().UTC().Add(5 * time.Minute)}
+	row := flow{StateHash: digest(state), Nonce: nonce, Verifier: verifier, ReturnPath: "/", ExpiresAt: time.Now().UTC().Add(5 * time.Minute)}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return "", err
 	}
@@ -138,17 +135,21 @@ func (s *Service) Callback(ctx context.Context, state, code string) (string, str
 	if len(roles) == 0 {
 		return "", "", errs.Forbidden("外部账号未映射到本项目角色")
 	}
+	loginName := claims.LoginName
+	if loginName == "" {
+		loginName = claims.Subject
+	}
 	username := claims.Username
 	if username == "" {
-		username = claims.Email
+		username = loginName
 	}
-	if username == "" {
-		username = claims.Subject
+	if len(loginName) > 64 || len(username) > 128 || len(claims.EmployeeNo) > 64 {
+		return "", "", errs.InvalidRequest("外部用户属性超过长度限制")
 	}
-	if len(username) > 64 {
-		return "", "", errs.InvalidRequest("外部用户名超过长度限制")
+	if claims.EmployeeNo == "" {
+		return "", "", errs.InvalidRequest("身份平台未提供工号 employee_no")
 	}
-	u, err := s.roles.NewOIDCUser(ctx, s.cfg.Issuer, claims.Subject, username, claims.Email, claims.Name, roles)
+	u, err := s.roles.NewOIDCUser(ctx, s.cfg.Issuer, claims.Subject, loginName, username, claims.EmployeeNo, roles)
 	if err != nil {
 		return "", "", err
 	}
@@ -234,11 +235,11 @@ func (s *Service) Refresh(ctx context.Context, encrypted, subject string) (strin
 }
 
 type identityClaims struct {
-	Subject  string
-	Username string
-	Email    string
-	Name     string
-	Groups   []string
+	Subject    string
+	Username   string
+	LoginName  string
+	EmployeeNo string
+	Groups     []string
 }
 
 func (s *Service) claims(ctx context.Context, tok *oauth2.Token, nonce string) (identityClaims, error) {
@@ -276,9 +277,9 @@ func (s *Service) claims(ctx context.Context, tok *oauth2.Token, nonce string) (
 	}
 	var out identityClaims
 	_ = json.Unmarshal(raw["sub"], &out.Subject)
-	_ = json.Unmarshal(raw["preferred_username"], &out.Username)
-	_ = json.Unmarshal(raw["email"], &out.Email)
-	_ = json.Unmarshal(raw["name"], &out.Name)
+	_ = json.Unmarshal(raw["preferred_username"], &out.LoginName)
+	_ = json.Unmarshal(raw["name"], &out.Username)
+	_ = json.Unmarshal(raw["employee_no"], &out.EmployeeNo)
 	if err := json.Unmarshal(raw[s.cfg.GroupsClaim], &out.Groups); err != nil || len(out.Groups) == 0 {
 		return identityClaims{}, errs.Forbidden("身份平台未提供授权组")
 	}

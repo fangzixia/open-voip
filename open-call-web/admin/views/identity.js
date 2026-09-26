@@ -11,8 +11,8 @@ export function renderIdentity(state, actions) {
   return html`
     ${can(state, "users.create") ? renderPanel("新建用户 / 坐席", html`<form @submit=${(event) => { event.preventDefault(); actions.createIdentityUser(); }}>
       ${renderField("用户名", html`<input required .value=${state.newIdentityUser.username} @input=${(event) => actions.updateNewIdentityUser({ username: event.target.value })} />`)}
-      ${renderField("展示名", html`<input .value=${state.newIdentityUser.display_name} @input=${(event) => actions.updateNewIdentityUser({ display_name: event.target.value })} />`)}
-      ${renderField("邮箱", html`<input type="email" .value=${state.newIdentityUser.email} @input=${(event) => actions.updateNewIdentityUser({ email: event.target.value })} />`)}
+      ${renderField("登录名", html`<input required .value=${state.newIdentityUser.login_name} @input=${(event) => actions.updateNewIdentityUser({ login_name: event.target.value })} />`)}
+      ${renderField("工号", html`<input required .value=${state.newIdentityUser.employee_no} @input=${(event) => actions.updateNewIdentityUser({ employee_no: event.target.value })} />`)}
       ${renderField("初始密码", html`<input type="password" required .value=${state.newIdentityUser.password} @input=${(event) => actions.updateNewIdentityUser({ password: event.target.value })} />`)}
       ${can(state, "roles.read") ? html`<div class="form-inline">${state.roles.map((role) => renderCheckbox(role.name,
         state.newIdentityUser.roles.includes(role.id), (checked) => actions.toggleNewUserRole(role.id, checked)))}</div>`
@@ -32,8 +32,8 @@ export function renderIdentity(state, actions) {
     </form>`) : ""}
     ${can(state, "users.read") ? renderPanel("用户", renderDataTable([
       { label: "用户名", key: "username" },
-      { label: "展示名", key: "display_name" },
-      { label: "邮箱", key: "email" },
+      { label: "登录名", key: "login_name" },
+      { label: "工号", key: "employee_no" },
       { label: "角色", render: (user) => (user.roles || []).join("、") },
       { label: "状态", render: (user) => user.disabled ? "已禁用" : "启用" },
       { label: "操作", render: (user) => html`<button @click=${() => actions.selectUser(user.id)}>管理</button>` },
@@ -42,8 +42,9 @@ export function renderIdentity(state, actions) {
     ${selected ? renderPanel(`管理用户：${selected.username}`, html`
       <div class="form-inline">
         ${can(state, "users.update") ? html`
-          ${renderField("展示名", html`<input .value=${selected.display_name || ""} @change=${(event) => actions.saveDisplayName(selected.id, event.target.value)} />`)}
-          ${renderField("邮箱", html`<input type="email" .value=${selected.email || ""} @change=${(event) => actions.saveEmail(selected.id, event.target.value)} />`)}
+          ${renderField("用户名", html`<input .value=${selected.username || ""} @change=${(event) => actions.saveUsername(selected.id, event.target.value)} />`)}
+          ${renderField("登录名", html`<input .value=${selected.login_name || ""} @change=${(event) => actions.saveLoginName(selected.id, event.target.value)} />`)}
+          ${renderField("工号", html`<input .value=${selected.employee_no || ""} @change=${(event) => actions.saveEmployeeNo(selected.id, event.target.value)} />`)}
         ` : ""}
         ${can(state, "users.update") ? html`<button @click=${() => actions.toggleDisabled(selected)}>${selected.disabled ? "启用账号" : "禁用账号"}</button>` : ""}
         ${can(state, "users.sessions") ? html`<button @click=${() => actions.revokeSessions(selected.id)}>撤销全部会话</button>` : ""}

@@ -6,8 +6,10 @@ server:
   listen: "127.0.0.1:8082"
 
 integration:
+  # call_center 对接 open-call；external 由其他可信应用直接编排双腿呼叫。
+  mode: "call_center"
   secret: "change_me_integration"
-  # open-call 的 Platform API 根地址（open-switch 回调 ACD/CDR/配置等）。
+  # 仅 call_center 需要：open-call 的 Platform API 根地址。
   platform_base_url: "http://127.0.0.1:8080"
 
 database:

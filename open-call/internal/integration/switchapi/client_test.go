@@ -32,14 +32,14 @@ func TestClientUnifiedRoundTrip(t *testing.T) {
 	req.Header.Set("X-Request-ID", "round-trip")
 	req.Header.Set("X-Trace-ID", "trace-round-trip")
 	httpapi.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := client.do(r.Context(), "GET", "/test", nil, "", &out); err != nil {
+		if err := client.do(r.Context(), "GET", "/test", nil, &out); err != nil {
 			t.Fatal(err)
 		}
 	})).ServeHTTP(httptest.NewRecorder(), req)
 	if out.ID != "call-1" {
 		t.Fatalf("response not unwrapped: %+v", out)
 	}
-	if err := client.do(context.Background(), "GET", "/empty", nil, "", nil); err != nil {
+	if err := client.do(context.Background(), "GET", "/empty", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }

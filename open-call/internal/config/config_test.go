@@ -60,3 +60,16 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestOIDCAllowsHTTPAddresses(t *testing.T) {
+	cfg := validBase()
+	cfg.OIDC = OIDCConfig{
+		Enabled: true, Issuer: "http://id.internal/realm", ClientID: "client",
+		ClientSecret: "secret", RedirectURL: "http://cc.internal/api/v1/auth/oidc/callback",
+		FrontendURL: "http://ui.internal", GroupsClaim: "groups",
+		EmergencyAdmin: "admin", EncryptionKey: "0123456789abcdef0123456789abcdef",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("HTTP OIDC 地址应可配置: %v", err)
+	}
+}

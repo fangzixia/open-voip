@@ -19,6 +19,7 @@ type RoomOptions struct {
 	SessionType SessionType `json:"session_type"`
 	// EnableVideo 是否协商视频轨。
 	EnableVideo bool `json:"enable_video"`
+	Direct      bool `json:"direct,omitempty"`
 }
 
 // LocalOffer WebRTC 本地 Offer 描述，供 HTTP 信令返回客户端。

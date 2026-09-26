@@ -3,7 +3,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 globalThis.window = { location: { origin: "http://localhost:5173" } };
-globalThis.location = { pathname: "/admin/" };
+globalThis.location = { pathname: "/" };
 const storage = () => { const map = new Map(); return { getItem: k => map.get(k) ?? null, setItem: (k,v) => map.set(k,v), removeItem: k => map.delete(k), clear: () => map.clear() }; };
 globalThis.sessionStorage = storage();
 globalThis.localStorage = storage();

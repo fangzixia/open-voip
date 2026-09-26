@@ -47,6 +47,9 @@ type peer struct {
 
 type room struct {
 	mu          sync.RWMutex
+	direct      bool
+	bridgeA     string
+	bridgeB     string
 	promptSeq   atomic.Uint64
 	enableVideo bool
 	sipAudio    bool
@@ -54,6 +57,21 @@ type room struct {
 	peers       map[string]*peer
 	dtmf        map[string]ports.DTMFHandler
 	rec         *recorder
+}
+
+func (r *room) canForward(from, to string) bool {
+	if !r.direct {
+		return true
+	}
+	return (from == r.bridgeA && to == r.bridgeB) || (from == r.bridgeB && to == r.bridgeA)
+}
+
+func (s *Service) UnbridgeLegs(callID string) {
+	if r := s.getRoom(callID); r != nil {
+		r.mu.Lock()
+		r.bridgeA, r.bridgeB = "", ""
+		r.mu.Unlock()
+	}
 }
 
 type recorder struct {
@@ -232,6 +250,7 @@ func (s *Service) CreateRoom(ctx context.Context, callID string, opts dto.RoomOp
 	delete(s.sipPending, callID)
 	delete(s.sipRTPPending, callID)
 	s.rooms[callID] = &room{
+		direct:      opts.Direct,
 		enableVideo: opts.EnableVideo || opts.SessionType == dto.SessionTypeVideo || opts.SessionType == dto.SessionTypeMixed,
 		sipAudio:    sipAudio || rtpSess != nil,
 		sipRTP:      rtpSess,
@@ -292,6 +311,9 @@ func (s *Service) LeaveRoom(ctx context.Context, callID, legID string) error {
 		return nil
 	}
 	r.mu.Lock()
+	if legID == r.bridgeA || legID == r.bridgeB {
+		r.bridgeA, r.bridgeB = "", ""
+	}
 	for rt := range r.sipRTP {
 		rt.mu.Lock()
 		match := rt.legID == legID
@@ -778,9 +800,33 @@ func (s *Service) OriginateSIP(ctx context.Context, callID, legID, dial, trunkID
 }
 
 func (s *Service) BridgeLegs(ctx context.Context, callID, legA, legB string) error {
-	if s.getPeer(callID, legA) == nil || s.getPeer(callID, legB) == nil {
-		return errs.NotFound("媒体腿不存在")
+	r := s.getRoom(callID)
+	if r == nil {
+		return errs.NotFound("媒体房间不存在")
 	}
+	r.mu.RLock()
+	for _, id := range []string{legA, legB} {
+		if p := r.peers[id]; p != nil && p.pc != nil && p.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
+			continue
+		}
+		found := false
+		for rt := range r.sipRTP {
+			rt.mu.Lock()
+			found = found || rt.legID == id
+			rt.mu.Unlock()
+		}
+		if !found {
+			r.mu.RUnlock()
+			return errs.NotFound("媒体腿尚未连接")
+		}
+	}
+	r.mu.RUnlock()
+	r.mu.Lock()
+	if r.direct {
+		r.bridgeA, r.bridgeB = legA, legB
+	}
+	r.mu.Unlock()
+	_ = ctx
 	return nil
 }
 
@@ -843,7 +889,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 			}
 		}
 		for id, p := range r.peers {
-			if id == fromLeg || muted || held || p.held {
+			if id == fromLeg || muted || held || p.held || !r.canForward(fromLeg, id) {
 				continue
 			}
 			var out *webrtc.TrackLocalStaticRTP
@@ -864,7 +910,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 			outPkt.Padding = false
 			if raw, err := outPkt.Marshal(); err == nil {
 				for rt := range r.sipRTP {
-					if !rt.blocked() {
+					if !rt.blocked() && r.canForward(fromLeg, rt.legID) {
 						rt.writePCMU(raw)
 					}
 				}

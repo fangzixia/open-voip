@@ -4,6 +4,9 @@ import "context"
 
 // CallEvent 呼叫类 WebSocket 事件载荷，类型字符串见 docs/events.md。
 type CallEvent struct {
+	ID         int64 `json:"id,omitempty"`
+	Seq        int64 `json:"seq,omitempty"`
+	TargetOnly bool  `json:"target_only,omitempty"`
 	// Type 例如 call.ringing、call.answered。
 	Type string `json:"type"`
 	// CallID 通话 ID。

@@ -36,7 +36,7 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 		svc := authz.NewService(tx)
 		uid := uuid.NewString()
 		name := "user-" + uid[:8]
-		u := models.User{ID: uid, Username: name, Email: "existing-" + uid[:8] + "@example.test", PasswordHash: "test", Role: "agent", AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		u := models.User{ID: uid, Username: name, EmployeeNo: "E" + uid[:8], PasswordHash: "test", Role: "agent", AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		if err := tx.Create(&u).Error; err != nil {
 			return err
 		}
@@ -54,7 +54,7 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 		if err := svc.SaveRole(ctx, roleID, "报表查看", []string{"reports.read"}); err != nil {
 			return err
 		}
-		created, err := user.NewService(tx).Create(ctx, user.CreateInput{Username: "custom-" + uid[:8], Email: "custom-" + uid[:8] + "@example.test", Password: "StrongPassword123!", Roles: []string{roleID}})
+		created, err := user.NewService(tx).Create(ctx, user.CreateInput{Username: "自定义用户", LoginName: "custom-" + uid[:8], EmployeeNo: "C" + uid[:8], Password: "StrongPassword123!", Roles: []string{roleID}})
 		if err != nil {
 			return err
 		}
@@ -102,11 +102,11 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 		if len(ids) != 1 || ids[0] != roleID {
 			t.Fatalf("mapped roles: %v", ids)
 		}
-		if _, err := svc.NewOIDCUser(ctx, "https://id.test", "sub-1", name, "", "Existing", ids); err == nil {
-			t.Fatal("same username must not auto-link")
+		if _, err := svc.NewOIDCUser(ctx, "https://id.test", "sub-1", name, "Existing", "DIFFERENT"+uid[:8], ids); err == nil {
+			t.Fatal("same login name must not auto-link")
 		}
-		if _, err := svc.NewOIDCUser(ctx, "https://id.test", "sub-email", "different-"+uid[:8], u.Email, "Existing", ids); err == nil {
-			t.Fatal("same email must not auto-link")
+		if _, err := svc.NewOIDCUser(ctx, "https://id.test", "sub-employee", "different-"+uid[:8], "Existing", u.EmployeeNo, ids); err == nil {
+			t.Fatal("same employee number must not auto-link")
 		}
 		bindingSession := models.AuthSession{ID: uuid.NewString(), UserID: uid, RefreshJTI: uuid.NewString(), CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
 		if err := tx.Create(&bindingSession).Error; err != nil {
@@ -118,7 +118,7 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 		if err := tx.First(&bindingSession, "id = ?", bindingSession.ID).Error; err != nil || bindingSession.RevokedAt == nil {
 			t.Fatalf("identity change did not revoke session: %v", err)
 		}
-		bound, err := svc.NewOIDCUser(ctx, "https://id.test", "sub-1", name, "", "Existing", ids)
+		bound, err := svc.NewOIDCUser(ctx, "https://id.test", "sub-1", name, "Existing", u.EmployeeNo, ids)
 		if err != nil || bound.ID != uid {
 			t.Fatalf("binding failed: %v %s", err, bound.ID)
 		}

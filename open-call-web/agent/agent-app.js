@@ -698,6 +698,7 @@ export class AgentApp extends LitElement {
     clearCallContext();
     this.nav = "desk";
     this.me = null;
+    this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true }));
   }
 
   #crumb() {
@@ -746,7 +747,7 @@ export class AgentApp extends LitElement {
       hold: (...args) => this.#hold(...args),
       listen: (...args) => this.#listen(...args),
       login: (...args) => this.#login(...args),
-      startSSO: () => startSSO("/agent/"),
+      startSSO: () => startSSO(),
       logout: (...args) => this.#logout(...args),
       makeLink: (...args) => this.#makeLink(...args),
       navigate: (...args) => this.#navigate(...args),

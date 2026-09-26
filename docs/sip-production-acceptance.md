@@ -13,7 +13,7 @@
 | CDR、录音元数据、小结、质检、报表 | open-call | Switch 回调；话单按 call_id 更新 |
 | 录音文件、IVR 音频文件 | open-switch | 下载/删除走内部文件接口；无需共享文件系统 |
 
-浏览器只访问 open-call。BFF 首先验证用户令牌，删除外部 `X-Principal`，再用已验证身份生成 snake_case 身份头和服务密钥。小结、质检留在 open-call；内部呼入、内部运行时和文件接口不经过浏览器代理。普通坐席只能控制自己的通话与媒体腿；班长操作要求 supervisor/admin。访客必须绑定具体 call_id。
+浏览器只访问 open-call。BFF 首先验证用户令牌，检查通话和媒体腿归属，删除外部 `X-Principal`，再填入显式控制字段与服务密钥。小结、质检留在 open-call；内部呼入、内部运行时和文件接口不经过浏览器代理。普通坐席只能控制自己的通话与媒体腿；班长操作要求 supervisor/admin。访客必须绑定具体 call_id。
 
 部署可以同机，也可以分机。生产环境建议两个服务使用独立 PostgreSQL 数据库及最小权限账号；本机联调允许共用一个数据库，因为业务表与交换表分别使用 `oc_*`、`os_*` 前缀，迁移记录也分别写入 `oc_schema_migrations`、`os_schema_migrations`。旧版共用的 `schema_migrations` 不再参与判断；升级前备份数据库，确认两个服务的迁移均已成功执行。当前运行时和 SIP 注册均为单实例，不能用多个 open-switch 副本共享同一话务库。
 
