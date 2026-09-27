@@ -1,16 +1,15 @@
 # open-switch 配置示例（软交换：Switch API + 媒体/SIP）
-# 与 open-call 分进程、分库部署；integration.secret 须与 open-call 一致。
+# 与业务系统分进程、分库部署；每个业务系统使用独立应用凭证与配置作用域。
 
 server:
-  # Switch API（/switch/v1）；建议仅内网监听，由 open-call BFF 代理终端流量。
+  # Switch API（/switch/v2）；建议仅内网监听，由业务系统 BFF 代理终端流量。
   listen: "127.0.0.1:8082"
 
-integration:
-  # call_center 对接 open-call；external 由其他可信应用直接编排双腿呼叫。
-  mode: "call_center"
-  secret: "change_me_integration"
-  # 仅 call_center 需要：open-call 的 Platform API 根地址。
-  platform_base_url: "http://127.0.0.1:8080"
+applications:
+  - id: "open-call"
+    secret: "change_me_integration"
+    event_retention_days: 14
+    max_concurrent_calls: 100
 
 database:
   # 软交换库：仅存 calls/legs 等运行时话务；勿与 open-call 业务库混用。

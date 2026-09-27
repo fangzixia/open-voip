@@ -21,14 +21,16 @@ func (IVRFlow) TableName() string { return "os_ivr_flows" }
 
 // IVRPublishedSnapshot 已发布 IVR 快照，呼入只读最新 version。
 type IVRPublishedSnapshot struct {
+	ApplicationID string `gorm:"primaryKey;size:64"`
 	// ID 快照 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:快照 ID"`
 	// FlowID 所属流程。
-	FlowID string `gorm:"type:uuid;index:idx_ivr_flow_version,priority:1;not null;comment:流程 ID"`
+	FlowID string `gorm:"type:uuid;primaryKey;not null;comment:流程 ID"`
 	// Version 单调递增版本号。
 	Version int `gorm:"index:idx_ivr_flow_version,priority:2,sort:desc;not null;comment:发布版本"`
 	// PayloadJSON 已发布节点树 JSON。
-	PayloadJSON string `gorm:"type:text;not null;comment:发布内容 JSON"`
+	PayloadJSON   string `gorm:"column:payload_json;type:text;not null;comment:发布内容 JSON"`
+	ConfigVersion int64  `gorm:"primaryKey;not null"`
 	// PublishedAt 发布时间。
 	PublishedAt time.Time `gorm:"comment:发布时间"`
 }

@@ -10,6 +10,7 @@ import (
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
+	"open-switch/internal/scope"
 	"open-switch/internal/store/models"
 )
 
@@ -26,7 +27,17 @@ func NewCallStore(db *gorm.DB) *CallStore {
 var _ ports.CallPersistencePort = (*CallStore)(nil)
 
 func (s *CallStore) InsertCall(ctx context.Context, rec ports.CallRecord) error {
+	if rec.ApplicationID == "" {
+		rec.ApplicationID = scope.Application(ctx)
+	}
+	if rec.ApplicationID == "" {
+		return errs.InvalidRequest("application_id 必填")
+	}
+	if rec.Version == 0 {
+		rec.Version = 1
+	}
 	row := models.Call{
+		ApplicationID: rec.ApplicationID, BusinessRef: rec.BusinessRef, Metadata: rec.Metadata, Version: rec.Version, ConfigVersion: rec.ConfigVersion,
 		ID:     rec.ID,
 		Caller: rec.Caller, Callee: rec.Callee, AgentID: rec.AgentID, OfferedAgent: rec.OfferedAgent, AnsweredAt: rec.AnsweredAt,
 		Direction:    rec.Direction,
@@ -54,13 +65,18 @@ func (s *CallStore) InsertDirectCall(ctx context.Context, rec ports.CallRecord, 
 }
 
 func (s *CallStore) DeleteLeg(ctx context.Context, callID, legID string) error {
-	return s.db.WithContext(ctx).Where("call_id = ? AND id = ?", callID, legID).Delete(&models.CallLeg{}).Error
+	q := s.db.WithContext(ctx).Where("call_id = ? AND id = ?", callID, legID)
+	if appID := scope.Application(ctx); appID != "" {
+		q = q.Where("application_id = ?", appID)
+	}
+	return q.Delete(&models.CallLeg{}).Error
 }
 
 func (s *CallStore) UpdateCall(ctx context.Context, rec ports.CallRecord) error {
 	updates := map[string]any{
-		"state":  rec.State,
-		"caller": rec.Caller, "callee": rec.Callee, "agent_id": rec.AgentID, "offered_agent": rec.OfferedAgent, "answered_at": rec.AnsweredAt, "direction": rec.Direction,
+		"version": gorm.Expr("version + 1"),
+		"state":   rec.State,
+		"caller":  rec.Caller, "callee": rec.Callee, "agent_id": rec.AgentID, "offered_agent": rec.OfferedAgent, "answered_at": rec.AnsweredAt, "direction": rec.Direction,
 		"session_type": string(rec.SessionType),
 		"updated_at":   rec.UpdatedAt,
 		"ended_at":     rec.EndedAt,
@@ -79,13 +95,18 @@ func (s *CallStore) UpdateCall(ctx context.Context, rec ports.CallRecord) error 
 
 func (s *CallStore) GetCall(ctx context.Context, callID string) (ports.CallRecord, error) {
 	var row models.Call
-	if err := s.db.WithContext(ctx).First(&row, "id = ?", callID).Error; err != nil {
+	q := s.db.WithContext(ctx).Where("id = ?", callID)
+	if appID := scope.Application(ctx); appID != "" {
+		q = q.Where("application_id = ?", appID)
+	}
+	if err := q.First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ports.CallRecord{}, errs.NotFound("通话不存在")
 		}
 		return ports.CallRecord{}, err
 	}
 	return ports.CallRecord{
+		ApplicationID: row.ApplicationID, BusinessRef: row.BusinessRef, Metadata: row.Metadata, Version: row.Version, ConfigVersion: row.ConfigVersion,
 		ID:     row.ID,
 		Caller: row.Caller, Callee: row.Callee, AgentID: row.AgentID, OfferedAgent: row.OfferedAgent, AnsweredAt: row.AnsweredAt,
 		Direction:    row.Direction,
@@ -101,7 +122,22 @@ func (s *CallStore) GetCall(ctx context.Context, callID string) (ports.CallRecor
 }
 
 func (s *CallStore) InsertLeg(ctx context.Context, rec ports.CallLegRecord) error {
+	if rec.ApplicationID == "" {
+		rec.ApplicationID = scope.Application(ctx)
+	}
+	if rec.ApplicationID == "" {
+		if err := s.db.WithContext(ctx).Model(&models.Call{}).Where("id = ?", rec.CallID).Pluck("application_id", &rec.ApplicationID).Error; err != nil {
+			return err
+		}
+	}
+	if rec.Type == "" {
+		rec.Type = "webrtc"
+	}
+	if rec.State == "" {
+		rec.State = "new"
+	}
 	row := models.CallLeg{
+		ApplicationID: rec.ApplicationID, Type: rec.Type, State: rec.State, ParticipantRef: rec.ParticipantRef,
 		ID:        rec.ID,
 		CallID:    rec.CallID,
 		Role:      string(rec.Role),
@@ -116,12 +152,17 @@ func (s *CallStore) InsertLeg(ctx context.Context, rec ports.CallLegRecord) erro
 
 func (s *CallStore) ListLegs(ctx context.Context, callID string) ([]ports.CallLegRecord, error) {
 	var rows []models.CallLeg
-	if err := s.db.WithContext(ctx).Where("call_id = ?", callID).Order("created_at").Find(&rows).Error; err != nil {
+	q := s.db.WithContext(ctx).Where("call_id = ?", callID)
+	if appID := scope.Application(ctx); appID != "" {
+		q = q.Where("application_id = ?", appID)
+	}
+	if err := q.Order("created_at").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ports.CallLegRecord, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, ports.CallLegRecord{
+			ApplicationID: row.ApplicationID, Type: row.Type, State: row.State, ParticipantRef: row.ParticipantRef,
 			ID:        row.ID,
 			CallID:    row.CallID,
 			Role:      dto.LegRole(row.Role),
@@ -134,13 +175,18 @@ func (s *CallStore) ListLegs(ctx context.Context, callID string) ([]ports.CallLe
 
 func (s *CallStore) GetLeg(ctx context.Context, callID, legID string) (ports.CallLegRecord, error) {
 	var row models.CallLeg
-	if err := s.db.WithContext(ctx).First(&row, "call_id = ? AND id = ?", callID, legID).Error; err != nil {
+	q := s.db.WithContext(ctx).Where("call_id = ? AND id = ?", callID, legID)
+	if appID := scope.Application(ctx); appID != "" {
+		q = q.Where("application_id = ?", appID)
+	}
+	if err := q.First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ports.CallLegRecord{}, errs.NotFound("通话腿不存在")
 		}
 		return ports.CallLegRecord{}, err
 	}
 	return ports.CallLegRecord{
+		ApplicationID: row.ApplicationID, Type: row.Type, State: row.State, ParticipantRef: row.ParticipantRef,
 		ID:        row.ID,
 		CallID:    row.CallID,
 		Role:      dto.LegRole(row.Role),

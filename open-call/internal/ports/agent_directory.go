@@ -22,13 +22,10 @@ type AgentInfo struct {
 	State string `json:"state"`
 }
 
-// AgentDirectoryPort 由 L4 agent 包实现，L3 解析分机与能力并更新振铃/通话状态。
+// AgentDirectoryPort 是业务侧只读坐席资料目录；运行状态由 Switch 持有。
 type AgentDirectoryPort interface {
 	// ByExtension 根据分机号查询坐席。
 	ByExtension(ctx context.Context, extension string) (AgentInfo, error)
 	// ByID 根据坐席 ID 查询。
 	ByID(ctx context.Context, agentID string) (AgentInfo, error)
-	// SetState 乐观锁更新坐席状态：仅当当前状态等于 fromState 时迁移到 toState。
-	// fromState 为空则不校验原状态。成功后应写入状态日志并发布 agent.state_changed。
-	SetState(ctx context.Context, agentID, fromState, toState, reason string) error
 }

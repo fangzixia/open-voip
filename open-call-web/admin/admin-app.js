@@ -3,7 +3,7 @@ import { identityActions, newIdentityUserDraft } from "./controllers/identity.js
 import { bindApiFeedback } from "../shared/http-client.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, startSSO, upsertDid } from "../shared/api.js";
+import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, publishSwitchConfig, startSSO, upsertDid } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
 import "../shared/components/ivr/ivr-editor.js";
@@ -85,7 +85,7 @@ export class AdminApp extends LitElement {
     this.agents = [];
     this.utils = [];
     this.dids = [];
-    this.didForm = { did: "", queue_id: "", display_name: "" };
+    this.didForm = { trunk_id: "*", did: "", target_type: "queue", target_id: "" };
     this.qaCallId = "";
     this.qaLabel = "";
     this.forceAgentId = "";
@@ -247,6 +247,15 @@ export class AdminApp extends LitElement {
     }
   }
 
+  async #publishConfig() {
+    try {
+      const result = await publishSwitchConfig();
+      this.error = `配置版本 ${result.version} 已激活`;
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   async #qa(ev) {
     ev.preventDefault();
     try {
@@ -316,6 +325,7 @@ export class AdminApp extends LitElement {
       ...identityActions(this, () => this.#load()),
       logout: (...args) => this.#logout(...args),
       playRec: (...args) => this.#playRec(...args),
+	  publishConfig: (...args) => this.#publishConfig(...args),
       qa: (...args) => this.#qa(...args),
       saveDid: (...args) => this.#saveDid(...args),
       toggleVip: (...args) => this.#toggleVip(...args),

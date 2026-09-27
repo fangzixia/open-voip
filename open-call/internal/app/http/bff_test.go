@@ -31,8 +31,8 @@ func (bffAuth) Authenticate(_ context.Context, token string) (auth.Principal, er
 func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 	forwarded := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/switch/v1/internal/calls/") {
-			id := strings.TrimPrefix(r.URL.Path, "/switch/v1/internal/calls/")
+		if strings.HasPrefix(r.URL.Path, "/switch/v2/internal/calls/") {
+			id := strings.TrimPrefix(r.URL.Path, "/switch/v2/internal/calls/")
 			view := ports.CallView{ID: id, AgentID: "other", Legs: []ports.LegView{
 				{ID: "own-leg", Role: dto.LegRoleAgent, AgentID: "seat"},
 				{ID: "foreign-leg", Role: dto.LegRoleAgent, AgentID: "other"},
@@ -44,7 +44,7 @@ func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 			return
 		}
 		forwarded++
-		if r.URL.Path == "/switch/v1/calls/outbound" {
+		if r.URL.Path == "/switch/v2/calls/outbound" {
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["agent_id"] != "seat" {
 				t.Errorf("outbound actor not replaced: %v %v", body, err)
@@ -86,7 +86,7 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 		if r.Header.Get("X-Principal") != "" {
 			t.Error("end-user principal must not reach switch")
 		}
-		if r.URL.Path == "/switch/v1/internal/calls/call" {
+		if r.URL.Path == "/switch/v2/internal/calls/call" {
 			httpapi.Write(w, http.StatusOK, ports.CallView{ID: "call", AgentID: "seat"})
 			return
 		}

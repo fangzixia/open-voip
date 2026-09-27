@@ -13,7 +13,7 @@ import (
 
 // recordingPath 构造 Switch 内部录音下载/删除 API 路径。
 func recordingPath(callID, id, path string) string {
-	return "/switch/v1/internal/recordings/" + url.PathEscape(callID) + "/" + url.PathEscape(id) + "?ext=" + url.QueryEscape(filepath.Ext(path))
+	return "/switch/v2/internal/recordings/" + url.PathEscape(callID) + "/" + url.PathEscape(id) + "?ext=" + url.QueryEscape(filepath.Ext(path))
 }
 
 // OpenRecording 从 Switch 拉取录音文件流。

@@ -4,6 +4,7 @@ import "time"
 
 // CDR 话单记录，由 L3 经 CDRRecorderPort 写入。
 type CDR struct {
+	ApplicationID string `gorm:"size:64;not null;index"`
 	// ID 话单 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:话单 ID"`
 	// CallID 关联通话。

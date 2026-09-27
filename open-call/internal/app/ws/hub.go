@@ -58,6 +58,7 @@ type Hub struct {
 	auth           *auth.Service
 	calls          ports.CallControlPort
 	agents         *agent.Service
+	agentRuntime   ports.SwitchAdminPort
 	hooks          ports.WebhookDispatcher
 	connCount      atomic.Int64
 	sequence       atomic.Uint64
@@ -80,10 +81,11 @@ func NewHub(log *slog.Logger, allowedOrigins ...string) *Hub {
 }
 
 // Configure 注入鉴权与呼叫端口（打破组合根循环依赖）。
-func (h *Hub) Configure(authSvc *auth.Service, calls ports.CallControlPort, agents *agent.Service, hooks ports.WebhookDispatcher) {
+func (h *Hub) Configure(authSvc *auth.Service, calls ports.CallControlPort, agents *agent.Service, agentRuntime ports.SwitchAdminPort, hooks ports.WebhookDispatcher) {
 	h.auth = authSvc
 	h.calls = calls
 	h.agents = agents
+	h.agentRuntime = agentRuntime
 	h.hooks = hooks
 }
 
@@ -165,14 +167,15 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.add(cl)
 	defer func() {
 		h.remove(cl)
-		if cl.principal.AgentID != "" && h.agents != nil {
+		if cl.principal.AgentID != "" && h.agents != nil && h.agentRuntime != nil {
 			h.mu.Lock()
 			remaining := len(h.byAgent[cl.principal.AgentID])
 			h.mu.Unlock()
 			if remaining == 0 {
 				info, err := h.agents.ByID(context.Background(), cl.principal.AgentID)
-				if err == nil && info.TerminalType != "sip" && info.State == "idle" {
-					_ = h.agents.SetState(context.Background(), info.AgentID, "idle", "busy", "disconnected")
+				session, sessionErr := h.agentRuntime.AgentSession(context.Background(), cl.principal.AgentID)
+				if err == nil && sessionErr == nil && info.TerminalType != "sip" && session.State == "idle" {
+					_, _ = h.agentRuntime.SetPresence(context.Background(), info.AgentID, "busy", "disconnected")
 				}
 			}
 		}
@@ -310,12 +313,12 @@ func (h *Hub) handleClient(ctx context.Context, cl *client, data []byte) {
 		observability.Emit(ctx, "ws.call.decline", nil)
 		_ = h.calls.Decline(ctx, callID, cl.principal.AgentID)
 	case "agent.set_state":
-		if h.agents == nil || cl.principal.AgentID == "" || !cl.principal.Has("agents.self") {
+		if h.agentRuntime == nil || cl.principal.AgentID == "" || !cl.principal.Has("agents.self") {
 			return
 		}
 		state, _ := msg.Payload["state"].(string)
 		reason, _ := msg.Payload["busy_reason"].(string)
-		_, err := h.agents.UpdateState(ctx, cl.principal.AgentID, state, reason)
+		_, err := h.agentRuntime.SetPresence(ctx, cl.principal.AgentID, state, reason)
 		if err != nil {
 			_ = cl.send(ctx, envelope{Type: "error", Payload: map[string]any{"message": err.Error()}})
 		}

@@ -9,11 +9,16 @@ import (
 
 // CallRecord 跨层通话持久化记录，禁止引用 GORM model。
 type CallRecord struct {
-	Caller       string     `json:"caller"`
-	Callee       string     `json:"callee"`
-	AgentID      string     `json:"agent_id"`
-	OfferedAgent string     `json:"offered_agent"`
-	AnsweredAt   *time.Time `json:"answered_at"`
+	ApplicationID string     `json:"application_id"`
+	BusinessRef   string     `json:"business_ref,omitempty"`
+	Metadata      string     `json:"metadata,omitempty"`
+	Version       int64      `json:"version"`
+	ConfigVersion *int64     `json:"config_version,omitempty"`
+	Caller        string     `json:"caller"`
+	Callee        string     `json:"callee"`
+	AgentID       string     `json:"agent_id"`
+	OfferedAgent  string     `json:"offered_agent"`
+	AnsweredAt    *time.Time `json:"answered_at"`
 	// ID 通话 UUID，与媒体 Room 一致。
 	ID string `json:"id"`
 	// Direction 呼叫方向：inbound / outbound / internal。
@@ -38,6 +43,10 @@ type CallRecord struct {
 
 // CallLegRecord 通话腿持久化记录。
 type CallLegRecord struct {
+	ApplicationID  string `json:"application_id"`
+	Type           string `json:"type"`
+	State          string `json:"state"`
+	ParticipantRef string `json:"participant_ref,omitempty"`
 	// ID 腿 UUID。
 	ID string `json:"id"`
 	// CallID 所属通话。

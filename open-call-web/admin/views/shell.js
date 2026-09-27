@@ -77,7 +77,7 @@ export function renderApp(host, operations) {
         ["agents", "hist", "me", "utils"],
         ["force", "navigate", "setForceAgentId"]) : ""}
       ${host.nav === "dids" ? page(renderDids,
-        ["didForm", "dids", "me"], ["saveDid", "updateDidForm"]) : ""}
+        ["didForm", "dids", "me"], ["publishConfig", "saveDid", "updateDidForm"]) : ""}
       ${host.nav === "cdr" ? page(renderCdrPage,
         ["cdrCaller", "cdrResult", "me", "qaCallId", "qaLabel", "wrapUps"],
         ["exportCdr", "filteredCdr", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}

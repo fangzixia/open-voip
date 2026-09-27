@@ -37,18 +37,20 @@ type Config struct {
 	Public PublicConfig `yaml:"public"`
 	// Bootstrap 空库种子账号密码（仅 users 表为空时使用）。
 	Bootstrap BootstrapConfig `yaml:"bootstrap"`
-	// Integration 与 open-call 等业务系统对接。
-	Integration IntegrationConfig `yaml:"integration"`
+	// Applications 可调用 Switch 的业务系统及其资源作用域。
+	Applications []ApplicationConfig `yaml:"applications"`
 }
 
-// IntegrationConfig open-switch 调用业务 Platform API 的配置。
-type IntegrationConfig struct {
-	// Mode call_center 沿用 Platform 适配；external 由可信控制器下发通话命令。
-	Mode string `yaml:"mode"`
-	// Secret 与业务系统共享的服务间密钥。
+// ApplicationConfig 定义一个可信业务系统。终端用户身份仍由业务系统验证。
+type ApplicationConfig struct {
+	// ID 稳定应用标识，同时作为默认租户作用域。
+	ID string `yaml:"id"`
+	// Secret 服务间 Bearer 密钥。
 	Secret string `yaml:"secret"`
-	// PlatformBaseURL open-call Platform API 根地址，如 http://127.0.0.1:8080。
-	PlatformBaseURL string `yaml:"platform_base_url"`
+	// EventRetentionDays 该应用事件保留目标天数。
+	EventRetentionDays int `yaml:"event_retention_days"`
+	// MaxConcurrentCalls 应用级并发上限，0 使用默认值。
+	MaxConcurrentCalls int `yaml:"max_concurrent_calls"`
 }
 
 // ServerConfig 定义 HTTP(S) 监听地址。
@@ -257,14 +259,32 @@ func (c *Config) Validate() error {
 	if c.Recordings.VideoFormat != "webm" && c.Recordings.VideoFormat != "mp4" {
 		errs = append(errs, "recordings.video_format 必须为 webm 或 mp4")
 	}
-	if c.Integration.Mode != "call_center" && c.Integration.Mode != "external" {
-		errs = append(errs, "integration.mode 必须为 call_center 或 external")
+	if len(c.Applications) == 0 {
+		errs = append(errs, "applications 至少配置一个业务系统")
 	}
-	if c.Integration.Mode == "call_center" && strings.TrimSpace(c.Integration.PlatformBaseURL) == "" {
-		errs = append(errs, "integration.platform_base_url 不能为空")
-	}
-	if len(strings.TrimSpace(c.Integration.Secret)) < 8 {
-		errs = append(errs, "integration.secret 长度至少 8 字符")
+	appIDs := map[string]bool{}
+	appSecrets := map[string]bool{}
+	for i, app := range c.Applications {
+		id := strings.TrimSpace(app.ID)
+		secret := strings.TrimSpace(app.Secret)
+		if id == "" || strings.ContainsAny(id, " /\\:@\r\n\t") {
+			errs = append(errs, fmt.Sprintf("applications[%d].id 无效", i))
+		} else if appIDs[id] {
+			errs = append(errs, fmt.Sprintf("applications[%d].id 重复", i))
+		}
+		appIDs[id] = true
+		if len(secret) < 16 {
+			errs = append(errs, fmt.Sprintf("applications[%d].secret 长度至少 16 字符", i))
+		} else if appSecrets[secret] {
+			errs = append(errs, fmt.Sprintf("applications[%d].secret 不能与其他应用重复", i))
+		}
+		appSecrets[secret] = true
+		if app.EventRetentionDays < 1 {
+			errs = append(errs, fmt.Sprintf("applications[%d].event_retention_days 必须大于 0", i))
+		}
+		if app.MaxConcurrentCalls < 1 {
+			errs = append(errs, fmt.Sprintf("applications[%d].max_concurrent_calls 必须大于 0", i))
+		}
 	}
 
 	level := strings.ToLower(strings.TrimSpace(c.Log.Level))
@@ -378,8 +398,14 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) applyDefaults() {
-	if c.Integration.Mode == "" {
-		c.Integration.Mode = "call_center"
+	for i := range c.Applications {
+		c.Applications[i].ID = strings.TrimSpace(c.Applications[i].ID)
+		if c.Applications[i].EventRetentionDays <= 0 {
+			c.Applications[i].EventRetentionDays = 14
+		}
+		if c.Applications[i].MaxConcurrentCalls <= 0 {
+			c.Applications[i].MaxConcurrentCalls = 100
+		}
 	}
 	if strings.TrimSpace(c.Log.Dir) == "" {
 		c.Log.Dir = "./logs/open-switch"

@@ -94,7 +94,7 @@ func setTraceHeaders(req *http.Request, ctx context.Context) {
 
 func (c *Client) StartInbound(ctx context.Context, req dto.InboundRequest) (string, error) {
 	var out ports.CallView
-	if err := c.do(ctx, http.MethodPost, "/switch/v1/calls/inbound", req, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/switch/v2/calls/inbound", req, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -102,33 +102,33 @@ func (c *Client) StartInbound(ctx context.Context, req dto.InboundRequest) (stri
 
 func (c *Client) GetCall(ctx context.Context, callID string) (ports.CallView, error) {
 	var out ports.CallView
-	err := c.do(ctx, http.MethodGet, "/switch/v1/internal/calls/"+callID, nil, &out)
+	err := c.do(ctx, http.MethodGet, "/switch/v2/internal/calls/"+callID, nil, &out)
 	return out, err
 }
 
 func (c *Client) Answer(ctx context.Context, callID, agentID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/answer", map[string]string{"agent_id": agentID}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/answer", map[string]string{"agent_id": agentID}, nil)
 }
 
 func (c *Client) Decline(ctx context.Context, callID, agentID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/decline", map[string]string{"agent_id": agentID}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/decline", map[string]string{"agent_id": agentID}, nil)
 }
 
 func (c *Client) Hangup(ctx context.Context, callID string, reason dto.HangupReason) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/hangup", map[string]string{"reason": string(reason)}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/hangup", map[string]string{"reason": string(reason)}, nil)
 }
 
 func (c *Client) Transfer(ctx context.Context, callID string, req dto.TransferRequest) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/transfer", req, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/transfer", req, nil)
 }
 
 func (c *Client) CompleteTransfer(ctx context.Context, callID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/transfer/complete", nil, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/transfer/complete", nil, nil)
 }
 
 func (c *Client) Outbound(ctx context.Context, req dto.OutboundRequest) (string, error) {
 	var out ports.CallView
-	if err := c.do(ctx, http.MethodPost, "/switch/v1/calls/outbound", req, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/switch/v2/calls/outbound", req, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -139,43 +139,43 @@ func (c *Client) StartIVR(ctx context.Context, callID, snapshotID string) error 
 }
 
 func (c *Client) Hold(ctx context.Context, callID string, on bool) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/hold", map[string]bool{"on": on}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/hold", map[string]bool{"on": on}, nil)
 }
 
 func (c *Client) RequestVideo(ctx context.Context, callID, fromLegID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/video/request", map[string]string{"from_leg_id": fromLegID}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/video/request", map[string]string{"from_leg_id": fromLegID}, nil)
 }
 
 func (c *Client) RespondVideo(ctx context.Context, callID string, accept bool) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/video/respond", map[string]bool{"accept": accept}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/video/respond", map[string]bool{"accept": accept}, nil)
 }
 
 func (c *Client) DowngradeVideo(ctx context.Context, callID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/video/downgrade", nil, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/video/downgrade", nil, nil)
 }
 
 func (c *Client) ScreenShare(ctx context.Context, callID, legID string, on bool) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/screen-share", map[string]any{"on": on, "leg_id": legID}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/screen-share", map[string]any{"on": on, "leg_id": legID}, nil)
 }
 
 func (c *Client) ConferenceInvite(ctx context.Context, callID, targetAgentID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/conference", map[string]string{"agent_id": targetAgentID}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/conference", map[string]string{"agent_id": targetAgentID}, nil)
 }
 
 func (c *Client) SupervisorListen(ctx context.Context, callID, supervisorAgentID string) (string, error) {
 	var out map[string]string
-	if err := c.do(ctx, http.MethodPost, "/switch/v1/supervisor/calls/"+callID+"/listen", map[string]string{"agent_id": supervisorAgentID}, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/switch/v2/supervisor/calls/"+callID+"/listen", map[string]string{"agent_id": supervisorAgentID}, &out); err != nil {
 		return "", err
 	}
 	return out["leg_id"], nil
 }
 
 func (c *Client) SendDTMF(ctx context.Context, callID, legID, digit string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/calls/"+callID+"/dtmf", map[string]string{"leg_id": legID, "digit": digit}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/dtmf", map[string]string{"leg_id": legID, "digit": digit}, nil)
 }
 
 func (c *Client) ForceReleaseAgent(ctx context.Context, agentID, policy string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v1/supervisor/agents/"+agentID+"/force-check-out", map[string]string{"policy": policy}, nil)
+	return c.do(ctx, http.MethodPost, "/switch/v2/supervisor/agents/"+agentID+"/force-check-out", map[string]string{"policy": policy}, nil)
 }
 
 var _ ports.CallControlPort = (*Client)(nil)

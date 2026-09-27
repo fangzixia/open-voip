@@ -1,23 +1,36 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"net/http"
+	"open-switch/internal/config"
 	"open-switch/internal/httpapi"
+	"open-switch/internal/scope"
 	"strings"
 
 	"open-switch/internal/errs"
 )
 
-// IntegrationAuth authenticates a trusted service; end-user identity stays upstream.
-func IntegrationAuth(secret string) func(http.Handler) http.Handler {
-	sec := strings.TrimSpace(secret)
+// ApplicationAuth authenticates a trusted business service and binds its scope.
+func ApplicationAuth(apps []config.ApplicationConfig) func(http.Handler) http.Handler {
+	bySecret := make(map[string]string, len(apps))
+	for _, app := range apps {
+		bySecret[strings.TrimSpace(app.Secret)] = strings.TrimSpace(app.ID)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if bearerToken(r) != sec {
-				writeAuthError(w, errs.Unauthorized("integration 密钥无效"))
+			token := bearerToken(r)
+			applicationID := ""
+			for secret, id := range bySecret {
+				if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1 {
+					applicationID = id
+				}
+			}
+			if applicationID == "" {
+				writeAuthError(w, errs.Unauthorized("业务系统凭据无效"))
 				return
 			}
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(scope.WithApplication(r.Context(), applicationID)))
 		})
 	}
 }

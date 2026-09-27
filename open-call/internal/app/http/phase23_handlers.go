@@ -48,10 +48,8 @@ func (d RouterDeps) handleWrapUp(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if body.Complete && d.Agents != nil {
-		if sess, err := d.Agents.UpdateState(r.Context(), p.AgentID, "idle", "wrap-up"); err == nil {
-			_ = sess
-		}
+	if body.Complete && d.AgentRuntime != nil {
+		_, _ = d.AgentRuntime.SetPresence(r.Context(), p.AgentID, "idle", "wrap-up")
 	}
 	d.writeAudit(r.Context(), p.UserID, "wrap_up", chi.URLParam(r, "callId"), nil)
 	writeJSON(w, http.StatusCreated, out)
@@ -286,6 +284,14 @@ func (d RouterDeps) handleAgentList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, err)
 		return
+	}
+	for i := range out {
+		session, sessionErr := d.AgentRuntime.AgentSession(r.Context(), out[i].ID)
+		if sessionErr != nil {
+			writeErr(w, sessionErr)
+			return
+		}
+		out[i].State = session.State
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
@@ -583,15 +589,16 @@ func (d RouterDeps) handleDIDList(w http.ResponseWriter, r *http.Request) {
 
 func (d RouterDeps) handleDIDUpsert(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		DID         string `json:"did"`
-		QueueID     string `json:"queue_id"`
-		DisplayName string `json:"display_name"`
+		TrunkID    string `json:"trunk_id"`
+		DID        string `json:"did"`
+		TargetType string `json:"target_type"`
+		TargetID   string `json:"target_id"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
 		return
 	}
-	out, err := d.Snapshots.UpsertDID(r.Context(), body.DID, body.QueueID, body.DisplayName)
+	out, err := d.Snapshots.UpsertDID(r.Context(), body.TrunkID, body.DID, body.TargetType, body.TargetID)
 	if err != nil {
 		writeErr(w, err)
 		return

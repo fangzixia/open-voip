@@ -5,18 +5,22 @@ import (
 	"encoding/json"
 	"gorm.io/gorm"
 	"open-switch/internal/ports"
+	"open-switch/internal/scope"
 	"time"
 )
 
 type CallEventRow struct {
-	ID         int64           `json:"id"`
-	CallID     string          `json:"call_id"`
-	Seq        int64           `json:"seq"`
-	AgentID    string          `json:"agent_id"`
-	TargetOnly bool            `json:"target_only"`
-	Type       string          `json:"type"`
-	Payload    json.RawMessage `json:"payload"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ApplicationID string          `json:"application_id"`
+	ID            int64           `json:"id"`
+	CallID        string          `json:"call_id"`
+	Seq           int64           `json:"seq"`
+	Version       int64           `json:"version"`
+	CommandID     *string         `json:"command_id,omitempty"`
+	AgentID       string          `json:"agent_id"`
+	TargetOnly    bool            `json:"target_only"`
+	Type          string          `json:"type"`
+	Payload       json.RawMessage `json:"payload"`
+	CreatedAt     time.Time       `json:"created_at"`
 }
 
 func (CallEventRow) TableName() string { return "os_call_events" }
@@ -24,7 +28,21 @@ func (CallEventRow) TableName() string { return "os_call_events" }
 // CallEvents persists controller events for cursor-based replay.
 type CallEvents struct{ DB *gorm.DB }
 
+// PublishCallEvent implements ports.CallEventPublisher. Events are durable before
+// they are exposed through the cursor API.
+func (s CallEvents) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
+	return s.Append(ctx, &ev)
+}
+
 func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
+	if ev.ApplicationID == "" {
+		ev.ApplicationID = scope.Application(ctx)
+	}
+	if ev.ApplicationID == "" && ev.CallID != "" {
+		if err := s.DB.WithContext(ctx).Raw("SELECT application_id FROM os_calls WHERE id = ?", ev.CallID).Scan(&ev.ApplicationID).Error; err != nil {
+			return err
+		}
+	}
 	raw, err := json.Marshal(ev.Payload)
 	if err != nil {
 		return err
@@ -44,7 +62,15 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 			return err
 		}
 		createdAt := time.Now().UTC()
-		if err := tx.Raw("INSERT INTO os_call_events (call_id, seq, agent_id, target_only, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id", ev.CallID, seq, ev.AgentID, ev.TargetOnly, ev.Type, string(raw), createdAt).Scan(&ev.ID).Error; err != nil {
+		var callID any
+		if ev.CallID != "" {
+			callID = ev.CallID
+		}
+		var commandID any
+		if ev.CommandID != "" {
+			commandID = ev.CommandID
+		}
+		if err := tx.Raw("INSERT INTO os_call_events (application_id, call_id, seq, version, command_id, agent_id, target_only, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id", ev.ApplicationID, callID, seq, ev.Version, commandID, ev.AgentID, ev.TargetOnly, ev.Type, string(raw), createdAt).Scan(&ev.ID).Error; err != nil {
 			return err
 		}
 		ev.Seq = seq
@@ -57,6 +83,9 @@ func (s CallEvents) List(ctx context.Context, afterID int64, callID string, limi
 		limit = 100
 	}
 	q := s.DB.WithContext(ctx).Where("id > ?", afterID)
+	if appID := scope.Application(ctx); appID != "" {
+		q = q.Where("application_id = ?", appID)
+	}
 	if callID != "" {
 		q = q.Where("call_id = ?", callID)
 	}

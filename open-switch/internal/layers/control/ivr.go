@@ -226,9 +226,20 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 	case "hangup":
 		_ = s.Hangup(ctx, callID, dto.HangupReasonNormal)
 	case "route_queue":
+		q, err := s.deps.Config.GetQueue(ctx, node.QueueID)
+		if err != nil {
+			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			return
+		}
 		s.mu.Lock()
 		if rt2 := s.calls[callID]; rt2 != nil {
 			rt2.rec.QueueID = new(node.QueueID)
+			rt2.queueName = q.Name
+			rt2.callee = q.Name
+			rt2.waitPrompt = q.WaitPrompt
+			if q.MaxWaitSec > 0 {
+				rt2.maxWait = time.Duration(q.MaxWaitSec) * time.Second
+			}
 			if node.SessionType != "" {
 				rt2.rec.SessionType = dto.SessionType(node.SessionType)
 			}

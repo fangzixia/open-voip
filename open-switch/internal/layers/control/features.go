@@ -14,6 +14,7 @@ import (
 	"open-switch/internal/observability"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
+	"open-switch/internal/scope"
 )
 
 func (s *Service) Hold(ctx context.Context, callID string, on bool) error {
@@ -373,7 +374,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if looksPSTN(req.Destination) {
 		dir = "outbound"
 	}
-	rec := ports.CallRecord{ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
+	rec := ports.CallRecord{ApplicationID: scope.Application(ctx), ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
 		return "", err
 	}

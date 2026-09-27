@@ -23,6 +23,6 @@ func (c *Client) ListEvents(ctx context.Context, afterID int64) ([]Event, error)
 		Items []Event `json:"items"`
 	}
 	q := url.Values{"after_id": {strconv.FormatInt(afterID, 10)}, "limit": {"100"}}
-	err := c.do(ctx, http.MethodGet, "/switch/v1/events?"+q.Encode(), nil, &out)
+	err := c.do(ctx, http.MethodGet, "/switch/v2/events?"+q.Encode(), nil, &out)
 	return out.Items, err
 }

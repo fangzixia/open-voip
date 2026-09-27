@@ -29,8 +29,9 @@ const (
 	sipRegisterMinExpires = 60
 )
 
-// InboundSIPHandler 由组合根注入：DID 呼入时创建 L3 通话。callID 为预分配 ID。
-type InboundSIPHandler func(ctx context.Context, did, from, callID string) (gotCallID, legID string, err error)
+// InboundSIPHandler 由组合根注入：DID 呼入时创建 L3 通话。sourceID
+// 是可信中继 ID；设备呼叫时为空。callID 为预分配 ID。
+type InboundSIPHandler func(ctx context.Context, sourceID, destination, from, callID string) (gotCallID, legID string, err error)
 
 // HangupSIPHandler 对端 BYE/超时取消时通知 L3。
 type HangupSIPHandler func(ctx context.Context, callID string)
@@ -229,6 +230,24 @@ func (u *sipUA) ipAllowed(src string) bool {
 	return ipInNets(ip, nets)
 }
 
+func (u *sipUA) trunkID(src string) string {
+	ip := hostPortIP(src)
+	for _, trunk := range u.cfg.Trunks {
+		for _, network := range parseAllowedNets(trunk.AllowedCIDRs) {
+			if network.Contains(ip) {
+				return trunk.ID
+			}
+		}
+		if hostIP := net.ParseIP(strings.TrimSpace(trunk.Host)); hostIP != nil && hostIP.Equal(ip) {
+			return trunk.ID
+		}
+	}
+	if len(u.cfg.Trunks) == 1 {
+		return u.cfg.Trunks[0].ID
+	}
+	return ""
+}
+
 // onInvite 校验来源和设备身份，协商 G.711 媒体并创建呼入 SIP 对话。
 func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	logSIP("receive", req, "")
@@ -322,7 +341,11 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 	u.putDialog(sess)
 
-	got, legID, err := handler(context.Background(), did, from, callID)
+	sourceID := u.trunkID(src)
+	if deviceCall {
+		sourceID = ""
+	}
+	got, legID, err := handler(context.Background(), sourceID, did, from, callID)
 	rtpSess.mu.Lock()
 	rtpSess.legID = legID
 	rtpSess.mu.Unlock()

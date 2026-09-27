@@ -5,15 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"open-call/internal/errs"
-	"open-call/internal/observability"
 	"open-call/internal/ports"
 	"open-call/internal/ports/dto"
 	"open-call/internal/store/models"
@@ -98,13 +95,10 @@ type PolicyDefaults struct {
 	RetainDays int
 }
 
-// Service 队列 CRUD、ACD 与录音策略。
+// Service 负责业务侧队列配置草稿与展示。
 type Service struct {
 	db       *gorm.DB
-	events   ports.AgentEventPublisher
 	defaults PolicyDefaults
-	mu       sync.Mutex
-	lastRR   map[string]string
 }
 
 // NewService 创建队列/ACD 服务。
@@ -115,10 +109,10 @@ func NewService(db *gorm.DB, events ports.AgentEventPublisher, defaults PolicyDe
 	if defaults.RetainDays <= 0 {
 		defaults.RetainDays = 90
 	}
-	return &Service{db: db, events: events, defaults: defaults, lastRR: map[string]string{}}
+	_ = events
+	return &Service{db: db, defaults: defaults}
 }
 
-var _ ports.ACDDispatchPort = (*Service)(nil)
 var _ ports.RecordingPolicyPort = (*Service)(nil)
 
 // List 分页。
@@ -391,7 +385,6 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 			return errs.Conflict("队列仍被 IVR 草稿引用", "")
 		}
 		tx.Where("queue_id = ?", id).Delete(&models.QueueAgent{})
-		tx.Where("queue_id = ?", id).Delete(&models.AgentSessionQueue{})
 		tx.Where("queue_id = ?", id).Delete(&models.QueueSkill{})
 		res := tx.Delete(&models.Queue{}, "id = ?", id)
 		if res.Error != nil {
@@ -438,130 +431,6 @@ func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error
 		return nil, err
 	}
 	return ids, nil
-}
-
-// RequestAgent 原子选人并标记 ringing。
-func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dto.DispatchResult, error) {
-	ctx = observability.With(ctx, observability.Context{CallID: req.CallID, QueueID: req.QueueID})
-	observability.Emit(ctx, "acd.dispatch.requested", map[string]any{"require_video": req.RequireVideo, "skill_ids": req.SkillIDs})
-	if req.CallID == "" {
-		return dto.DispatchResult{}, errs.InvalidRequest("call_id 必填")
-	}
-	var q models.Queue
-	if err := s.db.WithContext(ctx).First(&q, "id = ?", req.QueueID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return dto.DispatchResult{}, errs.NotFound("队列不存在")
-		}
-		return dto.DispatchResult{}, err
-	}
-	var picked string
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 同一通话的重复派单请求共用数据库锁，避免同时占用多个坐席。
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", req.CallID).Error; err != nil {
-			return err
-		}
-		var existing models.AgentSession
-		if err := tx.Where("current_call_id = ? AND state IN ?", req.CallID, []string{"ringing", "on_call"}).First(&existing).Error; err == nil {
-			picked = existing.AgentID
-			return nil
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		// 跳过其他事务正分配的坐席，仅从空闲且满足视频、队列、技能条件的会话中选人。
-		query := tx.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: clause.CurrentTable}, Options: "SKIP LOCKED"}).
-			Model(&models.AgentSession{}).
-			Joins("JOIN oc_agents ON oc_agents.id = oc_agent_sessions.agent_id").
-			Joins("JOIN oc_agent_session_queues ON oc_agent_session_queues.agent_id = oc_agent_sessions.agent_id").
-			Where("oc_agent_sessions.state = ? AND oc_agent_sessions.pending_checkout = false", "idle").
-			Where("EXISTS (SELECT 1 FROM oc_users u WHERE u.id = oc_agents.user_id AND u.disabled = false)").
-			Where("oc_agent_session_queues.queue_id = ?", req.QueueID)
-		if req.RequireVideo {
-			query = query.Where("oc_agents.video_capable = ?", true)
-		}
-		var needSkills []string
-		if err := tx.Model(&models.QueueSkill{}).Where("queue_id = ?", req.QueueID).Pluck("skill_id", &needSkills).Error; err != nil {
-			return err
-		}
-		if len(req.SkillIDs) > 0 {
-			needSkills = req.SkillIDs
-		}
-		if len(needSkills) > 0 {
-			query = query.Where("NOT EXISTS (SELECT 1 FROM oc_queue_skills qs WHERE qs.queue_id = ? AND NOT EXISTS (SELECT 1 FROM oc_agent_skills a WHERE a.agent_id = oc_agent_sessions.agent_id AND a.skill_id = qs.skill_id))", req.QueueID)
-			for _, skillID := range needSkills {
-				query = query.Where("EXISTS (SELECT 1 FROM oc_agent_skills a WHERE a.agent_id = oc_agent_sessions.agent_id AND a.skill_id = ?)", skillID)
-			}
-		}
-		// 轮询策略用上次选中的坐席作为游标；其他策略选最久未更新的空闲坐席。
-		if q.DispatchStrategy == "round_robin" {
-			query = query.Order("oc_agents.id ASC")
-		} else {
-			query = query.Order("oc_agent_sessions.updated_at ASC")
-		}
-		var sessions []models.AgentSession
-		if err := query.Find(&sessions).Error; err != nil {
-			return err
-		}
-		if len(sessions) == 0 {
-			return nil
-		}
-		choice := sessions[0]
-		if q.DispatchStrategy == "round_robin" {
-			s.mu.Lock()
-			last := s.lastRR[req.QueueID]
-			s.mu.Unlock()
-			for _, sess := range sessions {
-				if sess.AgentID > last {
-					choice = sess
-					break
-				}
-			}
-		}
-		now := time.Now().UTC()
-		res := tx.Model(&models.AgentSession{}).
-			Where("agent_id = ? AND state = ?", choice.AgentID, "idle").
-			Updates(map[string]any{"state": "ringing", "updated_at": now, "busy_reason": "", "current_call_id": req.CallID})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return nil
-		}
-		if err := tx.Create(&models.AgentStateLog{
-			ID:        uuid.New().String(),
-			AgentID:   choice.AgentID,
-			FromState: "idle",
-			ToState:   "ringing",
-			Reason:    "acd:" + req.CallID,
-			CreatedAt: now,
-		}).Error; err != nil {
-			return err
-		}
-		picked = choice.AgentID
-		if q.DispatchStrategy == "round_robin" {
-			s.mu.Lock()
-			s.lastRR[req.QueueID] = choice.AgentID
-			s.mu.Unlock()
-		}
-		return nil
-	})
-	if err != nil {
-		observability.Emit(ctx, "acd.dispatch.failed", map[string]any{"error": err.Error()})
-		return dto.DispatchResult{}, err
-	}
-	if picked != "" && s.events != nil {
-		_ = s.events.PublishAgentEvent(ctx, ports.AgentEvent{
-			Type:    "agent.state_changed",
-			AgentID: picked,
-			Payload: map[string]any{"agent_id": picked, "state": "ringing", "busy_reason": "", "current_call_id": req.CallID},
-		})
-	}
-	resultCtx := observability.With(ctx, observability.Context{AgentID: picked})
-	if picked == "" {
-		observability.Emit(resultCtx, "acd.dispatch.no_agent", nil)
-	} else {
-		observability.Emit(resultCtx, "acd.dispatch.assigned", map[string]any{"strategy": q.DispatchStrategy})
-	}
-	return dto.DispatchResult{AgentID: picked}, nil
 }
 
 // ForQueue 返回队列录音策略；无队列时用组织默认，未知队列视为关闭。

@@ -349,6 +349,10 @@ export function upsertDid(body) {
   return apiFetch("/api/v1/dids", { method: "POST", body: JSON.stringify(body) });
 }
 
+export function publishSwitchConfig() {
+  return apiFetch("/api/v1/config/publish", { method: "POST" });
+}
+
 export function addQaMark(callId, offsetSec, label) {
   return apiFetch(`/api/v1/calls/${callId}/qa-marks`, {
     method: "POST",

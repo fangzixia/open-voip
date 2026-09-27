@@ -1,4 +1,4 @@
-// Package app 是 open-call 组合根（L4 + BFF + Platform API）。
+// Package app 是 open-call 业务应用与 Switch BFF 的组合根。
 package app
 
 import (
@@ -16,7 +16,6 @@ import (
 	"gorm.io/gorm/logger"
 
 	apphttp "open-call/internal/app/http"
-	"open-call/internal/app/platform"
 	"open-call/internal/app/ws"
 	"open-call/internal/config"
 	"open-call/internal/integration/switchapi"
@@ -101,6 +100,7 @@ func Run(configPath string) error {
 	}
 	userSvc := user.NewService(db)
 	configSnap := configpub.NewSnapshotService(db)
+	configPublisher := configpub.NewPublisher(db, switchClient)
 	cdrRecorder := cdr.NewRecorderService(db)
 	recMeta := recmeta.NewService(db)
 	recMeta.SetFiles(switchClient)
@@ -112,7 +112,7 @@ func Run(configPath string) error {
 	cfgIO := configio.NewService(db)
 	guestSvc := guest.NewService(db, switchClient, cfg.Public.GuestBaseURL)
 
-	wsHub.Configure(authSvc, switchClient, agentSvc, hookSvc)
+	wsHub.Configure(authSvc, switchClient, agentSvc, switchClient, hookSvc)
 
 	// 后台任务使用独立上下文，停机时先停止领取新任务。
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
@@ -122,36 +122,28 @@ func Run(configPath string) error {
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
-	platformHandler := platform.NewRouter(platform.Deps{
-		Secret:     cfg.Integration.Secret,
-		Queues:     queueSvc,
-		Agents:     agentSvc,
-		Snapshots:  configSnap,
-		CDR:        cdrRecorder,
-		Recordings: recMeta,
-		Hub:        wsHub,
-	})
-
 	apiRouter := apphttp.NewRouter(apphttp.RouterDeps{
-		Config:        *cfg,
-		Auth:          authSvc,
-		Authorization: authzSvc,
-		OIDC:          oidcSvc,
-		Users:         userSvc,
-		Agents:        agentSvc,
-		Queues:        queueSvc,
-		Guests:        guestSvc,
-		CDR:           cdrRecorder,
-		IVR:           ivrSvc,
-		Skills:        skillSvc,
-		Recordings:    recMeta,
-		Reports:       reportSvc,
-		Webhooks:      hookSvc,
-		Audit:         auditSvc,
-		ConfigIO:      cfgIO,
-		Snapshots:     configSnap,
-		Hub:           wsHub,
-		Calls:         switchClient,
+		Config:          *cfg,
+		Auth:            authSvc,
+		Authorization:   authzSvc,
+		OIDC:            oidcSvc,
+		Users:           userSvc,
+		Agents:          agentSvc,
+		Queues:          queueSvc,
+		Guests:          guestSvc,
+		CDR:             cdrRecorder,
+		IVR:             ivrSvc,
+		Skills:          skillSvc,
+		Recordings:      recMeta,
+		Reports:         reportSvc,
+		Webhooks:        hookSvc,
+		Audit:           auditSvc,
+		ConfigIO:        cfgIO,
+		Snapshots:       configSnap,
+		ConfigPublisher: configPublisher,
+		AgentRuntime:    switchClient,
+		Hub:             wsHub,
+		Calls:           switchClient,
 		Status: apphttp.StatusProvider{
 			DB:            db,
 			Runtime:       switchClient,
@@ -162,7 +154,6 @@ func Run(configPath string) error {
 	})
 
 	root := chi.NewRouter()
-	root.Mount("/platform/v1", platformHandler)
 	root.Mount("/", apphttp.WrapSwitchBFF(cfg.Integration, authSvc, apiRouter, cfg.Security.AllowedOrigins))
 
 	srv := &http.Server{

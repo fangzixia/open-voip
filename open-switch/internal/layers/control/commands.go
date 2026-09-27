@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"open-switch/internal/observability"
 	"open-switch/internal/ports"
+	"open-switch/internal/scope"
 )
 
 type commandKey struct{}
@@ -25,6 +26,17 @@ func (s *Service) command(ctx context.Context, callID string) (context.Context, 
 		return ctx, func() {}
 	}
 	s.commands[index].Lock()
+	s.mu.Lock()
+	rt := s.calls[callID]
+	s.mu.Unlock()
+	if rt != nil {
+		if rt.rec.ApplicationID != "" {
+			ctx = scope.WithApplication(ctx, rt.rec.ApplicationID)
+		}
+		if rt.rec.ConfigVersion != nil {
+			ctx = scope.WithConfigVersion(ctx, *rt.rec.ConfigVersion)
+		}
+	}
 	return context.WithValue(ctx, commandKey{}, commandToken{s, index}), s.commands[index].Unlock
 }
 

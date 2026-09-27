@@ -20,7 +20,7 @@ func (authorizationCalls) GetCall(context.Context, string) (ports.CallView, erro
 }
 
 func TestSwitchTrustsAuthenticatedServiceWithoutPrincipal(t *testing.T) {
-	h := NewSwitchRouter(SwitchRouterDeps{Config: config.Config{Integration: config.IntegrationConfig{Secret: "internal"}}, RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}})
+	h := NewSwitchRouter(SwitchRouterDeps{Config: config.Config{Applications: []config.ApplicationConfig{{ID: "crm", Secret: "internal"}}}, RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}})
 	cases := []struct {
 		token  string
 		status int
@@ -30,7 +30,7 @@ func TestSwitchTrustsAuthenticatedServiceWithoutPrincipal(t *testing.T) {
 		{"internal", 200},
 	}
 	for _, tc := range cases {
-		req := httptest.NewRequest(http.MethodGet, "/switch/v1/calls/c", nil)
+		req := httptest.NewRequest(http.MethodGet, "/switch/v2/calls/c", nil)
 		if tc.token != "" {
 			req.Header.Set("Authorization", "Bearer "+tc.token)
 		}
@@ -44,27 +44,12 @@ func TestSwitchTrustsAuthenticatedServiceWithoutPrincipal(t *testing.T) {
 
 type routeOnlyDirect struct{ ports.DirectControlPort }
 
-func TestSwitchModeRoutesAreSeparated(t *testing.T) {
-	base := SwitchRouterDeps{Config: config.Config{Integration: config.IntegrationConfig{Secret: "internal"}}, RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}}
-	for _, tc := range []struct {
-		direct bool
-		path   string
-	}{
-		{true, "/switch/v1/calls/outbound"},
-		{true, "/switch/v1/calls/inbound"},
-		{true, "/switch/v1/supervisor/calls/c/listen"},
-		{false, "/switch/v1/calls/direct"},
-	} {
-		deps := base
-		if tc.direct {
-			deps.Direct = routeOnlyDirect{}
-		}
-		req := httptest.NewRequest(http.MethodPost, tc.path, nil)
-		req.Header.Set("Authorization", "Bearer internal")
-		rec := httptest.NewRecorder()
-		NewSwitchRouter(deps).ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
-			t.Errorf("direct=%v path=%s status=%d", tc.direct, tc.path, rec.Code)
-		}
+func TestLegacySwitchV1IsRemoved(t *testing.T) {
+	deps := SwitchRouterDeps{Config: config.Config{Applications: []config.ApplicationConfig{{ID: "crm", Secret: "internal"}}}, RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}}
+	req := httptest.NewRequest(http.MethodGet, "/switch/v1/calls/c", nil)
+	rec := httptest.NewRecorder()
+	NewSwitchRouter(deps).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("legacy route status=%d", rec.Code)
 	}
 }

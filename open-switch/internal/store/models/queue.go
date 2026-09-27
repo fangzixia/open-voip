@@ -4,6 +4,7 @@ import "time"
 
 // Queue 呼入队列配置。
 type Queue struct {
+	ApplicationID string `gorm:"primaryKey;size:64"`
 	// ID 队列 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`
 	// Name 队列名称。
@@ -35,7 +36,8 @@ type Queue struct {
 	// ForceHangupOnCheckout 班长强制签出时是否立即挂断。
 	ForceHangupOnCheckout bool `gorm:"not null;default:true;comment:强制签出是否挂断"`
 	// ListenAnnounce 班长监听时是否向客户播放提示音。
-	ListenAnnounce bool `gorm:"not null;default:false;comment:监听是否提示客户"`
+	ListenAnnounce bool  `gorm:"not null;default:false;comment:监听是否提示客户"`
+	ConfigVersion  int64 `gorm:"primaryKey;not null"`
 	// CreatedAt 创建时间。
 	CreatedAt time.Time `gorm:"comment:创建时间"`
 	// UpdatedAt 更新时间。
@@ -44,6 +46,8 @@ type Queue struct {
 
 // QueueSkill 队列所需技能。
 type QueueSkill struct {
+	ApplicationID string `gorm:"primaryKey;size:64"`
+	ConfigVersion int64  `gorm:"primaryKey;not null"`
 	// QueueID 队列 ID。
 	QueueID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`
 	// SkillID 技能 ID。
@@ -58,6 +62,8 @@ func (Queue) TableName() string { return "os_queues" }
 
 // QueueAgent 队列与可签入坐席的绑定关系。
 type QueueAgent struct {
+	ApplicationID string `gorm:"primaryKey;size:64"`
+	ConfigVersion int64  `gorm:"primaryKey;not null"`
 	// QueueID 队列 ID。
 	QueueID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`
 	// AgentID 坐席 ID。

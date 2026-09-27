@@ -20,10 +20,11 @@ type SwitchRouterDeps struct {
 	Runtime RuntimeReader
 	Events  *store.CallEvents
 	Direct  ports.DirectControlPort
+	Admin   ports.CallCenterAdminPort
 	RouterDeps
 }
 
-// NewSwitchRouter 构建 /switch/v1 路由（见 docs/open-switch对接说明.md）。
+// NewSwitchRouter 构建应用隔离的 /switch/v2 路由。
 func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 	r := chi.NewRouter()
 	r.NotFound(httpapi.NotFound)
@@ -35,8 +36,16 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 
 	r.Get("/health", handleHealth)
 
-	r.Route("/switch/v1", func(sw chi.Router) {
-		sw.Use(middleware.IntegrationAuth(deps.Config.Integration.Secret))
+	r.Route("/switch/v2", func(sw chi.Router) {
+		sw.Use(middleware.ApplicationAuth(deps.Config.Applications))
+		sw.Post("/configuration/versions", deps.handleConfigStore)
+		sw.Get("/configuration/versions/{version}", deps.handleConfigGet)
+		sw.Post("/configuration/versions/{version}/activate", deps.handleConfigActivate)
+		sw.Post("/agents/{agentId}/check-in", deps.handleAgentCheckIn)
+		sw.Post("/agents/{agentId}/check-out", deps.handleAgentCheckOut)
+		sw.Put("/agents/{agentId}/presence", deps.handleAgentPresence)
+		sw.Get("/agents/{agentId}/session", deps.handleAgentSession)
+		sw.Get("/queues/{queueId}/status", deps.handleQueueStatus)
 		sw.Get("/internal/calls/{callId}", deps.handleInternalCall)
 		if deps.Events != nil {
 			sw.Get("/events", deps.handleEvents)
@@ -50,29 +59,25 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 			sw.Get("/internal/calls", deps.handleInternalCalls)
 		}
 
-		if deps.Direct != nil {
-			sw.Post("/calls/direct", deps.handleDirectCreate)
-			sw.Post("/calls/{callId}/legs", deps.handleDirectLeg)
-			sw.Post("/calls/{callId}/legs/sip", deps.handleDirectSIP)
-			sw.Delete("/calls/{callId}/legs/{legId}", deps.handleDirectLeave)
-			sw.Post("/calls/{callId}/bridge", deps.handleDirectBridge)
-			sw.Post("/calls/{callId}/recording/start", deps.handleDirectRecordingStart)
-			sw.Post("/calls/{callId}/recording/stop", deps.handleDirectRecordingStop)
-		}
+		sw.Post("/calls/direct", deps.handleDirectCreate)
+		sw.Post("/calls/{callId}/legs", deps.handleDirectLeg)
+		sw.Post("/calls/{callId}/legs/sip", deps.handleDirectSIP)
+		sw.Delete("/calls/{callId}/legs/{legId}", deps.handleDirectLeave)
+		sw.Post("/calls/{callId}/bridge", deps.handleDirectBridge)
+		sw.Post("/calls/{callId}/recording/start", deps.handleDirectRecordingStart)
+		sw.Post("/calls/{callId}/recording/stop", deps.handleDirectRecordingStop)
 		sw.Get("/calls/{callId}", deps.handleCallGet)
 		sw.Post("/calls/{callId}/hangup", deps.handleCallHangup)
-		if deps.Direct == nil {
-			sw.Post("/calls/inbound", deps.handleSwitchInbound)
-			sw.Post("/calls/outbound", deps.handleOutbound)
-			sw.Post("/calls/{callId}/answer", deps.handleCallAnswer)
-			sw.Post("/calls/{callId}/decline", deps.handleDecline)
-			sw.Post("/calls/{callId}/hold", deps.handleHold)
-			sw.Post("/calls/{callId}/transfer", deps.handleTransfer)
-			sw.Post("/calls/{callId}/transfer/complete", deps.handleCompleteTransfer)
-			sw.Post("/calls/{callId}/conference", deps.handleConference)
-			sw.Post("/supervisor/calls/{callId}/listen", deps.handleListen)
-			sw.Post("/supervisor/agents/{agentId}/force-check-out", deps.handleForceCheckout)
-		}
+		sw.Post("/calls/inbound", deps.handleSwitchInbound)
+		sw.Post("/calls/outbound", deps.handleOutbound)
+		sw.Post("/calls/{callId}/answer", deps.handleCallAnswer)
+		sw.Post("/calls/{callId}/decline", deps.handleDecline)
+		sw.Post("/calls/{callId}/hold", deps.handleHold)
+		sw.Post("/calls/{callId}/transfer", deps.handleTransfer)
+		sw.Post("/calls/{callId}/transfer/complete", deps.handleCompleteTransfer)
+		sw.Post("/calls/{callId}/conference", deps.handleConference)
+		sw.Post("/supervisor/calls/{callId}/listen", deps.handleListen)
+		sw.Post("/supervisor/agents/{agentId}/force-check-out", deps.handleForceCheckout)
 		sw.Post("/calls/{callId}/video/request", deps.handleVideoRequest)
 		sw.Post("/calls/{callId}/video/respond", deps.handleVideoRespond)
 		sw.Post("/calls/{callId}/video/downgrade", deps.handleVideoDowngrade)

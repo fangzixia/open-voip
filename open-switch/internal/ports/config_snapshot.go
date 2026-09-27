@@ -7,6 +7,8 @@ import (
 
 // QueueSnapshot 队列只读快照，供 L3 路由与 IVR 使用。
 type QueueSnapshot struct {
+	ApplicationID string `json:"application_id"`
+	ConfigVersion int64  `json:"config_version"`
 	// ID 队列 UUID。
 	ID string `json:"id"`
 	// Name 队列名。
@@ -47,6 +49,8 @@ type IVRNodeSnapshot struct {
 
 // IVRSnapshot 已发布 IVR 快照。
 type IVRSnapshot struct {
+	ApplicationID string `json:"application_id"`
+	ConfigVersion int64  `json:"config_version"`
 	// SnapshotID 快照 UUID。
 	SnapshotID string `json:"snapshot_id"`
 	// FlowID 流程 ID。
@@ -57,6 +61,17 @@ type IVRSnapshot struct {
 	PayloadJSON string `json:"payload_json"`
 	// Root 兼容旧字段的根节点摘要。
 	Root IVRNodeSnapshot `json:"root"`
+}
+
+// DIDRouteSnapshot is the authoritative ingress match.
+type DIDRouteSnapshot struct {
+	ApplicationID string `json:"application_id"`
+	ConfigVersion int64  `json:"config_version"`
+	RouteID       string `json:"route_id"`
+	TrunkID       string `json:"trunk_id"`
+	DID           string `json:"did"`
+	TargetType    string `json:"target_type"`
+	TargetID      string `json:"target_id,omitempty"`
 }
 
 // BusinessHours 工作时间窗口。
@@ -75,8 +90,8 @@ type ConfigSnapshotPort interface {
 	GetLatestIVR(ctx context.Context, flowID string) (IVRSnapshot, error)
 	// GetBusinessHours 读取全局或队列级工作时间。
 	GetBusinessHours(ctx context.Context, queueID string) (BusinessHours, error)
-	// ResolveDID 将 DID/外显号码解析为队列 ID。
-	ResolveDID(ctx context.Context, did string) (queueID string, err error)
+	// ResolveDID 将中继与 DID 解析为已激活的 IVR/队列入口及应用作用域。
+	ResolveDID(ctx context.Context, trunkID, did string) (DIDRouteSnapshot, error)
 	// Now 返回用于时间判断的「当前时间」（便于测试注入）。
 	Now(ctx context.Context) time.Time
 }

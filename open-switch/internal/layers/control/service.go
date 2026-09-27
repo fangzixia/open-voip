@@ -15,6 +15,7 @@ import (
 	"open-switch/internal/observability"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
+	"open-switch/internal/scope"
 )
 
 const (
@@ -102,18 +103,26 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	} else if !errors.Is(err, errs.ErrNotFound) {
 		return "", err
 	}
-	if req.QueueID == "" {
-		return "", errs.InvalidRequest("queue_id 必填")
+	if req.QueueID == "" && req.IVRFlowID == "" {
+		return "", errs.InvalidRequest("queue_id 或 ivr_flow_id 必填")
 	}
 	if req.SessionType == "" {
 		req.SessionType = dto.SessionTypeAudio
 	}
-	q, err := s.deps.Config.GetQueue(ctx, req.QueueID)
-	if err != nil {
-		return "", err
+	var q ports.QueueSnapshot
+	if req.QueueID != "" {
+		var err error
+		q, err = s.deps.Config.GetQueue(ctx, req.QueueID)
+		if err != nil {
+			return "", err
+		}
+		if req.SessionType == dto.SessionTypeVideo && !q.VideoEnabled {
+			return "", errs.Unprocessable("该队列不支持视频", errs.CodeAgentNotVideoCapable)
+		}
+		req.ApplicationID, req.ConfigVersion = q.ApplicationID, q.ConfigVersion
 	}
-	if req.SessionType == dto.SessionTypeVideo && !q.VideoEnabled {
-		return "", errs.Unprocessable("该队列不支持视频", errs.CodeAgentNotVideoCapable)
+	if req.ApplicationID == "" || req.ConfigVersion < 1 {
+		return "", errs.Forbidden("缺少已激活的应用配置作用域")
 	}
 
 	now := time.Now().UTC()
@@ -122,15 +131,21 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		callID = uuid.New().String()
 	}
 	rec := ports.CallRecord{
-		ID:          callID,
-		Direction:   "inbound",
-		SessionType: req.SessionType,
-		State:       stateCreated,
-		QueueID:     new(req.QueueID),
-		Priority:    req.Priority,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ApplicationID: req.ApplicationID,
+		ConfigVersion: new(req.ConfigVersion),
+		ID:            callID,
+		Direction:     "inbound",
+		SessionType:   req.SessionType,
+		State:         stateCreated,
+		Priority:      req.Priority,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
+	if req.QueueID != "" {
+		rec.QueueID = new(req.QueueID)
+	}
+	ctx = scope.WithApplication(ctx, req.ApplicationID)
+	ctx = scope.WithConfigVersion(ctx, req.ConfigVersion)
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
 		return "", err
 	}
@@ -164,6 +179,9 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		maxWait:    maxWait,
 		waitPrompt: q.WaitPrompt,
 	}
+	if req.IVRFlowID != "" && rt.callee == "" {
+		rt.callee = "ivr:" + req.IVRFlowID
+	}
 
 	s.mu.Lock()
 	s.calls[callID] = rt
@@ -173,7 +191,7 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	slog.Info("呼入已创建", "call_id", callID, "queue_id", req.QueueID, "session_type", string(req.SessionType), "priority", req.Priority)
 
 	// 非营业时段优先执行队列的留言、挂断或继续排队策略。
-	if !withinHours(s.deps.Config, ctx, req.QueueID) {
+	if req.QueueID != "" && !withinHours(s.deps.Config, ctx, req.QueueID) {
 		action := q.AfterHoursAction
 		if action == "" {
 			action = "hangup"
@@ -189,10 +207,17 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		}
 	}
 
-	if !req.SkipIVR && q.IVRFlowID != "" {
-		if err := s.bootIVR(ctx, callID, q.IVRFlowID); err == nil {
+	flowID := req.IVRFlowID
+	if flowID == "" {
+		flowID = q.IVRFlowID
+	}
+	if !req.SkipIVR && flowID != "" {
+		if err := s.bootIVR(ctx, callID, flowID); err == nil {
 			return callID, nil
 		}
+	}
+	if req.QueueID == "" {
+		return "", errs.InvalidRequest("IVR 未能启动且没有后备队列")
 	}
 
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: req.SessionType}); err != nil {

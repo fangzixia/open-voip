@@ -15,6 +15,10 @@ const (
 
 // InboundRequest 访客或呼入创建通话的请求参数。
 type InboundRequest struct {
+	// ApplicationID、ConfigVersion 与 IVRFlowID 仅由可信 DID 路由注入。
+	ApplicationID string `json:"-"`
+	ConfigVersion int64  `json:"-"`
+	IVRFlowID     string `json:"-"`
 	// QueueID 目标队列 UUID。
 	QueueID string `json:"queue_id"`
 	// GuestSessionID 访客会话 ID，可空（Demo 直链）。

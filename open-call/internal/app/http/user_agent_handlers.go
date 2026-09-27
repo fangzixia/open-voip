@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"open-call/internal/errs"
+	"open-call/internal/layers/biz/agent"
 	"open-call/internal/layers/biz/user"
 )
 
@@ -113,6 +114,12 @@ func (d RouterDeps) handleAgentMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	session, err := d.AgentRuntime.AgentSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out.Session = agent.SessionDTO{AgentID: session.AgentID, State: session.State, BusyReason: session.BusyReason, QueueIDs: session.QueueIDs}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -125,7 +132,7 @@ func (d RouterDeps) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 		QueueIDs []string `json:"queue_ids"`
 	}
 	_ = decodeJSON(r, &body)
-	out, err := d.Agents.CheckIn(r.Context(), chi.URLParam(r, "agentId"), body.QueueIDs)
+	out, err := d.AgentRuntime.CheckIn(r.Context(), chi.URLParam(r, "agentId"), body.QueueIDs)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -138,7 +145,7 @@ func (d RouterDeps) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := d.Agents.CheckOut(r.Context(), chi.URLParam(r, "agentId")); err != nil {
+	if err := d.AgentRuntime.CheckOut(r.Context(), chi.URLParam(r, "agentId")); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -158,7 +165,7 @@ func (d RouterDeps) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	out, err := d.Agents.UpdateState(r.Context(), chi.URLParam(r, "agentId"), body.State, body.BusyReason)
+	out, err := d.AgentRuntime.SetPresence(r.Context(), chi.URLParam(r, "agentId"), body.State, body.BusyReason)
 	if err != nil {
 		writeErr(w, err)
 		return

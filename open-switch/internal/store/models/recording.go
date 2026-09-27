@@ -4,6 +4,7 @@ import "time"
 
 // Recording 录音/录像文件元数据。
 type Recording struct {
+	ApplicationID string `gorm:"size:64;not null;index"`
 	// ID 录制 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:录音记录 ID"`
 	// CallID 关联通话。

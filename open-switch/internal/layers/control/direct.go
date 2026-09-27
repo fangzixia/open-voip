@@ -9,6 +9,7 @@ import (
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
+	"open-switch/internal/scope"
 )
 
 // CreateDirect creates a controller-owned call without querying a Platform API.
@@ -66,7 +67,7 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 		return ports.CallView{}, err
 	}
 	now := time.Now().UTC()
-	rec := ports.CallRecord{ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
+	rec := ports.CallRecord{ApplicationID: scope.Application(ctx), ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
 	leg := ports.CallLegRecord{ID: uuid.NewString(), CallID: req.CallID, Role: req.InitialLegRole, CreatedAt: now}
 	if req.AgentID != "" {
 		leg.AgentID = &req.AgentID
