@@ -79,12 +79,8 @@ func Run(configPath string) error {
 
 	switchClient := switchapi.NewClient(cfg.Integration)
 	wsHub := ws.NewHub(log, cfg.Security.AllowedOrigins...)
-	queueSvc := queue.NewService(db, wsHub, queue.PolicyDefaults{
-		Mode:          "audio",
-		NotifyMessage: cfg.Recordings.NotifyMessage,
-		RetainDays:    cfg.Recordings.RetainDays,
-	})
-	agentSvc := agent.NewService(db, wsHub)
+	queueSvc := queue.NewService(db)
+	agentSvc := agent.NewService(db)
 	authSvc := auth.NewService(db, cfg.JWT)
 	authSvc.ConfigureOIDC(cfg.OIDC.Enabled, cfg.OIDC.EmergencyAdmin)
 	if err := authSvc.ValidateEmergencyAdmin(context.Background()); err != nil {

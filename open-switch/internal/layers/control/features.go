@@ -81,7 +81,9 @@ func (s *Service) RespondVideo(ctx context.Context, callID string, accept bool) 
 	rt.videoStartedAt = new(time.Now().UTC())
 	from := rt.videoFromLeg
 	s.mu.Unlock()
-	_ = s.deps.Calls.UpdateCall(ctx, rt.rec)
+	if err := s.transition(ctx, callID, rt.rec.State); err != nil {
+		return err
+	}
 	_ = s.deps.Media.RequestRenegotiation(ctx, callID, from, true)
 	_ = s.cdrUpsert(ctx, callID, "answered")
 	return s.publishCall(ctx, callID, "video.accepted", "", map[string]any{"call_id": callID})
@@ -207,6 +209,9 @@ func (s *Service) ForceReleaseAgent(ctx context.Context, agentID, policy string)
 	s.mu.Lock()
 	var ids []string
 	for id, rt := range s.calls {
+		if appID := scope.Application(ctx); appID != "" && rt.rec.ApplicationID != appID {
+			continue
+		}
 		if rt.offeredAgent == agentID {
 			ids = append(ids, id)
 			continue
@@ -223,7 +228,7 @@ func (s *Service) ForceReleaseAgent(ctx context.Context, agentID, policy string)
 			_ = s.Hangup(ctx, id, dto.HangupReasonNormal)
 		}
 	}
-	return s.deps.Agents.SetState(ctx, agentID, "", "offline", "force-check-out")
+	return s.deps.Agents.SetCallState(ctx, "", agentID, "", "offline", "force-check-out")
 }
 
 // doTransfer 按盲转、咨询转及目标类型编排坐席状态与客户媒体连接。
@@ -370,11 +375,16 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	now := time.Now().UTC()
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	info, err := s.deps.Agents.ByID(ctx, req.AgentID)
+	if err != nil {
+		return "", err
+	}
+	ctx = scope.WithConfigVersion(ctx, info.ConfigVersion)
 	dir := "internal"
 	if looksPSTN(req.Destination) {
 		dir = "outbound"
 	}
-	rec := ports.CallRecord{ApplicationID: scope.Application(ctx), ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
+	rec := ports.CallRecord{Version: 1, ConfigVersion: new(info.ConfigVersion), ApplicationID: scope.Application(ctx), ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
 		return "", err
 	}
@@ -385,11 +395,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if err := s.setAgentState(ctx, callID, req.AgentID, "idle", "on_call", "outbound"); err != nil {
 		return "", err
 	}
-	info, err := s.deps.Agents.ByID(ctx, req.AgentID)
-	caller := req.AgentID
-	if err == nil {
-		caller = info.Extension
-	}
+	caller := info.Extension
 	rt := &runtimeCall{rec: rec, legs: []ports.CallLegRecord{fromLeg}, caller: caller, callee: req.Destination, queuedAt: now, maxWait: 2 * time.Minute}
 	rt.activeAgent = req.AgentID
 	s.mu.Lock()
@@ -493,23 +499,10 @@ func (s *Service) overflow(ctx context.Context, callID string) bool {
 	}
 	switch q.OverflowAction {
 	case "queue":
-		if q.OverflowQueueID == "" {
+		if err := s.routeQueue(ctx, callID, q.OverflowQueueID); err != nil {
 			return false
 		}
-		nq, err := s.deps.Config.GetQueue(ctx, q.OverflowQueueID)
-		if err != nil {
-			return false
-		}
-		oid := q.OverflowQueueID
-		s.mu.Lock()
-		rt.rec.QueueID = &oid
-		rt.queueName = nq.Name
-		rt.queuedAt = time.Now().UTC()
-		s.mu.Unlock()
-		_ = s.deps.Calls.UpdateCall(ctx, rt.rec)
-		_ = s.publishCall(ctx, callID, "queue.overflow", "", map[string]any{"call_id": callID, "queue_id": oid})
-		s.publishPosition(ctx, callID)
-		_ = s.tryDispatch(ctx, callID)
+		_ = s.publishCall(ctx, callID, "queue.overflow", "", map[string]any{"call_id": callID, "queue_id": q.OverflowQueueID})
 		return true
 	case "voicemail":
 		s.startVoicemail(ctx, callID)

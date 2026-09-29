@@ -79,6 +79,9 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 
 	var result models.ConfigVersion
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "config:"+appID).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("application_id = ? AND checksum = ?", appID, checksum).First(&result).Error; err == nil {
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -123,6 +126,9 @@ func (s *Service) ActivateConfig(ctx context.Context, version int64) (ports.Conf
 	}
 	var result models.ConfigVersion
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(67104232)").Error; err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("application_id = ? AND version = ?", appID, version).First(&result).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errs.NotFound("配置版本不存在")
@@ -231,8 +237,8 @@ func validateBundle(bundle ports.ConfigBundle) error {
 		if q.AfterHoursAction != "hangup" && q.AfterHoursAction != "voicemail" && q.AfterHoursAction != "queue" {
 			return errs.InvalidRequest("非工作时间动作无效")
 		}
-		if q.BusinessHoursJSON != "always" && !json.Valid([]byte(q.BusinessHoursJSON)) {
-			return errs.InvalidRequest("工作时间 JSON 无效")
+		if err := validateHours(q.BusinessHoursJSON); err != nil {
+			return err
 		}
 	}
 	for _, skill := range bundle.Skills {
@@ -244,6 +250,7 @@ func validateBundle(bundle ports.ConfigBundle) error {
 		}
 		skills[skill.ID] = true
 	}
+	extensions, sipUsers := map[string]bool{}, map[string]bool{}
 	for _, agent := range bundle.Agents {
 		if !validUUID(agent.ID) || strings.TrimSpace(agent.UserRef) == "" || strings.TrimSpace(agent.Extension) == "" {
 			return errs.InvalidRequest("坐席 id/user_ref/extension 无效")
@@ -252,6 +259,16 @@ func validateBundle(bundle ports.ConfigBundle) error {
 			return errs.InvalidRequest("坐席 ID 重复")
 		}
 		agents[agent.ID] = true
+		if extensions[agent.Extension] {
+			return errs.InvalidRequest("分机号重复")
+		}
+		extensions[agent.Extension] = true
+		if agent.SIPUsername != "" {
+			if sipUsers[agent.SIPUsername] {
+				return errs.InvalidRequest("SIP 账号重复")
+			}
+			sipUsers[agent.SIPUsername] = true
+		}
 		if agent.TerminalType != "webrtc" && agent.TerminalType != "sip" {
 			return errs.InvalidRequest("坐席终端类型无效")
 		}
@@ -270,6 +287,9 @@ func validateBundle(bundle ports.ConfigBundle) error {
 		}
 		if ivrs[ivr.FlowID] {
 			return errs.InvalidRequest("IVR flow_id 重复")
+		}
+		if err := validateIVR(ivr.PayloadJSON, queues); err != nil {
+			return err
 		}
 		ivrs[ivr.FlowID] = true
 	}
@@ -301,6 +321,9 @@ func validateBundle(bundle ports.ConfigBundle) error {
 		}
 	}
 	for _, q := range bundle.Queues {
+		if (q.OverflowAction == "queue" || q.AfterHoursAction == "queue") && q.OverflowQueueID == "" {
+			return errs.InvalidRequest("队列跳转必须配置目标队列")
+		}
 		if q.OverflowQueueID != "" && (!queues[q.OverflowQueueID] || q.OverflowQueueID == q.ID) {
 			return errs.InvalidRequest("队列溢出目标无效")
 		}

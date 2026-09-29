@@ -2,7 +2,9 @@ package configpub
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"sort"
 
 	"gorm.io/gorm"
 
@@ -34,6 +36,17 @@ func (p *Publisher) Publish(ctx context.Context) (ports.SwitchConfigVersion, err
 }
 
 func (p *Publisher) Build(ctx context.Context) (ports.SwitchConfigBundle, error) {
+	var out ports.SwitchConfigBundle
+	err := p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		reader := &Publisher{db: tx}
+		var err error
+		out, err = reader.build(ctx)
+		return err
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return out, err
+}
+
+func (p *Publisher) build(ctx context.Context) (ports.SwitchConfigBundle, error) {
 	var queues []models.Queue
 	var skills []models.Skill
 	var agents []models.Agent
@@ -99,7 +112,12 @@ func (p *Publisher) Build(ctx context.Context) (ports.SwitchConfigBundle, error)
 			flows[targetID] = true
 		}
 	}
-	for flowID := range flows {
+	flowIDs := make([]string, 0, len(flows))
+	for id := range flows {
+		flowIDs = append(flowIDs, id)
+	}
+	sort.Strings(flowIDs)
+	for _, flowID := range flowIDs {
 		var snap models.IVRPublishedSnapshot
 		if err := p.db.WithContext(ctx).Where("flow_id = ?", flowID).Order("version DESC").First(&snap).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

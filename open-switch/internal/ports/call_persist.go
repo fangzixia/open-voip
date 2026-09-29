@@ -61,6 +61,7 @@ type CallLegRecord struct {
 
 // CallPersistencePort 由 store 适配器实现，供 L3 持久化 Call/CallLeg；L3 禁止直接 SQL。
 type CallPersistencePort interface {
+	InsertCallWithLeg(ctx context.Context, rec CallRecord, leg CallLegRecord) error
 	// InsertCall 插入新通话。
 	InsertCall(ctx context.Context, rec CallRecord) error
 	// UpdateCall 按 ID 更新状态与时间戳。

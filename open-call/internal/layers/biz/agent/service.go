@@ -41,14 +41,13 @@ type MeDTO struct {
 	Session      SessionDTO `json:"session"`
 }
 
-// Service 坐席目录、签入状态与 AgentDirectoryPort。
+// Service 维护业务侧坐席资料；签入状态由 Switch 提供。
 type Service struct {
 	db *gorm.DB
 }
 
 // NewService 创建坐席服务。
-func NewService(db *gorm.DB, events ports.AgentEventPublisher) *Service {
-	_ = events
+func NewService(db *gorm.DB) *Service {
 	return &Service{db: db}
 }
 

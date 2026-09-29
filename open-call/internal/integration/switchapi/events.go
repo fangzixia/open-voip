@@ -8,14 +8,16 @@ import (
 )
 
 type Event struct {
-	ID         int64          `json:"id"`
-	CallID     string         `json:"call_id"`
-	Seq        int64          `json:"seq"`
-	AgentID    string         `json:"agent_id"`
-	TargetOnly bool           `json:"target_only"`
-	Type       string         `json:"type"`
-	Payload    map[string]any `json:"payload"`
-	CreatedAt  string         `json:"created_at"`
+	ApplicationID string         `json:"application_id"`
+	Version       int64          `json:"version"`
+	ID            int64          `json:"id"`
+	CallID        string         `json:"call_id"`
+	Seq           int64          `json:"seq"`
+	AgentID       string         `json:"agent_id"`
+	TargetOnly    bool           `json:"target_only"`
+	Type          string         `json:"type"`
+	Payload       map[string]any `json:"payload"`
+	CreatedAt     string         `json:"created_at"`
 }
 
 func (c *Client) ListEvents(ctx context.Context, afterID int64) ([]Event, error) {

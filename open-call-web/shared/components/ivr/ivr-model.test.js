@@ -42,3 +42,17 @@ test("invalid targets, missing audio and cycles block publishing", () => {
   assert.ok(issues.some(issue => issue.includes("循环")));
   assert.ok(issues.some(issue => issue.includes("无法从开始节点到达")));
 });
+
+test("business decisions accept only declared outcomes and have an explicit timeout path", () => {
+ const doc = {start:"check",nodes:{
+ check:{type:"business_action",action:"customer.eligible",timeout_sec:5,choices:{yes:"queue"},default:"end"},
+ queue:{type:"route_queue",queue_id:"q1"},end:{type:"hangup"}
+ }};
+ assert.deepEqual(validateIVR(doc,[queue]),[]);
+ assert.equal(simulateIVR(doc,{outcomes:{"customer.eligible":"yes"}}).result,"转入队列 q1");
+ assert.equal(simulateIVR(doc).result,"结束通话");
+ assert.equal(simulateIVR(doc,{outcomes:{"customer.eligible":"unexpected"}}).result,"业务结果未在流程中声明");
+ doc.nodes.check.timeout_sec=0;
+ assert.ok(validateIVR(doc,[queue]).some(issue=>issue.includes("业务超时")));
+});
+

@@ -3,7 +3,6 @@ package cccore
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +13,7 @@ import (
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 	"open-switch/internal/scope"
+	"open-switch/internal/store"
 	"open-switch/internal/store/models"
 )
 
@@ -76,14 +76,14 @@ func (s *Service) GetBusinessHours(ctx context.Context, queueID string) (ports.B
 	if err != nil {
 		return ports.BusinessHours{}, err
 	}
-	var raw string
-	if err := s.db.WithContext(ctx).Model(&models.Queue{}).Where("application_id = ? AND config_version = ? AND id = ?", appID, version, queueID).Pluck("business_hours_json", &raw).Error; err != nil {
+	var row models.Queue
+	if err := s.db.WithContext(ctx).Where("application_id = ? AND config_version = ? AND id = ?", appID, version, queueID).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ports.BusinessHours{}, errs.NotFound("队列不存在")
+		}
 		return ports.BusinessHours{}, err
 	}
-	if raw == "" {
-		raw = "always"
-	}
-	return ports.BusinessHours{Timezone: "UTC", WeekdayHours: raw}, nil
+	return ports.BusinessHours{Timezone: "UTC", WeekdayHours: row.BusinessHoursJSON}, nil
 }
 
 func (s *Service) ResolveDID(ctx context.Context, trunkID, did string) (ports.DIDRouteSnapshot, error) {
@@ -108,9 +108,9 @@ func (s *Service) ResolveDID(ctx context.Context, trunkID, did string) (ports.DI
  d.normalized_did AS did, d.target_type, d.target_id
 FROM os_did_routes d
 JOIN os_active_config a ON a.application_id = d.application_id AND a.version = d.config_version
-WHERE d.normalized_did = ? AND d.trunk_id IN (?, '*')
+WHERE d.normalized_did = ? AND d.trunk_id IN (?, '*') AND (? = '' OR d.application_id = ?)
 ORDER BY CASE WHEN d.trunk_id = ? THEN 0 ELSE 1 END
-LIMIT 1`, did, trunkID, trunkID)
+LIMIT 1`, did, trunkID, scope.Application(ctx), scope.Application(ctx), trunkID)
 	if err := q.Scan(&found).Error; err != nil {
 		return ports.DIDRouteSnapshot{}, err
 	}
@@ -135,6 +135,10 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 	if req.CallID == "" || req.QueueID == "" {
 		return dto.DispatchResult{}, errs.InvalidRequest("call_id/queue_id 必填")
 	}
+	var queue models.Queue
+	if err := s.db.WithContext(ctx).Where("application_id = ? AND config_version = ? AND id = ?", appID, version, req.QueueID).First(&queue).Error; err != nil {
+		return dto.DispatchResult{}, err
+	}
 	var picked string
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", req.CallID).Error; err != nil {
@@ -147,7 +151,24 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 			return nil
 		}
 		videoClause := ""
-		args := []any{appID, version, appID, req.QueueID, appID, version, appID, version, req.QueueID}
+		order := "s.updated_at, s.agent_id"
+		args := []any{version, appID, req.QueueID, appID, version, req.QueueID}
+		extra := ""
+		for _, skillID := range req.SkillIDs {
+			extra += " AND EXISTS (SELECT 1 FROM os_agent_skills ask WHERE ask.application_id = s.application_id AND ask.config_version = ? AND ask.agent_id = s.agent_id AND ask.skill_id = ?)"
+			args = append(args, version, skillID)
+		}
+		if queue.DispatchStrategy == "round_robin" {
+			if err := tx.Exec("INSERT INTO os_queue_dispatch_cursor (application_id,queue_id,last_agent_id) VALUES (?,?,'') ON CONFLICT DO NOTHING", appID, req.QueueID).Error; err != nil {
+				return err
+			}
+			var last string
+			if err := tx.Raw("SELECT last_agent_id FROM os_queue_dispatch_cursor WHERE application_id = ? AND queue_id = ? FOR UPDATE", appID, req.QueueID).Scan(&last).Error; err != nil {
+				return err
+			}
+			order = "CASE WHEN s.agent_id::text > ? THEN 0 ELSE 1 END, s.agent_id"
+			args = append(args, last)
+		}
 		if req.RequireVideo {
 			videoClause = " AND a.video_capable = TRUE"
 		}
@@ -156,15 +177,14 @@ FROM os_agent_sessions s
 JOIN os_agents a ON a.application_id = s.application_id AND a.config_version = ? AND a.id = s.agent_id
 JOIN os_agent_session_queues sq ON sq.application_id = s.application_id AND sq.agent_id = s.agent_id
 WHERE s.application_id = ? AND sq.queue_id = ? AND s.state = 'idle' AND s.pending_checkout = FALSE AND a.enabled = TRUE` + videoClause + `
+AND EXISTS (SELECT 1 FROM os_queue_agents qa WHERE qa.application_id = s.application_id AND qa.config_version = a.config_version AND qa.queue_id = sq.queue_id AND qa.agent_id = s.agent_id)
 AND NOT EXISTS (
  SELECT 1 FROM os_queue_skills qs
  WHERE qs.application_id = ? AND qs.config_version = ? AND qs.queue_id = ?
  AND NOT EXISTS (SELECT 1 FROM os_agent_skills ags WHERE ags.application_id = qs.application_id AND ags.config_version = qs.config_version AND ags.agent_id = s.agent_id AND ags.skill_id = qs.skill_id)
 )
-ORDER BY s.updated_at, s.agent_id
-FOR UPDATE OF s SKIP LOCKED LIMIT 1`
+` + extra + " ORDER BY " + order + " LIMIT 1 FOR UPDATE OF s SKIP LOCKED"
 		// query argument order follows joins and filters.
-		args = []any{version, appID, req.QueueID, appID, version, req.QueueID}
 		if err := tx.Raw(query, args...).Scan(&picked).Error; err != nil {
 			return err
 		}
@@ -180,13 +200,23 @@ FOR UPDATE OF s SKIP LOCKED LIMIT 1`
 			picked = ""
 			return nil
 		}
-		return tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: picked, FromState: "idle", ToState: "ringing", Reason: "acd", CallID: req.CallID, CreatedAt: now}).Error
+		if err := tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: picked, FromState: "idle", ToState: "ringing", Reason: "acd", CallID: req.CallID, CreatedAt: now}).Error; err != nil {
+			return err
+		}
+		if queue.DispatchStrategy == "round_robin" {
+			if err := tx.Exec("UPDATE os_queue_dispatch_cursor SET last_agent_id = ? WHERE application_id = ? AND queue_id = ?", picked, appID, req.QueueID).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Exec(`INSERT INTO os_acd_attempts (id,application_id,call_id,queue_id,agent_id,attempt,state,started_at)
+ SELECT ?,?,?,?,?,COALESCE(MAX(attempt),0)+1,'offering',? FROM os_acd_attempts WHERE call_id=?`,
+			uuid.NewString(), appID, req.CallID, req.QueueID, picked, now, req.CallID).Error; err != nil {
+			return err
+		}
+		return publishAgentTx(ctx, tx, req.CallID, picked, "ringing", "acd")
 	})
 	if err != nil {
 		return dto.DispatchResult{}, err
-	}
-	if picked != "" {
-		s.publishAgent(ctx, req.CallID, picked, "ringing", "acd")
 	}
 	return dto.DispatchResult{AgentID: picked}, nil
 }
@@ -223,22 +253,7 @@ func (s *Service) findAgent(ctx context.Context, predicate string, value any) (p
 	if err := s.db.WithContext(ctx).Where("application_id = ? AND agent_id = ?", appID, row.ID).First(&sess).Error; err == nil {
 		state = sess.State
 	}
-	return ports.AgentInfo{TerminalType: row.TerminalType, SIPUsername: row.SIPUsername, AgentID: row.ID, UserID: row.UserID, Extension: row.Extension, VideoCapable: row.VideoCapable, DisplayName: row.DisplayName, State: state}, nil
-}
-
-func (s *Service) SetState(ctx context.Context, agentID, fromState, toState, reason string) error {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return err
-	}
-	if toState == "" {
-		return errs.InvalidRequest("目标状态不能为空")
-	}
-	callID := ""
-	if strings.HasPrefix(reason, "acd:") {
-		callID = strings.TrimPrefix(reason, "acd:")
-	}
-	return s.setState(ctx, appID, callID, agentID, fromState, toState, reason)
+	return ports.AgentInfo{ConfigVersion: version, TerminalType: row.TerminalType, SIPUsername: row.SIPUsername, AgentID: row.ID, UserID: row.UserID, Extension: row.Extension, VideoCapable: row.VideoCapable, DisplayName: row.DisplayName, State: state}, nil
 }
 
 // SetCallState is the call-control variant of SetState. Carrying callID
@@ -252,7 +267,6 @@ func (s *Service) SetCallState(ctx context.Context, callID, agentID, fromState, 
 }
 
 func (s *Service) setState(ctx context.Context, appID, callID, agentID, fromState, toState, reason string) error {
-	changed := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var sess models.AgentSession
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("application_id = ? AND agent_id = ?", appID, agentID).First(&sess).Error; err != nil {
@@ -260,6 +274,12 @@ func (s *Service) setState(ctx context.Context, appID, callID, agentID, fromStat
 				return errs.Conflict("坐席未签入", errs.CodeAgentNotIdle)
 			}
 			return err
+		}
+		if reason == "force-check-out" && toState == "offline" && sess.CurrentCallID != "" {
+			return tx.Model(&sess).Update("pending_checkout", true).Error
+		}
+		if callID != "" && sess.CurrentCallID != "" && sess.CurrentCallID != callID {
+			return errs.Conflict("过期通话不能更新坐席", errs.CodeAgentBusy)
 		}
 		if fromState != "" && sess.State != fromState {
 			return errs.Conflict("坐席状态已变更", errs.CodeAgentNotIdle)
@@ -291,12 +311,21 @@ func (s *Service) setState(ctx context.Context, appID, callID, agentID, fromStat
 		if err := tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: agentID, FromState: sess.State, ToState: toState, Reason: reason, CallID: callID, CreatedAt: now}).Error; err != nil {
 			return err
 		}
-		changed = true
-		return nil
+		if callID != "" {
+			state := "ended"
+			if toState == "on_call" {
+				state = "connected"
+			}
+			var ended any = now
+			if state == "connected" {
+				ended = nil
+			}
+			if err := tx.Exec("UPDATE os_acd_attempts SET state=?,ended_at=?,failure_reason=? WHERE application_id=? AND call_id=? AND agent_id=? AND state IN ('offering','connected')", state, ended, reason, appID, callID, agentID).Error; err != nil {
+				return err
+			}
+		}
+		return publishAgentTx(ctx, tx, callID, agentID, toState, reason)
 	})
-	if err == nil && changed {
-		s.publishAgent(ctx, callID, agentID, toState, reason)
-	}
 	return err
 }
 
@@ -322,6 +351,9 @@ func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string
 	}
 	now := time.Now().UTC()
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", "agent:"+appID+":"+agentID).Error; err != nil {
+			return err
+		}
 		seen := map[string]bool{}
 		for _, queueID := range queueIDs {
 			if seen[queueID] {
@@ -360,12 +392,14 @@ func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string
 				return err
 			}
 		}
-		return tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: agentID, FromState: "offline", ToState: "idle", Reason: "check-in", CreatedAt: now}).Error
+		if err := tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: agentID, FromState: "offline", ToState: "idle", Reason: "check-in", CreatedAt: now}).Error; err != nil {
+			return err
+		}
+		return publishAgentTx(ctx, tx, "", agentID, "idle", "check-in")
 	})
 	if err != nil {
 		return ports.AgentSessionView{}, err
 	}
-	s.publishAgent(ctx, "", agentID, "idle", "check-in")
 	return s.AgentSession(ctx, agentID)
 }
 
@@ -475,11 +509,8 @@ func (s *Service) ForQueue(ctx context.Context, queueID string) (dto.RecordingPo
 	return out, nil
 }
 
-func (s *Service) publishAgent(ctx context.Context, callID, agentID, state, reason string) {
-	if s.events == nil {
-		return
-	}
-	_ = s.events.PublishCallEvent(ctx, ports.CallEvent{CallID: callID, AgentID: agentID, TargetOnly: true, Type: "agent.routing_state_changed", Payload: map[string]any{"agent_id": agentID, "state": state, "reason": reason, "call_id": callID}})
+func publishAgentTx(ctx context.Context, tx *gorm.DB, callID, agentID, state, reason string) error {
+	return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: callID, AgentID: agentID, TargetOnly: true, Type: "agent.routing_state_changed", Payload: map[string]any{"agent_id": agentID, "state": state, "busy_reason": reason, "reason": reason, "call_id": callID}})
 }
 
 func nullableUUID(value string) any {
@@ -493,4 +524,24 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// RecoverReservations releases reservations that outlived their call after process recovery.
+func (s *Service) RecoverReservations(ctx context.Context) error {
+	var rows []models.AgentSession
+	if err := s.db.WithContext(ctx).Raw(`SELECT s.* FROM os_agent_sessions s
+ LEFT JOIN os_calls c ON c.id=s.current_call_id AND c.application_id=s.application_id
+ WHERE s.current_call_id IS NOT NULL AND (c.id IS NULL OR c.state='ended')`).Scan(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		next := "idle"
+		if row.State == "on_call" {
+			next = "acw"
+		}
+		if err := s.setState(scope.WithApplication(ctx, row.ApplicationID), row.ApplicationID, row.CurrentCallID, row.AgentID, row.State, next, "process_recovery"); err != nil {
+			return err
+		}
+	}
+	return nil
 }

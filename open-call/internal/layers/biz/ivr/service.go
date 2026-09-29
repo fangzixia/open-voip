@@ -16,6 +16,7 @@ import (
 
 type Node struct {
 	Type        string            `json:"type"`
+	Action      string            `json:"action,omitempty"`
 	Prompt      string            `json:"prompt,omitempty"`
 	File        string            `json:"file,omitempty"`
 	TimeoutSec  int               `json:"timeout_sec,omitempty"`
@@ -236,7 +237,7 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 			return errs.InvalidRequest("节点 " + id + " 无效按键重试不能超过 5 次")
 		}
 		switch n.Type {
-		case "play", "menu", "route_queue", "time_check", "hangup":
+		case "play", "menu", "route_queue", "time_check", "hangup", "business_action":
 		default:
 			return errs.InvalidRequest("节点 " + id + " 类型无效")
 		}
@@ -244,6 +245,14 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 		switch n.Type {
 		case "play":
 			refs = []string{n.Next}
+		case "business_action":
+			if n.Action == "" || n.TimeoutSec < 1 || n.Default == "" || len(n.Choices) == 0 {
+				return errs.InvalidRequest("业务动作必须有 action、超时、default 与结果分支")
+			}
+			refs = append(refs, n.Default)
+			for _, target := range n.Choices {
+				refs = append(refs, target)
+			}
 		case "menu":
 			if len(n.Choices) == 0 {
 				return errs.InvalidRequest("menu 必须包含 choices")
@@ -262,6 +271,16 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 				refs = append(refs, n.Invalid)
 			}
 		case "time_check":
+			if n.QueueID == "" {
+				return errs.InvalidRequest("工作时间节点必须指定 queue_id")
+			}
+			var count int64
+			if err := db.Model(&models.Queue{}).Where("id = ?", n.QueueID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
+				return errs.InvalidRequest("工作时间节点队列不存在")
+			}
 			refs = []string{n.Open, n.Closed}
 		case "route_queue":
 			if n.QueueID == "" {
@@ -298,7 +317,7 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 		switch n.Type {
 		case "play":
 			visit(n.Next)
-		case "menu":
+		case "menu", "business_action":
 			for _, v := range n.Choices {
 				visit(v)
 			}
@@ -329,7 +348,7 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 		switch n.Type {
 		case "play":
 			refs = append(refs, n.Next)
-		case "menu":
+		case "menu", "business_action":
 			for _, target := range n.Choices {
 				refs = append(refs, target)
 			}

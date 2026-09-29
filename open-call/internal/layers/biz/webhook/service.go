@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"open-call/internal/config"
 	"open-call/internal/datetime"
@@ -200,6 +201,9 @@ func (s *Service) Dispatch(ctx context.Context, eventType string, payload map[st
 		return err
 	}
 	eventID := uuid.New().String()
+	if sourceID, ok := payload["switch_event_id"]; ok {
+		eventID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint(payload["application_id"])+":"+fmt.Sprint(sourceID))).String()
+	}
 	ids := observability.From(ctx)
 	body, err := datetime.Marshal(map[string]any{
 		"id": eventID, "type": eventType, "ts": datetime.Format(time.Now()), "payload": payload,
@@ -215,9 +219,10 @@ func (s *Service) Dispatch(ctx context.Context, eventType string, payload map[st
 			if json.Unmarshal([]byte(sub.EventTypes), &types) != nil || !matchType(types, eventType) {
 				continue
 			}
-			row := models.WebhookDelivery{ID: uuid.New().String(), EventID: eventID, SubscriptionID: sub.ID,
+			deliveryID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(eventID+":"+sub.ID)).String()
+			row := models.WebhookDelivery{ID: deliveryID, EventID: eventID, SubscriptionID: sub.ID,
 				EventType: eventType, Payload: string(body), Status: "pending", NextAttemptAt: now, CreatedAt: now, UpdatedAt: now}
-			if err := tx.Create(&row).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
 				return err
 			}
 		}

@@ -29,7 +29,15 @@ export function renderNodeEditor(host) {
         <label>无效按键次数<input type="number" min="0" max="5" .value=${String(n.max_retries??2)} @input=${e=>host.updateNode("max_retries",Number(e.target.value))} /></label>
         <label>多次无效后去向${renderTargetSelect(host, n.invalid,v=>host.updateNode("invalid",v),id)}</label>
       ` : nothing}
-      ${n.type==="time_check" ? html`<p class="muted">使用呼入队列配置的营业时间。</p><label>营业时${renderTargetSelect(host, n.open,v=>host.updateNode("open",v),id)}</label><label>非营业时${renderTargetSelect(host, n.closed,v=>host.updateNode("closed",v),id)}</label>` : nothing}
+      ${n.type==="business_action" ? html`
+        <p class="muted">软交换等待业务系统提交结果；客户查询和业务判断在业务系统执行。</p>
+        <label>业务动作名称<input .value=${n.action||""} @input=${e=>host.updateNode("action",e.target.value)} placeholder="customer.eligible" /></label>
+        <label>等待结果秒数<input type="number" min="1" max="120" .value=${String(n.timeout_sec||10)} @input=${e=>host.updateNode("timeout_sec",Number(e.target.value))} /></label>
+        ${Object.entries(n.choices||{}).map(([key,target])=>html`<div class="rule"><input aria-label="业务结果" .value=${key} @change=${e=>host.changeChoice(key,e.target.value)} />${renderTargetSelect(host,target,v=>host.mutate(d=>{d.nodes[id].choices[key]=v}),id)}<button @click=${()=>host.mutate(d=>{delete d.nodes[id].choices[key]})}>删除</button></div>`)}
+        <button @click=${()=>host.mutate(d=>{const choices=d.nodes[id].choices;let i=1;while(("result_"+i) in choices)i++;choices["result_"+i]="";})}>添加业务结果</button>
+        <label>超时去向${renderTargetSelect(host,n.default,v=>host.updateNode("default",v),id)}</label>
+      ` : nothing}
+      ${n.type==="time_check" ? html`<label>工作时间所属队列<select .value=${n.queue_id||""} @change=${e=>host.updateNode("queue_id",e.target.value)}><option value="">请选择队列</option>${host.queues.map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><label>营业时${renderTargetSelect(host, n.open,v=>host.updateNode("open",v),id)}</label><label>非营业时${renderTargetSelect(host, n.closed,v=>host.updateNode("closed",v),id)}</label>` : nothing}
       ${n.type==="route_queue" ? html`<label>目标队列<select .value=${n.queue_id||""} @change=${e=>host.updateNode("queue_id",e.target.value)}><option value="">请选择队列</option>${host.queues.map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><label>通话类型<select .value=${n.session_type||"audio"} @change=${e=>host.updateNode("session_type",e.target.value)}><option value="audio">语音</option><option value="video">视频</option></select></label>` : nothing}
       ${n.type==="hangup" ? html`<p class="muted">执行到此节点后结束通话。</p>` : nothing}`;
   }

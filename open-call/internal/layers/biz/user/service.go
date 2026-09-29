@@ -277,28 +277,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		if agErr != nil && !errors.Is(agErr, gorm.ErrRecordNotFound) {
 			return agErr
 		}
-		if hasAgent {
-			var active int64
-			if err := tx.Model(&models.AgentSession{}).Where("agent_id = ? AND state <> ?", ag.ID, "offline").Count(&active).Error; err != nil {
-				return err
-			}
-			terminalChange := in.TerminalType != nil || in.SIPUsername != nil || in.VideoCapable != nil || in.Extension != nil
-			if terminalChange && active > 0 {
-				return errs.Conflict("请先签出再修改坐席角色或终端", "")
-			}
-			if in.Disabled != nil && *in.Disabled {
-				var calls int64
-				if err := tx.Model(&models.AgentSession{}).Where("agent_id = ? AND state IN ?", ag.ID, []string{"ringing", "on_call"}).Count(&calls).Error; err != nil {
-					return err
-				}
-				if calls > 0 {
-					return errs.Conflict("请先结束坐席当前通话再禁用账号", "")
-				}
-				if err := tx.Where("agent_id = ?", ag.ID).Delete(&models.AgentSession{}).Error; err != nil {
-					return err
-				}
-			}
-		}
+		// 坐席配置是草稿，运行中的配置由 Switch 版本固定。
 		// 坐席身份由坐席记录决定，与旧版 role 字段无关。
 		needsAgent := hasAgent || (in.Extension != nil && strings.TrimSpace(*in.Extension) != "")
 		if needsAgent && !hasAgent {
@@ -377,16 +356,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var ag models.Agent
 		if err := tx.Where("user_id = ?", id).First(&ag).Error; err == nil {
-			var active int64
-			if err := tx.Model(&models.AgentSession{}).Where("agent_id = ? AND state IN ?", ag.ID, []string{"ringing", "on_call"}).Count(&active).Error; err != nil {
-				return err
-			}
-			if active > 0 {
-				return errs.Conflict("请先结束坐席通话", "")
-			}
 			tx.Where("agent_id = ?", ag.ID).Delete(&models.QueueAgent{})
-			tx.Where("agent_id = ?", ag.ID).Delete(&models.AgentSessionQueue{})
-			tx.Where("agent_id = ?", ag.ID).Delete(&models.AgentSession{})
 			tx.Delete(&ag)
 		}
 		res := tx.Delete(&models.User{}, "id = ?", id)

@@ -1,8 +1,10 @@
 package http
 
 import (
+	"context"
 	"net/http"
 	"open-switch/internal/httpapi"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -16,11 +18,14 @@ import (
 
 // SwitchRouterDeps Switch API 依赖。
 type SwitchRouterDeps struct {
-	Config  config.Config
-	Runtime RuntimeReader
-	Events  *store.CallEvents
-	Direct  ports.DirectControlPort
-	Admin   ports.CallCenterAdminPort
+	Config          config.Config
+	Runtime         RuntimeReader
+	Events          *store.CallEvents
+	Direct          ports.DirectControlPort
+	Admin           ports.CallCenterAdminPort
+	BusinessActions interface {
+		CompleteBusinessAction(context.Context, string, string, string) error
+	}
 	RouterDeps
 }
 
@@ -38,6 +43,7 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 
 	r.Route("/switch/v2", func(sw chi.Router) {
 		sw.Use(middleware.ApplicationAuth(deps.Config.Applications))
+		sw.Use(deps.authorizeCallResource)
 		sw.Post("/configuration/versions", deps.handleConfigStore)
 		sw.Get("/configuration/versions/{version}", deps.handleConfigGet)
 		sw.Post("/configuration/versions/{version}/activate", deps.handleConfigActivate)
@@ -66,6 +72,7 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 		sw.Post("/calls/{callId}/bridge", deps.handleDirectBridge)
 		sw.Post("/calls/{callId}/recording/start", deps.handleDirectRecordingStart)
 		sw.Post("/calls/{callId}/recording/stop", deps.handleDirectRecordingStop)
+		sw.Post("/calls/{callId}/business-actions/{actionId}/complete", deps.handleBusinessActionComplete)
 		sw.Get("/calls/{callId}", deps.handleCallGet)
 		sw.Post("/calls/{callId}/hangup", deps.handleCallHangup)
 		sw.Post("/calls/inbound", deps.handleSwitchInbound)
@@ -111,4 +118,39 @@ func (d SwitchRouterDeps) handleSwitchInbound(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusCreated, view)
+}
+
+// authorizeCallResource checks ownership before any handler can mutate a live call.
+func (d SwitchRouterDeps) authorizeCallResource(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, prefix := range []string{"/switch/v2/calls/", "/switch/v2/internal/calls/", "/switch/v2/internal/recordings/", "/switch/v2/supervisor/calls/"} {
+			if !strings.HasPrefix(r.URL.Path, prefix) {
+				continue
+			}
+			id := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")[0]
+			if prefix == "/switch/v2/calls/" && (id == "direct" || id == "inbound" || id == "outbound") {
+				break
+			}
+			if _, err := d.CallControl.GetCall(r.Context(), id); err != nil {
+				writeErr(w, err)
+				return
+			}
+			break
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+func (d SwitchRouterDeps) handleBusinessActionComplete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Outcome string `json:"outcome"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := d.BusinessActions.CompleteBusinessAction(r.Context(), chi.URLParam(r, "callId"), chi.URLParam(r, "actionId"), body.Outcome); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, nil)
 }

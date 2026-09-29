@@ -12,6 +12,8 @@ import "../shared/components/ivr/ivr-editor.js";
 export class AdminApp extends LitElement {
   static properties = {
     error: { type: String },
+ notice: { type: String },
+ publishing: {type:Boolean},
     username: { type: String },
     password: { type: String },
     authed: { type: Boolean },
@@ -54,7 +56,7 @@ export class AdminApp extends LitElement {
 
   constructor() {
     super();
-    this.error = "";
+    this.error = ""; this.notice=""; this.publishing=false;
     this.username = "";
     this.password = "";
     this.authed = !!getAccessToken();
@@ -248,12 +250,14 @@ export class AdminApp extends LitElement {
   }
 
   async #publishConfig() {
+    if (this.publishing) return;
+    this.publishing=true; this.error=""; this.notice="";
     try {
       const result = await publishSwitchConfig();
-      this.error = `配置版本 ${result.version} 已激活`;
+      this.notice = `呼叫配置版本 ${result.version} 已激活，正在进行的通话保持原版本`;
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e);
-    }
+    } finally {this.publishing=false;}
   }
 
   async #qa(ev) {

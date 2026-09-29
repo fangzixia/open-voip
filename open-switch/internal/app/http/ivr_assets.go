@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"open-switch/internal/scope"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,12 +25,12 @@ type ivrAsset struct {
 	Size int64  `json:"size"`
 }
 
-func (d SwitchRouterDeps) ivrAssetDir() string {
-	return filepath.Join(d.Config.Recordings.Dir, "prompts")
+func (d SwitchRouterDeps) ivrAssetDir(r *http.Request) string {
+	return filepath.Join(d.Config.Recordings.Dir, "prompts", scope.AssetNamespace(r.Context()))
 }
 
 func (d SwitchRouterDeps) handleIVRAssets(w http.ResponseWriter, r *http.Request) {
-	entries, err := os.ReadDir(d.ivrAssetDir())
+	entries, err := os.ReadDir(d.ivrAssetDir(r))
 	if errors.Is(err, os.ErrNotExist) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": []ivrAsset{}})
 		return
@@ -51,7 +52,7 @@ func (d SwitchRouterDeps) handleIVRAssets(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			continue
 		}
-		label, err := os.ReadFile(filepath.Join(d.ivrAssetDir(), id+".name"))
+		label, err := os.ReadFile(filepath.Join(d.ivrAssetDir(r), id+".name"))
 		if err != nil || len(label) == 0 {
 			label = []byte(entry.Name())
 		}
@@ -86,12 +87,12 @@ func (d SwitchRouterDeps) handleIVRAssetUpload(w http.ResponseWriter, r *http.Re
 		writeErr(w, errs.InvalidRequest("仅支持 8/16 kHz、16 位、单声道 PCM WAV（不超过 16 MB）"))
 		return
 	}
-	if err := os.MkdirAll(d.ivrAssetDir(), 0750); err != nil {
+	if err := os.MkdirAll(d.ivrAssetDir(r), 0750); err != nil {
 		writeErr(w, err)
 		return
 	}
 	id := uuid.New().String()
-	if err := os.WriteFile(filepath.Join(d.ivrAssetDir(), id+".wav"), raw, 0640); err != nil {
+	if err := os.WriteFile(filepath.Join(d.ivrAssetDir(r), id+".wav"), raw, 0640); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -99,7 +100,7 @@ func (d SwitchRouterDeps) handleIVRAssetUpload(w http.ResponseWriter, r *http.Re
 	if len(name) > 160 {
 		name = name[:160]
 	}
-	_ = os.WriteFile(filepath.Join(d.ivrAssetDir(), id+".name"), []byte(name), 0640)
+	_ = os.WriteFile(filepath.Join(d.ivrAssetDir(r), id+".name"), []byte(name), 0640)
 	writeJSON(w, http.StatusCreated, ivrAsset{ID: id, Name: name, Size: int64(len(raw))})
 }
 
@@ -136,7 +137,7 @@ func (d SwitchRouterDeps) handleIVRAssetFile(w http.ResponseWriter, r *http.Requ
 		writeErr(w, errs.InvalidRequest("素材 ID 无效"))
 		return
 	}
-	path := filepath.Join(d.ivrAssetDir(), id+".wav")
+	path := filepath.Join(d.ivrAssetDir(r), id+".wav")
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		writeErr(w, errs.NotFound("语音素材不存在"))
 		return

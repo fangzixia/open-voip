@@ -211,8 +211,12 @@ func validate(bundle Bundle, options ImportOptions) (ImportReport, error) {
 		}
 	}
 	for _, row := range bundle.DIDs {
-		if !queues[row.QueueID] {
-			return report, errs.InvalidRequest("DID 引用了不存在的队列: " + row.DID)
+		if row.TargetType == "reject" {
+			if row.TargetID != nil {
+				return report, errs.InvalidRequest("拒绝路由不能包含目标")
+			}
+		} else if row.TargetID == nil || (row.TargetType == "queue" && !queues[*row.TargetID]) || (row.TargetType == "ivr" && !flows[*row.TargetID]) || (row.TargetType != "queue" && row.TargetType != "ivr") {
+			return report, errs.InvalidRequest("DID 目标无效: " + row.DID)
 		}
 	}
 	for _, row := range bundle.IVRVersions {

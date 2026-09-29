@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"gorm.io/gorm"
+	"open-switch/internal/datetime"
 	"open-switch/internal/ports"
 	"open-switch/internal/scope"
 	"time"
@@ -43,7 +44,7 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 			return err
 		}
 	}
-	raw, err := json.Marshal(ev.Payload)
+	raw, err := datetime.Marshal(ev.Payload)
 	if err != nil {
 		return err
 	}
@@ -58,7 +59,7 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 			return err
 		}
 		var seq int64
-		if err := tx.Raw("SELECT COALESCE(MAX(seq), 0) + 1 FROM os_call_events WHERE call_id = ?", ev.CallID).Scan(&seq).Error; err != nil {
+		if err := tx.Raw("SELECT COALESCE(MAX(seq), 0) + 1 FROM os_call_events WHERE application_id = ? AND call_id::text = ?", ev.ApplicationID, ev.CallID).Scan(&seq).Error; err != nil {
 			return err
 		}
 		createdAt := time.Now().UTC()

@@ -61,12 +61,13 @@ export function renderApp(host, operations) {
     onNavigate: actions.navigate,
     breadcrumb: actions.crumb(),
     topbar: html`
+      ${host.me?.permissions?.includes("config.write") ? html`<button ?disabled=${host.publishing} @click=${actions.publishConfig}>${host.publishing?"发布中…":"发布并激活呼叫配置"}</button>` : ""}
       <span class="topbar-meta">${host.clock}</span>
       <span class="topbar-meta">${host.me?.username || "用户"}</span>
       <button @click=${actions.logout}>退出</button>
     `,
     content: html`
-      ${renderFeedback({ error: host.error })}
+      ${renderFeedback({ error: host.error, notice:host.notice })}
       ${host.nav === "overview" ? page(renderOverview,
         ["agents", "cdr", "cdrCaller", "cdrResult", "hist", "live", "me", "queues", "status"],
         ["exportCdr", "filteredCdr", "idleAgents", "navigate", "resetCdr", "search", "setCdrCaller", "setCdrResult", "waiting"]) : ""}

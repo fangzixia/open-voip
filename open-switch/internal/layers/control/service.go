@@ -33,6 +33,7 @@ const (
 
 // Deps 为 L3 服务依赖的 Port，由 bootstrap 注入。
 type Deps struct {
+	BusinessActions ports.BusinessActionStore
 	Media           ports.MediaPort
 	ACD             ports.ACDDispatchPort
 	Config          ports.ConfigSnapshotPort
@@ -120,6 +121,9 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 			return "", errs.Unprocessable("该队列不支持视频", errs.CodeAgentNotVideoCapable)
 		}
 		req.ApplicationID, req.ConfigVersion = q.ApplicationID, q.ConfigVersion
+		if !q.PriorityEnabled {
+			req.Priority = 0
+		}
 	}
 	if req.ApplicationID == "" || req.ConfigVersion < 1 {
 		return "", errs.Forbidden("缺少已激活的应用配置作用域")
@@ -133,6 +137,7 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	rec := ports.CallRecord{
 		ApplicationID: req.ApplicationID,
 		ConfigVersion: new(req.ConfigVersion),
+		Version:       1,
 		ID:            callID,
 		Direction:     "inbound",
 		SessionType:   req.SessionType,
@@ -146,16 +151,13 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	}
 	ctx = scope.WithApplication(ctx, req.ApplicationID)
 	ctx = scope.WithConfigVersion(ctx, req.ConfigVersion)
-	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
-		return "", err
-	}
 	leg := ports.CallLegRecord{
 		ID:        uuid.New().String(),
 		CallID:    callID,
 		Role:      dto.LegRoleCustomer,
 		CreatedAt: now,
 	}
-	if err := s.deps.Calls.InsertLeg(ctx, leg); err != nil {
+	if err := s.deps.Calls.InsertCallWithLeg(ctx, rec, leg); err != nil {
 		return "", err
 	}
 
@@ -201,10 +203,16 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 			s.startVoicemail(ctx, callID)
 			return callID, nil
 		}
-		if action != "queue" {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonTimeout)
+		if action == "queue" {
+			if err := s.routeQueue(ctx, callID, q.OverflowQueueID); err != nil {
+				return "", err
+			}
 			return callID, nil
 		}
+		if err := s.Hangup(ctx, callID, dto.HangupReasonTimeout); err != nil {
+			return "", err
+		}
+		return callID, nil
 	}
 
 	flowID := req.IVRFlowID
@@ -212,9 +220,11 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		flowID = q.IVRFlowID
 	}
 	if !req.SkipIVR && flowID != "" {
-		if err := s.bootIVR(ctx, callID, flowID); err == nil {
-			return callID, nil
+		if err := s.bootIVR(ctx, callID, flowID); err != nil {
+			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			return "", err
 		}
+		return callID, nil
 	}
 	if req.QueueID == "" {
 		return "", errs.InvalidRequest("IVR 未能启动且没有后备队列")
@@ -510,6 +520,9 @@ func (s *Service) GetCall(ctx context.Context, callID string) (ports.CallView, e
 	rt := s.calls[callID]
 	s.mu.Unlock()
 	if rt != nil {
+		if appID := scope.Application(ctx); appID != "" && rt.rec.ApplicationID != appID {
+			return ports.CallView{}, errs.NotFound("通话不存在")
+		}
 		return toView(rt), nil
 	}
 	rec, err := s.deps.Calls.GetCall(ctx, callID)
@@ -712,7 +725,7 @@ func (s *Service) tickCall(ctx context.Context, id string, now time.Time) {
 	}
 }
 
-// tryDispatch 请求业务侧原子选人；旧派单结果会释放坐席，避免占用已变化的通话。
+// tryDispatch 请求本地 ACD 原子选人；旧派单结果会释放坐席，避免占用已变化的通话。
 func (s *Service) tryDispatch(ctx context.Context, callID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -781,6 +794,7 @@ func (s *Service) transition(ctx context.Context, callID, state string) error {
 	rt.rec.OfferedAgent = rt.offeredAgent
 	rt.rec.AnsweredAt = rt.answeredAt
 	rt.rec.State = state
+	rt.rec.Version++
 	rt.rec.UpdatedAt = time.Now().UTC()
 	rec := rt.rec
 	s.mu.Unlock()
@@ -870,6 +884,7 @@ func (s *Service) publishCall(ctx context.Context, callID, typ, agentID string, 
 
 func toView(rt *runtimeCall) ports.CallView {
 	v := ports.CallView{
+		ApplicationID: rt.rec.ApplicationID, Version: rt.rec.Version, ConfigVersion: rt.rec.ConfigVersion,
 		ID:        rt.rec.ID,
 		CreatedAt: rt.rec.CreatedAt, Caller: rt.caller, Callee: rt.callee, AnsweredAt: rt.answeredAt, EndedAt: rt.rec.EndedAt,
 		State:           rt.rec.State,

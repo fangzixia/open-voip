@@ -62,7 +62,8 @@ sip:
   # 每个 SIP 坐席独立凭证，用户名与业务分机号一致。
   devices: []
   # devices:
-  #   - username: "1001"
+  #   - application_id: "open-call"
+  #     username: "1001"
   #     password: "REPLACE-WITH-UNIQUE-RANDOM-PASSWORD"
   #     allowed_cidrs: ["192.168.10.0/24"]
   tls_cert_file: ""

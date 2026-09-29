@@ -209,7 +209,7 @@ export class AgentApp extends LitElement {
       if (this.call?.id === msg.payload?.call_id || this.incoming?.call_id === msg.payload?.call_id) {
         this.#endLocal(msg.payload?.call_id);
       }
-    } else if (msg.type === "agent.state_changed" && this.me) {
+    } else if (msg.type === "agent.routing_state_changed" && this.me) {
       this.me = { ...this.me, session: { ...this.me.session, state: msg.payload.state, busy_reason: msg.payload.busy_reason } };
     } else if (msg.type === "recording.notice") {
       this.notice = msg.payload?.message || "";

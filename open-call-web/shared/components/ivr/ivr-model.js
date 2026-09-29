@@ -3,6 +3,7 @@ export const NODE_TYPES = {
   menu: "按键菜单",
   time_check: "工作时间",
   route_queue: "转入队列",
+  business_action: "业务判断",
   hangup: "结束通话",
 };
 
@@ -12,6 +13,7 @@ export function outgoing(node) {
   switch (node.type) {
     case "play": return node.next ? [["下一步", node.next]] : [];
     case "menu": return [...Object.entries(node.choices || {}).map(([digit, target]) => [`按 ${digit}`, target]), ...(node.default ? [["超时", node.default]] : []), ...(node.invalid ? [["无效按键", node.invalid]] : [])];
+    case "business_action": return [...Object.entries(node.choices || {}), ...(node.default ? [["超时", node.default]] : [])];
     case "time_check": return [["营业", node.open], ["非营业", node.closed]].filter(([, target]) => target);
     default: return [];
   }
@@ -39,6 +41,13 @@ export function validateIVR(doc, queues = [], assets = []) {
       if (!(node.max_retries >= 0 && node.max_retries <= 5)) issues.push(`${id}：无效按键重试次数须为 0–5`);
       for (const digit of Object.keys(node.choices || {})) if (!/^[0-9*#]$/.test(digit)) issues.push(`${id}：按键 ${digit} 无效`);
     }
+    if (node.type === "business_action") {
+      if (!node.action?.trim()) issues.push(`${id}：请输入业务动作名称`);
+      if (!(node.timeout_sec >= 1 && node.timeout_sec <= 120)) issues.push(`${id}：业务超时须为 1–120 秒`);
+      if (!Object.keys(node.choices || {}).length || Object.keys(node.choices || {}).some(k => !k.trim())) issues.push(`${id}：请配置有效业务结果`);
+      if (!node.default) issues.push(`${id}：请选择业务超时去向`);
+    }
+    if (node.type === "time_check" && !queues.some(q=>q.id===node.queue_id)) issues.push(`${id}：请选择工作时间所属队列`);
     if (node.type === "time_check" && (!node.open || !node.closed)) issues.push(`${id}：请配置营业和非营业去向`);
     if (node.type === "route_queue" && !queues.some(q => q.id === node.queue_id)) issues.push(`${id}：目标队列不存在`);
     for (const [, target] of outgoing(node)) if (!nodes[target]) issues.push(`${id}：目标节点 ${target || "空"} 不存在`);
@@ -59,7 +68,7 @@ export function validateIVR(doc, queues = [], assets = []) {
 }
 
 /** 按测试按键与营业状态模拟执行流程，最多推进 100 步。 */
-export function simulateIVR(doc, { digits = "", open = true } = {}) {
+export function simulateIVR(doc, { digits = "", open = true, outcomes = {} } = {}) {
   const path = [], nodes = doc?.nodes || {};
   let current = doc?.start, input = 0, invalidAttempts = 0;
   for (let step = 0; current && step < 100; step++) {
@@ -70,6 +79,12 @@ export function simulateIVR(doc, { digits = "", open = true } = {}) {
     if (node.type === "hangup") return { path, result: "结束通话" };
     if (node.type === "play") current = node.next;
     else if (node.type === "time_check") current = open ? node.open : node.closed;
+    else if (node.type === "business_action") {
+      const outcome = outcomes[node.action];
+      path[path.length - 1].event = outcome === undefined ? "业务超时" : `业务结果 ${outcome}`;
+      if (outcome !== undefined && !node.choices?.[outcome]) return { path, result: "业务结果未在流程中声明" };
+      current = outcome === undefined ? node.default : node.choices[outcome];
+    }
     else if (node.type === "menu") {
       const digit = digits[input++];
       if (!digit) { path[path.length - 1].event = "超时"; current = node.default; }

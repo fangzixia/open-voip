@@ -19,8 +19,6 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	// Recordings 录音与 IVR 资产目录。
 	Recordings RecordingsConfig `yaml:"recordings"`
-	// JWT 访问令牌与刷新令牌参数。
-	JWT JWTConfig `yaml:"jwt"`
 	// Log 结构化日志级别与格式。
 	Log LogConfig `yaml:"log"`
 	// TLS 进程内 HTTPS；也可由前置反代终结。
@@ -31,12 +29,6 @@ type Config struct {
 	TURN TURNConfig `yaml:"turn"`
 	// SIP 可选 PSTN 中继；未启用则不监听 5060。
 	SIP SIPConfig `yaml:"sip"`
-	// Webhook 同步投递重试参数。
-	Webhook WebhookConfig `yaml:"webhook"`
-	// Public 入会链接等对外 URL。
-	Public PublicConfig `yaml:"public"`
-	// Bootstrap 空库种子账号密码（仅 users 表为空时使用）。
-	Bootstrap BootstrapConfig `yaml:"bootstrap"`
 	// Applications 可调用 Switch 的业务系统及其资源作用域。
 	Applications []ApplicationConfig `yaml:"applications"`
 }
@@ -79,20 +71,6 @@ type RecordingsConfig struct {
 	NotifyMessage string `yaml:"notify_message"`
 }
 
-// WebhookConfig Webhook 投递。
-type WebhookConfig struct {
-	// MaxRetries 同步重试次数（含首次）。
-	MaxRetries int `yaml:"max_retries"`
-	// TimeoutSec 单次 HTTP 超时秒。
-	TimeoutSec int `yaml:"timeout_sec"`
-}
-
-// PublicConfig 入会链接与 TURN 展示用的内网根 URL。
-type PublicConfig struct {
-	// GuestBaseURL 访客页根地址，例如 https://cc.internal/guest。
-	GuestBaseURL string `yaml:"guest_base_url"`
-}
-
 // SIPConfig PSTN/SIP 中继。
 type SIPConfig struct {
 	Devices []SIPDeviceConfig `yaml:"devices"`
@@ -127,9 +105,10 @@ type SIPConfig struct {
 }
 
 type SIPDeviceConfig struct {
-	Username     string   `yaml:"username"`
-	Password     string   `yaml:"password"`
-	AllowedCIDRs []string `yaml:"allowed_cidrs"`
+	ApplicationID string   `yaml:"application_id"`
+	Username      string   `yaml:"username"`
+	Password      string   `yaml:"password"`
+	AllowedCIDRs  []string `yaml:"allowed_cidrs"`
 }
 
 // SIPTrunkConfig 单条中继。
@@ -160,16 +139,6 @@ type SIPTrunkConfig struct {
 	StripPrefix string `yaml:"strip_prefix"`
 	// Prefix 出局拨号追加的前缀。
 	Prefix string `yaml:"prefix"`
-}
-
-// JWTConfig 定义 JWT 签发参数。
-type JWTConfig struct {
-	// AccessTTLSec 访问令牌有效期（秒）。
-	AccessTTLSec int `yaml:"access_ttl_sec"`
-	// RefreshTTLSec 刷新令牌有效期（秒）。
-	RefreshTTLSec int `yaml:"refresh_ttl_sec"`
-	// SigningKey HS256 对称密钥，生产环境须足够长且保密。
-	SigningKey string `yaml:"signing_key"`
 }
 
 // LogConfig 定义 slog 输出。
@@ -204,14 +173,6 @@ type ICEConfig struct {
 	UDPPortMax uint16 `yaml:"udp_port_max"`
 }
 
-// BootstrapConfig 空库演示账号。
-type BootstrapConfig struct {
-	// AdminPassword 管理员初始密码。
-	AdminPassword string `yaml:"admin_password"`
-	// AgentPassword 演示坐席初始密码。
-	AgentPassword string `yaml:"agent_password"`
-}
-
 // TURNConfig 定义 TURN 中继（可选）。
 type TURNConfig struct {
 	// Enabled 是否向客户端签发 TURN 凭证。
@@ -230,7 +191,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("解析配置 YAML: %w", err)
 	}
 
@@ -354,6 +317,9 @@ func (c *Config) Validate() error {
 		}
 		seen := map[string]bool{}
 		for _, d := range c.SIP.Devices {
+			if !appIDs[d.ApplicationID] {
+				errs = append(errs, "SIP 设备必须绑定有效 application_id")
+			}
 			if d.Username == "" || seen[d.Username] || strings.ContainsAny(d.Username, " @:;\r\n") {
 				errs = append(errs, "SIP 设备用户名无效或重复")
 			}
@@ -417,12 +383,6 @@ func (c *Config) applyDefaults() {
 		c.ICE.UDPPortMin = 10000
 		c.ICE.UDPPortMax = 20000
 	}
-	if strings.TrimSpace(c.Bootstrap.AdminPassword) == "" {
-		c.Bootstrap.AdminPassword = "changeme"
-	}
-	if strings.TrimSpace(c.Bootstrap.AgentPassword) == "" {
-		c.Bootstrap.AgentPassword = "changeme"
-	}
 	if c.Recordings.RetainDays == 0 {
 		c.Recordings.RetainDays = 90
 	}
@@ -432,12 +392,7 @@ func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.Recordings.NotifyMessage) == "" {
 		c.Recordings.NotifyMessage = "本通话可能会被录音或录像，继续即表示您已知悉。"
 	}
-	if c.Webhook.MaxRetries <= 0 {
-		c.Webhook.MaxRetries = 3
-	}
-	if c.Webhook.TimeoutSec <= 0 {
-		c.Webhook.TimeoutSec = 5
-	}
+
 	if strings.TrimSpace(c.SIP.UserAgent) == "" {
 		c.SIP.UserAgent = "open-voip"
 	}

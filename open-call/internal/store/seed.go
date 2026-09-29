@@ -178,7 +178,7 @@ func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) erro
 			return err
 		}
 		return tx.Create(&models.DIDRoute{
-			ID: uuid.New().String(), DID: "8001", QueueID: audioQ.ID, DisplayName: "语音服务", CreatedAt: now, UpdatedAt: now,
+			ID: uuid.New().String(), DID: "8001", TrunkID: "*", TargetType: "queue", TargetID: &audioQ.ID, CreatedAt: now, UpdatedAt: now,
 		}).Error
 	})
 	if err != nil {
@@ -205,7 +205,7 @@ func SeedDefaultDID(db *gorm.DB, log *slog.Logger) error {
 	}
 	now := time.Now().UTC()
 	row := models.DIDRoute{
-		ID: uuid.New().String(), DID: "8001", QueueID: q.ID, DisplayName: "语音服务", CreatedAt: now, UpdatedAt: now,
+		ID: uuid.New().String(), DID: "8001", TrunkID: "*", TargetType: "queue", TargetID: &q.ID, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&row).Error; err != nil {
 		return err

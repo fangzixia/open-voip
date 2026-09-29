@@ -22,8 +22,6 @@ func (IVRFlow) TableName() string { return "os_ivr_flows" }
 // IVRPublishedSnapshot 已发布 IVR 快照，呼入只读最新 version。
 type IVRPublishedSnapshot struct {
 	ApplicationID string `gorm:"primaryKey;size:64"`
-	// ID 快照 UUID。
-	ID string `gorm:"type:uuid;primaryKey;comment:快照 ID"`
 	// FlowID 所属流程。
 	FlowID string `gorm:"type:uuid;primaryKey;not null;comment:流程 ID"`
 	// Version 单调递增版本号。

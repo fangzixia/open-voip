@@ -179,3 +179,8 @@ func (c *Client) ForceReleaseAgent(ctx context.Context, agentID, policy string) 
 }
 
 var _ ports.CallControlPort = (*Client)(nil)
+
+// CompleteBusinessAction submits a business-owned decision without controlling media destinations.
+func (c *Client) CompleteBusinessAction(ctx context.Context, callID, actionID, outcome string) error {
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/business-actions/"+actionID+"/complete", map[string]string{"outcome": outcome}, nil)
+}

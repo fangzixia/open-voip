@@ -636,9 +636,26 @@ func (s *Service) InjectAudio(ctx context.Context, callID, botLegID string, sour
 		return errs.NotFound("媒体房间不存在")
 	}
 	_ = botLegID
-	path := s.resolvePrompt(source.FilePath)
+	path := s.resolvePrompt(ctx, source.FilePath)
+	if source.FilePath != "" {
+		if path == "" {
+			return errs.InvalidRequest("语音素材 ID 无效")
+		}
+		if _, err := os.Stat(path); err != nil {
+			return errs.NotFound("语音素材不存在")
+		}
+	}
+	if path != "" {
+		pcm, rate, err := readPCMWav(path)
+		if err != nil || len(pcm) == 0 {
+			return errs.InvalidRequest("语音素材内容无效")
+		}
+		seq := r.promptSeq.Add(1)
+		go s.playPCMToRoom(callID, pcm, rate, source.Loop, seq)
+		return nil
+	}
 	seq := r.promptSeq.Add(1)
-	go s.playSourceToRoom(callID, path, source.Loop, seq)
+	go s.playWaitingTone(callID, source.Loop, seq)
 	return nil
 }
 

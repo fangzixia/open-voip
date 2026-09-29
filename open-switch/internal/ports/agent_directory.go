@@ -4,6 +4,7 @@ import "context"
 
 // AgentInfo 坐席目录条目，供 L3 振铃与视频能力判断。
 type AgentInfo struct {
+	ConfigVersion int64 `json:"config_version"`
 	// TerminalType 坐席终端：webrtc 或 sip。
 	TerminalType string `json:"terminal_type"`
 	// SIPUsername 对应 Switch 配置中的设备账号，不包含密码。
@@ -30,5 +31,5 @@ type AgentDirectoryPort interface {
 	ByID(ctx context.Context, agentID string) (AgentInfo, error)
 	// SetState 乐观锁更新坐席状态：仅当当前状态等于 fromState 时迁移到 toState。
 	// fromState 为空则不校验原状态。成功后应写入状态日志并发布 agent.state_changed。
-	SetState(ctx context.Context, agentID, fromState, toState, reason string) error
+	SetCallState(ctx context.Context, callID, agentID, fromState, toState, reason string) error
 }

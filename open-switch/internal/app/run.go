@@ -16,6 +16,7 @@ import (
 
 	apphttp "open-switch/internal/app/http"
 	"open-switch/internal/config"
+	"open-switch/internal/errs"
 	"open-switch/internal/layers/cccore"
 	"open-switch/internal/layers/control"
 	"open-switch/internal/layers/media"
@@ -74,16 +75,24 @@ func Run(configPath string) error {
 		RetainDays:    cfg.Recordings.RetainDays,
 	})
 	controlDeps := control.Deps{
-		Media: mediaSvc, ACD: ccCore, Config: ccCore, Agents: ccCore,
+		BusinessActions: ccCore, Media: mediaSvc, ACD: ccCore, Config: ccCore, Agents: ccCore,
 		RecordingPolicy: ccCore, CDR: ccCore, Recordings: ccCore,
 		CallEvents: eventStore,
 	}
 	callStore := store.NewCallStore(db)
+	limits := map[string]int{}
+	for _, application := range cfg.Applications {
+		limits[application.ID] = application.MaxConcurrentCalls
+	}
+	callStore.SetApplicationLimits(limits)
 	controlDeps.Calls = callStore
 	callControl := control.NewService(controlDeps)
 
 	if err := callControl.Recover(context.Background()); err != nil {
 		return fmt.Errorf("遗留通话恢复: %w", err)
+	}
+	if err := ccCore.RecoverReservations(context.Background()); err != nil {
+		return fmt.Errorf("坐席预留恢复: %w", err)
 	}
 	mediaSvc.SetSIPHangupHandler(func(ctx context.Context, callID string) {
 		_ = callControl.Hangup(ctx, callID, dto.HangupReasonNormal)
@@ -128,7 +137,25 @@ func Run(configPath string) error {
 	}
 	mediaSvc.SetInboundHandler(startInbound)
 	mediaSvc.SetDeviceHandler(func(ctx context.Context, _ string, destination, from, callID string) (string, string, error) {
-		return startInbound(ctx, "*", destination, from, callID)
+		appID := ""
+		for _, device := range cfg.SIP.Devices {
+			if device.Username == from {
+				appID = device.ApplicationID
+				break
+			}
+		}
+		if appID == "" {
+			return "", "", errs.Forbidden("设备缺少应用绑定")
+		}
+		ctx = scope.WithApplication(ctx, appID)
+		_, routeErr := ccCore.ResolveDID(ctx, "*", destination)
+		if routeErr == nil {
+			return startInbound(ctx, "*", destination, from, callID)
+		}
+		if !errors.Is(routeErr, errs.ErrNotFound) {
+			return "", "", routeErr
+		}
+		return callControl.SIPSource(ctx, callID, from, destination)
 	})
 
 	deps := apphttp.RouterDeps{
@@ -136,7 +163,7 @@ func Run(configPath string) error {
 		CallControl: callControl,
 		Signaling:   callControl,
 	}
-	switchDeps := apphttp.SwitchRouterDeps{Config: *cfg, RouterDeps: deps, Runtime: callControl, Events: &eventStore, Direct: callControl, Admin: ccCore}
+	switchDeps := apphttp.SwitchRouterDeps{Config: *cfg, RouterDeps: deps, Runtime: callControl, Events: &eventStore, Direct: callControl, Admin: ccCore, BusinessActions: callControl}
 	router := apphttp.NewSwitchRouter(switchDeps)
 
 	srv := &http.Server{

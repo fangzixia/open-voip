@@ -1,8 +1,11 @@
 package media
 
 import (
+	"context"
 	"encoding/binary"
+	"github.com/google/uuid"
 	"io"
+	"open-switch/internal/scope"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,37 +16,18 @@ import (
 	"math/rand/v2"
 )
 
-// resolvePrompt 仅允许录音目录下的提示音文件，避免任意路径读取。
-func (s *Service) resolvePrompt(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
+// resolvePrompt accepts only asset IDs in the authenticated application's namespace.
+func (s *Service) resolvePrompt(ctx context.Context, path string) string {
+	if scope.Application(ctx) == "" || filepath.Ext(path) != ".wav" {
 		return ""
 	}
-	root, err := filepath.Abs(s.recDir)
-	if err != nil {
+	if _, err := uuid.Parse(strings.TrimSuffix(path, ".wav")); err != nil {
 		return ""
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, "prompts", path)
-	}
-	clean, err := filepath.Abs(path)
-	if err != nil {
-		return ""
-	}
-	rel, err := filepath.Rel(root, clean)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return ""
-	}
-	return clean
+	return filepath.Join(s.recDir, "prompts", scope.AssetNamespace(ctx), path)
 }
 
-func (s *Service) playSourceToRoom(callID string, filePath string, loop bool, seq uint64) {
-	if filePath != "" {
-		if pcm, rate, err := readPCMWav(filePath); err == nil && len(pcm) > 0 {
-			s.playPCMToRoom(callID, pcm, rate, loop, seq)
-			return
-		}
-	}
+func (s *Service) playWaitingTone(callID string, loop bool, seq uint64) {
 	for {
 		s.playToneToRoom(callID, time.Second, seq)
 		if !loop {

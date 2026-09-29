@@ -67,22 +67,12 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 		return ports.CallView{}, err
 	}
 	now := time.Now().UTC()
-	rec := ports.CallRecord{ApplicationID: scope.Application(ctx), ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
+	rec := ports.CallRecord{Version: 1, ApplicationID: scope.Application(ctx), ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
 	leg := ports.CallLegRecord{ID: uuid.NewString(), CallID: req.CallID, Role: req.InitialLegRole, CreatedAt: now}
 	if req.AgentID != "" {
 		leg.AgentID = &req.AgentID
 	}
-	var err error
-	if atomic, ok := s.deps.Calls.(interface {
-		InsertDirectCall(context.Context, ports.CallRecord, ports.CallLegRecord) error
-	}); ok {
-		err = atomic.InsertDirectCall(ctx, rec, leg)
-	} else {
-		err = s.deps.Calls.InsertCall(ctx, rec)
-		if err == nil {
-			err = s.deps.Calls.InsertLeg(ctx, leg)
-		}
-	}
+	err := s.deps.Calls.InsertCallWithLeg(ctx, rec, leg)
 	if err != nil {
 		_ = s.deps.Media.CloseRoom(ctx, req.CallID)
 		return ports.CallView{}, err
@@ -91,7 +81,6 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 	s.mu.Lock()
 	s.calls[req.CallID] = rt
 	s.mu.Unlock()
-	_ = s.publishCall(ctx, req.CallID, "call.created", "", map[string]any{"call_id": req.CallID, "direction": req.Direction, "leg_id": leg.ID})
 	return toView(rt), nil
 }
 

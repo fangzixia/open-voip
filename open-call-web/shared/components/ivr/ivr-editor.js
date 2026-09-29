@@ -46,7 +46,7 @@ export class IVRFlowEditor extends LitElement {
   updateNode(key,value) { if (!this.selectedNode) return; this.mutate(d=>{ d.nodes[this.selectedNode][key]=value; }); }
   addNode(type, position = null) {
     const id=`node_${crypto.randomUUID().slice(0,8)}`;
-    const defaults={ play:{type,prompt:"",file:"",timeout_sec:2,next:""}, menu:{type,prompt:"",file:"",timeout_sec:8,max_retries:2,choices:{},default:"",invalid:""}, time_check:{type,open:"",closed:""}, route_queue:{type,queue_id:this.queues[0]?.id||"",session_type:"audio"}, hangup:{type} };
+    const defaults={ business_action:{type,action:"",timeout_sec:10,choices:{yes:"",no:""},default:""}, play:{type,prompt:"",file:"",timeout_sec:2,next:""}, menu:{type,prompt:"",file:"",timeout_sec:8,max_retries:2,choices:{},default:"",invalid:""}, time_check:{type,open:"",closed:""}, route_queue:{type,queue_id:this.queues[0]?.id||"",session_type:"audio"}, hangup:{type} };
     this.mutate(d=>{ d.nodes[id]=defaults[type]; if (!d.start) d.start=id; if (position) { d.layout ||= {}; d.layout[id]=position; } }); this.selectedNode=id;
   }
   /** 删除节点时一并清理起点、布局及其他节点指向它的分支。 */
@@ -130,7 +130,7 @@ export class IVRFlowEditor extends LitElement {
   linkEditor() {
     const link=this.linkDraft; if (!link) return nothing;
     const source=this.draft.nodes[link.from];
-    const branches=source.type==="play"?[["next","下一步"]]:source.type==="time_check"?[["open","营业"],["closed","非营业"]]:[
+    const branches=source.type==="play"?[["next","下一步"]]:source.type==="time_check"?[["open","营业"],["closed","非营业"]]:source.type==="business_action"?[...Object.keys(source.choices||{}).map(k=>[`choice:${k}`,k]),["default","超时"]]:[
       ..."1234567890*#".split("").map(d=>[`choice:${d}`,`按 ${d}`]),["default","超时"],["invalid","无效按键"]
     ];
     return html`<div class="link-editor"><strong>连接 ${NODE_TYPES[source.type]} → ${NODE_TYPES[this.draft.nodes[link.to].type]}</strong>
@@ -158,7 +158,7 @@ export class IVRFlowEditor extends LitElement {
     if (issues.length) { this.problem=issues.join("；"); return; }
     if (this.dirty && !await this.save()) return;
     this.busy=true;
-    try { const version=await this.service.publishIvr(this.selectedId); this.flows=this.flows.map(f=>f.id===this.selectedId?{...f,published_version:version.version}:f); this.notice=`版本 v${version.version} 已发布，新呼入将使用该版本`; this.problem=""; await this.loadVersions(); this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); }
+    try { const version=await this.service.publishIvr(this.selectedId); this.flows=this.flows.map(f=>f.id===this.selectedId?{...f,published_version:version.version}:f); this.notice=`版本 v${version.version} 已生成快照；发布并激活呼叫配置后，新呼入才会使用`; this.problem=""; await this.loadVersions(); this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); }
     catch(e) { this.problem=e.message; }
     finally { this.busy=false; }
   }
@@ -166,7 +166,7 @@ export class IVRFlowEditor extends LitElement {
     if (this.dirty) { this.problem="请先保存草稿"; return; }
     if (!window.confirm(`将版本 v${version} 复制并发布为新版本？`)) return;
     this.busy=true;
-    try { const result=await this.service.rollbackIvrFlow(this.selectedId,version); const flow=await this.service.getIvrFlow(this.selectedId); this.flows=this.flows.map(f=>f.id===flow.id?flow:f); this.draft=copy(flow.draft); this.selectedNode=this.draft.start; this.dirty=false; this.notice=`已回滚并发布 v${result.version}`; this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); await this.loadVersions(); }
+    try { const result=await this.service.rollbackIvrFlow(this.selectedId,version); const flow=await this.service.getIvrFlow(this.selectedId); this.flows=this.flows.map(f=>f.id===flow.id?flow:f); this.draft=copy(flow.draft); this.selectedNode=this.draft.start; this.dirty=false; this.notice=`已生成回滚快照 v${result.version}，请发布并激活呼叫配置`; this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); await this.loadVersions(); }
     catch(e) { this.problem=e.message; }
     finally { this.busy=false; }
   }

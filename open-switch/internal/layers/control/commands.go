@@ -30,7 +30,7 @@ func (s *Service) command(ctx context.Context, callID string) (context.Context, 
 	rt := s.calls[callID]
 	s.mu.Unlock()
 	if rt != nil {
-		if rt.rec.ApplicationID != "" {
+		if rt.rec.ApplicationID != "" && scope.Application(ctx) == "" {
 			ctx = scope.WithApplication(ctx, rt.rec.ApplicationID)
 		}
 		if rt.rec.ConfigVersion != nil {
@@ -44,7 +44,10 @@ func (s *Service) command(ctx context.Context, callID string) (context.Context, 
 func (s *Service) ListCalls(ctx context.Context) ([]ports.CallView, error) {
 	s.mu.Lock()
 	ids := make([]string, 0, len(s.calls))
-	for id := range s.calls {
+	for id, rt := range s.calls {
+		if appID := scope.Application(ctx); appID != "" && rt.rec.ApplicationID != appID {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	s.mu.Unlock()

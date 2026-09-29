@@ -20,6 +20,7 @@ type ivrRuntime struct {
 	entered         time.Time
 	timeout         time.Duration
 	invalidAttempts int
+	actionID        string
 }
 
 type ivrDoc struct {
@@ -29,6 +30,7 @@ type ivrDoc struct {
 
 type ivrNode struct {
 	Type        string            `json:"type"`
+	Action      string            `json:"action"`
 	Prompt      string            `json:"prompt"`
 	File        string            `json:"file"`
 	TimeoutSec  int               `json:"timeout_sec"`
@@ -128,6 +130,11 @@ func (s *Service) tickIVR(ctx context.Context, callID string) {
 		return
 	}
 	node := rt.ivr.doc.Nodes[rt.ivr.node]
+	if node.Type == "business_action" {
+		if err := s.deps.BusinessActions.ExpireBusinessAction(ctx, rt.ivr.actionID); err != nil {
+			return
+		}
+	}
 	next := node.Default
 	if node.Type == "play" {
 		next = node.Next
@@ -188,6 +195,7 @@ func (s *Service) gotoIVR(ctx context.Context, callID, nodeID string) {
 		rt.ivr.node = nodeID
 		rt.ivr.entered = time.Now().UTC()
 		rt.ivr.invalidAttempts = 0
+		rt.ivr.actionID = ""
 	}
 	s.mu.Unlock()
 	s.runIVRNode(ctx, callID)
@@ -207,7 +215,10 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		return
 	}
 	if node.Type == "play" || node.Type == "menu" {
-		_ = s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"})
+		if err := s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"}); err != nil {
+			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			return
+		}
 	}
 	if node.Type == "play" || node.Type == "menu" {
 		seconds := node.TimeoutSec
@@ -223,35 +234,24 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 	}
 	_ = s.publishCall(ctx, callID, "ivr.prompt", "", map[string]any{"call_id": callID, "prompt": node.Prompt, "type": node.Type})
 	switch node.Type {
+	case "business_action":
+		rt.ivr.actionID = uuid.NewString()
+		rt.ivr.entered = time.Now().UTC()
+		rt.ivr.timeout = time.Duration(node.TimeoutSec) * time.Second
+		if err := s.deps.BusinessActions.BeginBusinessAction(ctx, ports.BusinessAction{ID: rt.ivr.actionID, CallID: callID, NodeID: rt.ivr.node, Action: node.Action, Outcomes: node.Choices, Deadline: rt.ivr.entered.Add(rt.ivr.timeout)}); err != nil {
+			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+		}
 	case "hangup":
 		_ = s.Hangup(ctx, callID, dto.HangupReasonNormal)
 	case "route_queue":
-		q, err := s.deps.Config.GetQueue(ctx, node.QueueID)
-		if err != nil {
+		if node.SessionType != "" {
+			rt.rec.SessionType = dto.SessionType(node.SessionType)
+		}
+		if err := s.routeQueue(ctx, callID, node.QueueID); err != nil {
 			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
-			return
 		}
-		s.mu.Lock()
-		if rt2 := s.calls[callID]; rt2 != nil {
-			rt2.rec.QueueID = new(node.QueueID)
-			rt2.queueName = q.Name
-			rt2.callee = q.Name
-			rt2.waitPrompt = q.WaitPrompt
-			if q.MaxWaitSec > 0 {
-				rt2.maxWait = time.Duration(q.MaxWaitSec) * time.Second
-			}
-			if node.SessionType != "" {
-				rt2.rec.SessionType = dto.SessionType(node.SessionType)
-			}
-			rt2.ivr = nil
-		}
-		s.mu.Unlock()
-		_ = s.enterQueue(ctx, callID)
 	case "time_check":
-		open := true
-		if rt.rec.QueueID != nil {
-			open = withinHours(s.deps.Config, ctx, *rt.rec.QueueID)
-		}
+		open := withinHours(s.deps.Config, ctx, node.QueueID)
 		next := node.Open
 		if !open {
 			next = node.Closed
@@ -301,7 +301,7 @@ func (s *Service) publishPosition(ctx context.Context, callID string) {
 	if rt != nil {
 		for _, o := range s.calls {
 			if o.rec.State == stateQueued && o.rec.QueueID != nil && rt.rec.QueueID != nil &&
-				*o.rec.QueueID == *rt.rec.QueueID && (o.rec.Priority > rt.rec.Priority || (o.rec.Priority == rt.rec.Priority && o.queuedAt.Before(rt.queuedAt))) {
+				o.rec.ApplicationID == rt.rec.ApplicationID && *o.rec.QueueID == *rt.rec.QueueID && (o.rec.Priority > rt.rec.Priority || (o.rec.Priority == rt.rec.Priority && o.queuedAt.Before(rt.queuedAt))) {
 				pos++
 			}
 		}
@@ -315,17 +315,23 @@ func (s *Service) publishPosition(ctx context.Context, callID string) {
 	_ = s.publishCall(ctx, callID, "queue.position", "", map[string]any{"call_id": callID, "position": pos, "message": msg})
 }
 
-// withinHours 按队列时区判断营业窗口；无配置或无法解析时沿用默认开放策略。
+// withinHours 按队列时区判断营业窗口；无法读取或解析时拒绝营业。
 func withinHours(cfg ports.ConfigSnapshotPort, ctx context.Context, queueID string) bool {
 	h, err := cfg.GetBusinessHours(ctx, queueID)
-	if err != nil || h.WeekdayHours == "" || h.WeekdayHours == "always" {
+	if err != nil {
+		return false
+	}
+	if h.WeekdayHours == "always" {
 		return true
 	}
 	var m map[string]string
 	if json.Unmarshal([]byte(h.WeekdayHours), &m) != nil {
-		return true
+		return false
 	}
 	now := cfg.Now(ctx)
+	if tz := m["timezone"]; tz != "" {
+		h.Timezone = tz
+	}
 	if h.Timezone != "" {
 		if loc, err := time.LoadLocation(h.Timezone); err == nil {
 			now = now.In(loc)
@@ -336,13 +342,77 @@ func withinHours(cfg ports.ConfigSnapshotPort, ctx context.Context, queueID stri
 	if !ok {
 		win = m[strconv.Itoa(int(now.Weekday()))]
 	}
+	if holiday, exists := m[now.Format("2006-01-02")]; exists {
+		win = holiday
+	}
 	if win == "" || win == "closed" {
 		return false
 	}
 	parts := strings.Split(win, "-")
 	if len(parts) != 2 {
-		return true
+		return false
 	}
 	cur := now.Format("15:04")
-	return cur >= parts[0] && cur <= parts[1]
+	return cur >= parts[0] && cur < parts[1]
+}
+
+// CompleteBusinessAction accepts only an outcome declared in the pinned flow.
+func (s *Service) CompleteBusinessAction(ctx context.Context, callID, actionID, outcome string) error {
+	ctx, unlock := s.command(ctx, callID)
+	defer unlock()
+	action, err := s.deps.BusinessActions.GetBusinessAction(ctx, actionID)
+	if err != nil {
+		return err
+	}
+	if action.CallID != callID {
+		return errs.NotFound("业务动作不存在")
+	}
+	if action.Status == "completed" {
+		if action.Outcome == outcome {
+			return nil
+		}
+		return errs.Conflict("业务动作已提交其他结果", "")
+	}
+	if _, err := s.GetCall(ctx, callID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	rt := s.calls[callID]
+	s.mu.Unlock()
+	if rt == nil || rt.ivr == nil || rt.rec.State != stateIVR || rt.ivr.actionID != actionID {
+		return errs.Conflict("业务动作已结束", "")
+	}
+	next, ok := action.Outcomes[outcome]
+	if !ok {
+		return errs.InvalidRequest("业务结果未在流程中声明")
+	}
+	if err := s.deps.BusinessActions.ResolveBusinessAction(ctx, actionID, outcome); err != nil {
+		return err
+	}
+	s.gotoIVR(ctx, callID, next)
+	return nil
+}
+
+// routeQueue applies the pinned target configuration before entering a fresh waiting period.
+func (s *Service) routeQueue(ctx context.Context, callID, queueID string) error {
+	q, err := s.deps.Config.GetQueue(ctx, queueID)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	rt := s.calls[callID]
+	if rt == nil {
+		s.mu.Unlock()
+		return errs.NotFound("通话不存在")
+	}
+	rt.rec.QueueID = new(queueID)
+	rt.queueName = q.Name
+	rt.callee = q.Name
+	rt.waitPrompt = q.WaitPrompt
+	rt.maxWait = time.Duration(q.MaxWaitSec) * time.Second
+	if !q.PriorityEnabled {
+		rt.rec.Priority = 0
+	}
+	s.mu.Unlock()
+	return s.enterQueue(ctx, callID)
 }

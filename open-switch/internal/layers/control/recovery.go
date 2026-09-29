@@ -8,12 +8,7 @@ import (
 
 // setAgentState 统一更新坐席状态并附带通话追踪信息。
 func (s *Service) setAgentState(ctx context.Context, callID, agentID, from, to, reason string) error {
-	if p, ok := s.deps.Agents.(interface {
-		SetCallState(context.Context, string, string, string, string, string) error
-	}); ok {
-		return p.SetCallState(ctx, callID, agentID, from, to, reason)
-	}
-	return s.deps.Agents.SetState(ctx, agentID, from, to, reason)
+	return s.deps.Agents.SetCallState(ctx, callID, agentID, from, to, reason)
 }
 
 // 媒体会话无法跨进程存活。在接受新呼叫前先结束孤儿通话，

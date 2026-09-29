@@ -16,8 +16,12 @@ import (
 
 // CallStore 实现 CallPersistencePort。
 type CallStore struct {
-	db *gorm.DB
+	db     *gorm.DB
+	limits map[string]int
 }
+
+// SetApplicationLimits configures hard admission limits for API and SIP ingress alike.
+func (s *CallStore) SetApplicationLimits(limits map[string]int) { s.limits = limits }
 
 // NewCallStore 创建通话持久化适配器。
 func NewCallStore(db *gorm.DB) *CallStore {
@@ -50,13 +54,35 @@ func (s *CallStore) InsertCall(ctx context.Context, rec ports.CallRecord) error 
 		UpdatedAt:    rec.UpdatedAt,
 		EndedAt:      rec.EndedAt,
 	}
-	return s.db.WithContext(ctx).Create(&row).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if limit := s.limits[rec.ApplicationID]; limit > 0 {
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", "admission:"+rec.ApplicationID).Error; err != nil {
+				return err
+			}
+			var count int64
+			if err := tx.Model(&models.Call{}).Where("application_id = ? AND ended_at IS NULL", rec.ApplicationID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count >= int64(limit) {
+				return errs.Conflict("应用并发呼叫已达上限", "")
+			}
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		if rec.ConfigVersion != nil {
+			if err := tx.Exec("INSERT INTO os_routing_sessions (call_id,application_id,state,queue_id,config_version,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", rec.ID, rec.ApplicationID, rec.State, rec.QueueID, *rec.ConfigVersion, rec.CreatedAt, rec.UpdatedAt).Error; err != nil {
+				return err
+			}
+		}
+		return (CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{ApplicationID: rec.ApplicationID, CallID: rec.ID, Version: 1, Type: "call.created", Payload: map[string]any{"call_id": rec.ID, "direction": rec.Direction}})
+	})
 }
 
-// InsertDirectCall records the call and its first leg atomically.
-func (s *CallStore) InsertDirectCall(ctx context.Context, rec ports.CallRecord, leg ports.CallLegRecord) error {
+// InsertCallWithLeg records the call and its first leg atomically.
+func (s *CallStore) InsertCallWithLeg(ctx context.Context, rec ports.CallRecord, leg ports.CallLegRecord) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		store := &CallStore{db: tx}
+		store := &CallStore{db: tx, limits: s.limits}
 		if err := store.InsertCall(ctx, rec); err != nil {
 			return err
 		}
@@ -83,14 +109,44 @@ func (s *CallStore) UpdateCall(ctx context.Context, rec ports.CallRecord) error 
 		"queue_id":     rec.QueueID,
 		"priority":     rec.Priority,
 	}
-	res := s.db.WithContext(ctx).Model(&models.Call{}).Where("id = ?", rec.ID).Updates(updates)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errs.NotFound("通话不存在")
-	}
-	return nil
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		q := tx.Model(&models.Call{}).Where("id = ?", rec.ID)
+		if app := scope.Application(ctx); app != "" {
+			q = q.Where("application_id = ?", app)
+		}
+		res := q.Updates(updates)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errs.NotFound("通话不存在")
+		}
+		var current models.Call
+		if err := tx.First(&current, "id = ?", rec.ID).Error; err != nil {
+			return err
+		}
+		if rec.State == "ended" {
+			if err := tx.Exec("UPDATE os_business_actions SET status='expired',updated_at=NOW() WHERE application_id=? AND call_id=? AND status='pending'", current.ApplicationID, rec.ID).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Exec("UPDATE os_routing_sessions SET state=?,queue_id=?,updated_at=?,ended_at=? WHERE call_id=?", rec.State, rec.QueueID, rec.UpdatedAt, rec.EndedAt, rec.ID).Error; err != nil {
+			return err
+		}
+		if rec.State == "queued" && rec.QueueID != nil {
+			if err := tx.Exec(`INSERT INTO os_queue_entries (call_id,application_id,queue_id,priority,enqueued_at,deadline_at,state)
+              SELECT ?,?,?,?, ?, ?::timestamptz + make_interval(secs => q.max_wait_sec), 'waiting'
+              FROM os_queues q WHERE q.application_id=? AND q.config_version=? AND q.id=?
+              ON CONFLICT (call_id) DO UPDATE SET queue_id=EXCLUDED.queue_id, priority=EXCLUDED.priority,
+              enqueued_at=EXCLUDED.enqueued_at,deadline_at=EXCLUDED.deadline_at,state='waiting'`,
+				rec.ID, current.ApplicationID, *rec.QueueID, rec.Priority, rec.UpdatedAt, rec.UpdatedAt, current.ApplicationID, current.ConfigVersion, *rec.QueueID).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Exec("UPDATE os_queue_entries SET state=? WHERE call_id=?", rec.State, rec.ID).Error; err != nil {
+			return err
+		}
+		return (CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{ApplicationID: current.ApplicationID, CallID: rec.ID, Version: current.Version, Type: "call.state_changed", Payload: map[string]any{"call_id": rec.ID, "state": rec.State, "queue_id": rec.QueueID, "version": current.Version}})
+	})
 }
 
 func (s *CallStore) GetCall(ctx context.Context, callID string) (ports.CallRecord, error) {

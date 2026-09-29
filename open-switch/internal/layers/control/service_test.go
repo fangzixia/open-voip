@@ -135,7 +135,7 @@ func (f *fakeAgents) ByExtension(_ context.Context, extension string) (ports.Age
 func (f *fakeAgents) ByID(_ context.Context, id string) (ports.AgentInfo, error) {
 	return ports.AgentInfo{AgentID: id}, nil
 }
-func (f *fakeAgents) SetState(_ context.Context, agentID, from, to, _ string) error {
+func (f *fakeAgents) SetCallState(_ context.Context, _ string, agentID, from, to, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cur := f.states[agentID]
@@ -527,4 +527,11 @@ func TestRecordingOffSkipsMedia(t *testing.T) {
 	if media.starts != 0 {
 		t.Fatalf("policy off should not StartRecording, starts=%d", media.starts)
 	}
+}
+
+func (f *fakePersist) InsertCallWithLeg(ctx context.Context, rec ports.CallRecord, leg ports.CallLegRecord) error {
+	if err := f.InsertCall(ctx, rec); err != nil {
+		return err
+	}
+	return f.InsertLeg(ctx, leg)
 }

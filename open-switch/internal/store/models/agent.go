@@ -15,8 +15,8 @@ type Agent struct {
 	VideoCapable  bool   `gorm:"not null;default:false;comment:是否支持视频"`
 	DisplayName   string `gorm:"not null;default:''"`
 	TerminalType  string `gorm:"not null;default:webrtc"`
-	SIPUsername   string `gorm:"not null;default:''"`
-	Enabled       bool   `gorm:"not null;default:true"`
+	SIPUsername   string `gorm:"column:sip_username;not null;default:''"`
+	Enabled       bool   `gorm:"not null"`
 	ConfigVersion int64  `gorm:"primaryKey;not null"`
 	// CreatedAt 创建时间。
 	CreatedAt time.Time `gorm:"comment:创建时间"`
@@ -66,7 +66,7 @@ type AgentSession struct {
 	State string `gorm:"size:32;not null;index;comment:坐席状态"`
 	// BusyReason 示忙原因码，空闲时为空。
 	BusyReason      string `gorm:"size:64;comment:示忙原因"`
-	CurrentCallID   string `gorm:"type:uuid"`
+	CurrentCallID   string `gorm:"type:uuid;default:null"`
 	PendingCheckout bool   `gorm:"not null;default:false"`
 	// CheckedInAt 签入时间。
 	CheckedInAt time.Time `gorm:"comment:签入时间"`
@@ -90,7 +90,7 @@ type AgentStateLog struct {
 	ToState string `gorm:"size:32;not null;comment:新状态"`
 	// Reason 变更原因或 busy_reason。
 	Reason string `gorm:"size:128;comment:变更原因"`
-	CallID string `gorm:"type:uuid"`
+	CallID string `gorm:"type:uuid;default:null"`
 	// CreatedAt 记录时间。
 	CreatedAt time.Time `gorm:"index;comment:记录时间"`
 }

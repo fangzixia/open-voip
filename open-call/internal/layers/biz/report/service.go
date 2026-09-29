@@ -60,12 +60,14 @@ type Service struct {
 	db      *gorm.DB
 	runtime interface {
 		ListCalls(context.Context) ([]ports.CallView, error)
+		AgentSession(context.Context, string) (ports.SwitchAgentSession, error)
 	}
 }
 
 // NewService 创建报表服务。
 func NewService(db *gorm.DB, runtime interface {
 	ListCalls(context.Context) ([]ports.CallView, error)
+	AgentSession(context.Context, string) (ports.SwitchAgentSession, error)
 }) *Service {
 	return &Service{db: db, runtime: runtime}
 }
@@ -80,11 +82,21 @@ func (s *Service) Live(ctx context.Context) (Live, error) {
 	if err != nil {
 		return out, err
 	}
-	if err := s.db.WithContext(ctx).Model(&models.AgentSession{}).Where("state <> ?", "offline").Count(&out.AgentsOnline).Error; err != nil {
+	var agents []models.Agent
+	if err := s.db.WithContext(ctx).Find(&agents).Error; err != nil {
 		return out, err
 	}
-	if err := s.db.WithContext(ctx).Model(&models.AgentSession{}).Where("state = ?", "on_call").Count(&out.AgentsOnCall).Error; err != nil {
-		return out, err
+	for _, agent := range agents {
+		session, err := s.runtime.AgentSession(ctx, agent.ID)
+		if err != nil {
+			return out, err
+		}
+		if session.State != "offline" {
+			out.AgentsOnline++
+		}
+		if session.State == "on_call" {
+			out.AgentsOnCall++
+		}
 	}
 	out.ActiveCalls = int64(len(calls))
 	var queues []models.Queue
@@ -176,7 +188,7 @@ func (s *Service) Historical(ctx context.Context, from, to, queueID string) (His
 	if err := scoped().Select("COALESCE(SUM(screen_share_count),0)").Scan(&out.ScreenShareCount).Error; err != nil {
 		return out, err
 	}
-	if err := s.db.WithContext(ctx).Model(&models.AgentStateLog{}).Where("to_state = ? AND reason = ?", "busy", "break").Count(&out.BusyReasonBreak).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&models.AgentStateProjection{}).Where("to_state = ? AND reason = ?", "busy", "break").Count(&out.BusyReasonBreak).Error; err != nil {
 		return out, err
 	}
 	return out, nil
@@ -196,11 +208,11 @@ func (s *Service) AgentUtilization(ctx context.Context, from, to string) ([]Agen
 		return nil, errs.InvalidRequest("单次查询范围不能超过 366 天")
 	}
 
-	var initial []models.AgentStateLog
-	if err := s.db.WithContext(ctx).Raw(`SELECT DISTINCT ON (agent_id) * FROM oc_agent_state_log WHERE created_at < ? ORDER BY agent_id, created_at DESC`, start).Scan(&initial).Error; err != nil {
+	var initial []models.AgentStateProjection
+	if err := s.db.WithContext(ctx).Raw(`SELECT DISTINCT ON (agent_id) * FROM oc_agent_state_projection WHERE created_at < ? ORDER BY agent_id, created_at DESC`, start).Scan(&initial).Error; err != nil {
 		return nil, err
 	}
-	var logs []models.AgentStateLog
+	var logs []models.AgentStateProjection
 	if err := s.db.WithContext(ctx).Where("created_at >= ? AND created_at <= ?", start, end).Order("agent_id, created_at, id").Find(&logs).Error; err != nil {
 		return nil, err
 	}

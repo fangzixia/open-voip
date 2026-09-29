@@ -11,8 +11,6 @@ import (
 	"gorm.io/gorm"
 
 	"open-call/internal/errs"
-	"open-call/internal/ports"
-	"open-call/internal/ports/dto"
 	"open-call/internal/store/models"
 )
 
@@ -85,35 +83,10 @@ type ListResult struct {
 	Total    int64 `json:"total"`
 }
 
-// PolicyDefaults 无队列通话及队列策略共用的组织级录音默认值（L4 配置，不交给 L3 拼装）。
-type PolicyDefaults struct {
-	// Mode 无队列时的默认录音模式，通常为 audio。
-	Mode string
-	// NotifyMessage 录音告知文案。
-	NotifyMessage string
-	// RetainDays 保留天数。
-	RetainDays int
-}
+// Service 只维护队列配置草稿，运行策略在 Switch 执行。
+type Service struct{ db *gorm.DB }
 
-// Service 负责业务侧队列配置草稿与展示。
-type Service struct {
-	db       *gorm.DB
-	defaults PolicyDefaults
-}
-
-// NewService 创建队列/ACD 服务。
-func NewService(db *gorm.DB, events ports.AgentEventPublisher, defaults PolicyDefaults) *Service {
-	if defaults.Mode == "" {
-		defaults.Mode = "audio"
-	}
-	if defaults.RetainDays <= 0 {
-		defaults.RetainDays = 90
-	}
-	_ = events
-	return &Service{db: db, defaults: defaults}
-}
-
-var _ ports.RecordingPolicyPort = (*Service)(nil)
+func NewService(db *gorm.DB) *Service { return &Service{db: db} }
 
 // List 分页。
 func (s *Service) List(ctx context.Context, page, pageSize int) (ListResult, error) {
@@ -360,7 +333,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 func (s *Service) Delete(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var refs int64
-		if err := tx.Model(&models.DIDRoute{}).Where("queue_id = ?", id).Count(&refs).Error; err != nil {
+		if err := tx.Model(&models.DIDRoute{}).Where("target_type = ? AND target_id = ?", "queue", id).Count(&refs).Error; err != nil {
 			return err
 		}
 		if refs > 0 {
@@ -431,38 +404,6 @@ func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error
 		return nil, err
 	}
 	return ids, nil
-}
-
-// ForQueue 返回队列录音策略；无队列时用组织默认，未知队列视为关闭。
-func (s *Service) ForQueue(ctx context.Context, queueID string) (dto.RecordingPolicy, error) {
-	if queueID == "" {
-		return composeRecordingPolicy(nil, s.defaults), nil
-	}
-	var q models.Queue
-	if err := s.db.WithContext(ctx).First(&q, "id = ?", queueID).Error; err != nil {
-		off := s.defaults
-		off.Mode = "off"
-		return composeRecordingPolicy(nil, off), nil
-	}
-	return composeRecordingPolicy(&q, s.defaults), nil
-}
-
-func composeRecordingPolicy(q *models.Queue, d PolicyDefaults) dto.RecordingPolicy {
-	out := dto.RecordingPolicy{
-		Mode:          d.Mode,
-		NotifyMessage: d.NotifyMessage,
-		RetainDays:    d.RetainDays,
-	}
-	if q == nil {
-		return out
-	}
-	mode := q.RecordingPolicy
-	if mode == "" {
-		mode = "off"
-	}
-	out.Mode = mode
-	out.NotifyGuest = q.AnnounceRecording
-	return out
 }
 
 func queueSkills(db *gorm.DB, queueID string) []string {

@@ -232,20 +232,28 @@ func (u *sipUA) ipAllowed(src string) bool {
 
 func (u *sipUA) trunkID(src string) string {
 	ip := hostPortIP(src)
+	matched := ""
 	for _, trunk := range u.cfg.Trunks {
-		for _, network := range parseAllowedNets(trunk.AllowedCIDRs) {
-			if network.Contains(ip) {
-				return trunk.ID
+		found := ipInNets(ip, parseAllowedNets(trunk.AllowedCIDRs))
+		if !found {
+			ips, err := net.LookupIP(strings.TrimSpace(trunk.Host))
+			if err == nil {
+				for _, hostIP := range ips {
+					if hostIP.Equal(ip) {
+						found = true
+						break
+					}
+				}
 			}
 		}
-		if hostIP := net.ParseIP(strings.TrimSpace(trunk.Host)); hostIP != nil && hostIP.Equal(ip) {
-			return trunk.ID
+		if found {
+			if matched != "" {
+				return ""
+			}
+			matched = trunk.ID
 		}
 	}
-	if len(u.cfg.Trunks) == 1 {
-		return u.cfg.Trunks[0].ID
-	}
-	return ""
+	return matched
 }
 
 // onInvite 校验来源和设备身份，协商 G.711 媒体并创建呼入 SIP 对话。
@@ -263,7 +271,7 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		}
 		deviceCall = true
 	}
-	if !deviceCall && !u.ipAllowed(src) {
+	if !deviceCall && (!u.ipAllowed(src) || u.trunkID(src) == "") {
 		slog.Warn("拒绝未授权 SIP INVITE", "src", src)
 		_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusForbidden, "Forbidden", nil))
 		return
