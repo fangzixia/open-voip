@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ConfigBundle is the complete immutable call-centre configuration for one application.
+// ConfigBundle 单个应用的完整、不可变呼叫中心配置快照。
 type ConfigBundle struct {
 	Version int64         `json:"version,omitempty"`
 	Queues  []QueueConfig `json:"queues"`
@@ -92,7 +92,7 @@ type QueueStatusView struct {
 	BusyAgents      int64  `json:"busy_agents"`
 }
 
-// CallCenterAdminPort is the only mutable configuration and agent-presence surface.
+// CallCenterAdminPort 唯一可变的配置与坐席在线状态管理接口。
 type CallCenterAdminPort interface {
 	StoreConfig(context.Context, ConfigBundle) (ConfigVersionView, error)
 	ActivateConfig(context.Context, int64) (ConfigVersionView, error)

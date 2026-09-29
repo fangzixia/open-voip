@@ -19,7 +19,7 @@ type AgentInfo struct {
 	VideoCapable bool `json:"video_capable"`
 	// DisplayName 展示名。
 	DisplayName string `json:"display_name"`
-	// State 当前签入状态，未签入为空或 offline。
+	// State 当前签入状态，未签入为空或离线（offline）。
 	State string `json:"state"`
 }
 

@@ -83,7 +83,49 @@ func prepareSwitchRequest(r *http.Request, p auth.Principal, client *switchapi.C
 		}
 		return replaceCommandBody(r, body)
 	}
+	if isSwitchWrite(path) {
+		body, err := readCommandBody(r)
+		if err != nil {
+			return err
+		}
+		if _, ok := body["expected_version"]; !ok && view.Version > 0 {
+			body["expected_version"] = view.Version
+		}
+		return replaceCommandBody(r, body)
+	}
 	return nil
+}
+
+func isSwitchWrite(path string) bool {
+	if strings.HasSuffix(path, "/turn-credentials") {
+		return false
+	}
+	if path == "/switch/v2/calls/outbound" || strings.HasPrefix(path, "/switch/v2/supervisor/") {
+		return true
+	}
+	if !strings.HasPrefix(path, "/switch/v2/calls/") {
+		return false
+	}
+	if strings.Contains(path, "/bridges/") || strings.HasSuffix(path, "/bridges") || strings.HasSuffix(path, "/bridge") {
+		return true
+	}
+	if strings.Contains(path, "/legs/") {
+		return strings.HasSuffix(path, "/hold") || strings.HasSuffix(path, "/reject") ||
+			strings.HasSuffix(path, "/playbacks") || strings.Contains(path, "/playbacks/")
+	}
+	for _, suffix := range []string{
+		"/hangup", "/decline", "/hold", "/transfer", "/transfer/complete",
+		"/video/request", "/video/respond", "/video/downgrade", "/screen-share", "/conference", "/dtmf",
+	} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	// POST /calls/{id}/answer（坐席接听，非 SDP）
+	if strings.HasSuffix(path, "/answer") && !strings.Contains(path, "/legs/") {
+		return true
+	}
+	return false
 }
 
 func ownsCall(p auth.Principal, callID string, view ports.CallView) bool {

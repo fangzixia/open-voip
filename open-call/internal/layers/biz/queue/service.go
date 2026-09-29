@@ -113,7 +113,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int) (ListResult, err
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-// ListPublic Demo 访客可见队列。
+// ListPublic 演示环境访客可见队列列表。
 func (s *Service) ListPublic(ctx context.Context) ([]DTO, error) {
 	var rows []models.Queue
 	if err := s.db.WithContext(ctx).Order("created_at").Find(&rows).Error; err != nil {

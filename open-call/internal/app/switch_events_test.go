@@ -20,6 +20,7 @@ import (
 	"open-call/internal/store/models"
 )
 
+// TestSwitchEventProjectionReplay 验证事件投影与出站投递在崩溃重放场景下保持幂等。
 func TestSwitchEventProjectionReplay(t *testing.T) {
 	dsn := os.Getenv("OPEN_VOIP_TEST_DSN")
 	if dsn == "" {
@@ -113,7 +114,7 @@ func TestEventInboxProjectionCursorAndDelivery(t *testing.T) {
 			t.Fatal(err)
 		}
 		ev := switchapi.Event{ID: cursor + 1, ApplicationID: "projection-test", AgentID: uuid.NewString(), Type: "agent.routing_state_changed", CreatedAt: "invalid", Payload: map[string]any{"state": "idle"}}
-		if err := commitSwitchEvent(ctx, tx, ev); err == nil {
+		if err := CommitSwitchEvent(ctx, tx, ev, nil); err == nil {
 			t.Fatal("invalid projection committed")
 		}
 		var after int64
@@ -128,7 +129,7 @@ func TestEventInboxProjectionCursorAndDelivery(t *testing.T) {
 		}
 		ev.CreatedAt = datetime.Format(time.Now())
 		for i := 0; i < 2; i++ {
-			if err := commitSwitchEvent(ctx, tx, ev); err != nil {
+			if err := CommitSwitchEvent(ctx, tx, ev, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -137,7 +138,7 @@ func TestEventInboxProjectionCursorAndDelivery(t *testing.T) {
 			t.Fatal("projection duplicated")
 		}
 		sink := &projectionSink{fail: true}
-		if err := deliverSwitchEvents(ctx, tx, sink); err == nil {
+		if err := DeliverSwitchEvents(ctx, tx, sink); err == nil {
 			t.Fatal("delivery failure ignored")
 		}
 		var row models.SwitchEventOutbox
@@ -145,7 +146,7 @@ func TestEventInboxProjectionCursorAndDelivery(t *testing.T) {
 			t.Fatal("failed delivery was acknowledged")
 		}
 		sink.fail = false
-		if err := deliverSwitchEvents(ctx, tx, sink); err != nil {
+		if err := DeliverSwitchEvents(ctx, tx, sink); err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.First(&row, "event_id=?", ev.ID).Error; err != nil || row.DeliveredAt == nil {

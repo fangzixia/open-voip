@@ -16,6 +16,8 @@ import (
 
 type ivrRuntime struct {
 	doc             ivrDoc
+	flowID          string
+	flowVersion     int
 	node            string
 	entered         time.Time
 	timeout         time.Duration
@@ -90,7 +92,10 @@ func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports
 	rt := s.calls[callID]
 	if rt != nil {
 		rt.legs = append(rt.legs, bot)
-		rt.ivr = &ivrRuntime{doc: doc, node: doc.Start, entered: time.Now().UTC(), timeout: 15 * time.Second}
+		rt.ivr = &ivrRuntime{
+			doc: doc, flowID: snap.FlowID, flowVersion: snap.Version,
+			node: doc.Start, entered: time.Now().UTC(), timeout: 15 * time.Second,
+		}
 	}
 	s.mu.Unlock()
 	cust := ""
@@ -109,7 +114,8 @@ func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports
 	if err := s.transition(ctx, callID, stateIVR); err != nil {
 		return err
 	}
-	_ = s.publishCall(ctx, callID, "ivr.started", "", map[string]any{"call_id": callID, "snapshot_id": snap.SnapshotID})
+	s.syncIVRSession(ctx, callID)
+	_ = s.publishCall(ctx, callID, "routing.entered_ivr", "", map[string]any{"call_id": callID, "snapshot_id": snap.SnapshotID, "flow_id": snap.FlowID})
 	s.runIVRNode(ctx, callID)
 	return nil
 }
@@ -146,7 +152,7 @@ func (s *Service) tickIVR(ctx context.Context, callID string) {
 	s.gotoIVR(ctx, callID, next)
 }
 
-// onDTMF 处理菜单按键；无效输入达到重试上限后走 invalid 或 default 分支。
+// onDTMF 处理菜单按键；无效输入达到重试上限后走无效（invalid）或默认（default）分支。
 func (s *Service) onDTMF(ctx context.Context, callID, digit string) {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -235,11 +241,14 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 	_ = s.publishCall(ctx, callID, "ivr.prompt", "", map[string]any{"call_id": callID, "prompt": node.Prompt, "type": node.Type})
 	switch node.Type {
 	case "business_action":
-		rt.ivr.actionID = uuid.NewString()
-		rt.ivr.entered = time.Now().UTC()
-		rt.ivr.timeout = time.Duration(node.TimeoutSec) * time.Second
-		if err := s.deps.BusinessActions.BeginBusinessAction(ctx, ports.BusinessAction{ID: rt.ivr.actionID, CallID: callID, NodeID: rt.ivr.node, Action: node.Action, Outcomes: node.Choices, Deadline: rt.ivr.entered.Add(rt.ivr.timeout)}); err != nil {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+		// 暂停 IVR 媒体推进，等待业务系统通过 API 提交已声明的结果分支。
+		if rt.ivr.actionID == "" {
+			rt.ivr.actionID = uuid.NewString()
+			rt.ivr.entered = time.Now().UTC()
+			rt.ivr.timeout = time.Duration(node.TimeoutSec) * time.Second
+			if err := s.deps.BusinessActions.BeginBusinessAction(ctx, ports.BusinessAction{ID: rt.ivr.actionID, CallID: callID, NodeID: rt.ivr.node, Action: node.Action, Outcomes: node.Choices, Deadline: rt.ivr.entered.Add(rt.ivr.timeout)}); err != nil {
+				_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			}
 		}
 	case "hangup":
 		_ = s.Hangup(ctx, callID, dto.HangupReasonNormal)
@@ -263,7 +272,38 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		s.gotoIVR(ctx, callID, next)
 	case "play":
 		// 放音节点由定时 tick 在播放时长结束后推进。
+	case "tts", "asr":
+		s.emitCall(ctx, callID, "command.failed", "", map[string]any{"call_id": callID, "reason": "tts_asr_unsupported", "node_type": node.Type})
+		next := node.Default
+		if next == "" {
+			_ = s.Hangup(ctx, callID, dto.HangupReasonNormal)
+			return
+		}
+		s.gotoIVR(ctx, callID, next)
 	}
+	s.syncIVRSession(ctx, callID)
+}
+
+func (s *Service) syncIVRSession(ctx context.Context, callID string) {
+	if s.deps.IVRSessions == nil {
+		return
+	}
+	s.mu.Lock()
+	rt := s.calls[callID]
+	s.mu.Unlock()
+	if rt == nil || rt.ivr == nil {
+		return
+	}
+	stateJSON, _ := json.Marshal(map[string]any{
+		"invalid_attempts": rt.ivr.invalidAttempts,
+		"action_id":        rt.ivr.actionID,
+	})
+	var deadline *time.Time
+	if rt.ivr.timeout > 0 {
+		d := rt.ivr.entered.Add(rt.ivr.timeout)
+		deadline = &d
+	}
+	_ = s.deps.IVRSessions.UpsertIVRSession(ctx, rt.rec.ApplicationID, callID, rt.ivr.flowID, rt.ivr.flowVersion, rt.ivr.node, string(stateJSON), deadline)
 }
 
 // enterQueue 清理 IVR 状态，播放等候音并开始派单。
@@ -273,6 +313,19 @@ func (s *Service) enterQueue(ctx context.Context, callID string) error {
 	}
 	s.mu.Lock()
 	rt := s.calls[callID]
+	queueID := ""
+	if rt != nil && rt.rec.QueueID != nil {
+		queueID = *rt.rec.QueueID
+	}
+	s.mu.Unlock()
+	if queueID != "" {
+		_ = s.publishCall(ctx, callID, "queue.entered", "", map[string]any{"call_id": callID, "queue_id": queueID})
+	}
+	if s.deps.IVRSessions != nil {
+		_ = s.deps.IVRSessions.DeleteIVRSession(ctx, callID)
+	}
+	s.mu.Lock()
+	rt = s.calls[callID]
 	if rt != nil {
 		rt.queuedAt = time.Now().UTC()
 		rt.ivr = nil
@@ -312,7 +365,7 @@ func (s *Service) publishPosition(ctx context.Context, callID string) {
 		}
 	}
 	s.mu.Unlock()
-	_ = s.publishCall(ctx, callID, "queue.position", "", map[string]any{"call_id": callID, "position": pos, "message": msg})
+	_ = s.publishCall(ctx, callID, "queue.position_changed", "", map[string]any{"call_id": callID, "position": pos, "message": msg})
 }
 
 // withinHours 按队列时区判断营业窗口；无法读取或解析时拒绝营业。
@@ -356,7 +409,7 @@ func withinHours(cfg ports.ConfigSnapshotPort, ctx context.Context, queueID stri
 	return cur >= parts[0] && cur < parts[1]
 }
 
-// CompleteBusinessAction accepts only an outcome declared in the pinned flow.
+// CompleteBusinessAction 仅接受流程中已声明的业务结果，并驱动 IVR 跳转。
 func (s *Service) CompleteBusinessAction(ctx context.Context, callID, actionID, outcome string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -393,7 +446,7 @@ func (s *Service) CompleteBusinessAction(ctx context.Context, callID, actionID, 
 	return nil
 }
 
-// routeQueue applies the pinned target configuration before entering a fresh waiting period.
+// routeQueue 在进入新的排队周期前应用已固定的队列目标配置。
 func (s *Service) routeQueue(ctx context.Context, callID, queueID string) error {
 	q, err := s.deps.Config.GetQueue(ctx, queueID)
 	if err != nil {

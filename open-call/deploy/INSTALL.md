@@ -17,7 +17,7 @@
   data/
 ```
 
-替换集成密钥（两端一致）、数据库密码和外部地址。open-call 另需替换 JWT、bootstrap 密码。`integration` 中的对端 URL 必须可互访。默认 HTTP 端口为 8080。服务只读取显式 `-config` 文件，不使用环境变量覆盖部署配置。
+先对 Switch 执行 register，将返回的 `secret` 写入 `integration.secret`，并配置 `application_id`、`events_callback_url` 与 `switch_base_url`（见 [switch-standalone-runbook](../../docs/switch-standalone-runbook.md)）。另需替换 JWT、bootstrap 密码。默认 HTTP 端口为 8080。
 
 启动时自动执行 `internal/store/migrate/sql` 内嵌迁移并记录 `oc_schema_migrations`；迁移失败会停止启动。旧版共用 `schema_migrations` 不再参与判断。新版本增加边界/恢复字段；升级前停止派单、排空通话、备份数据库和录音目录。旧单体无前缀表须制定单独数据迁移方案，禁止直接复用后假设自动兼容。
 
@@ -35,12 +35,12 @@ sudo journalctl -u open-call -f
 
 ## 网络与验证
 
-前端静态文件由 Nginx 托管，浏览器 API/WS 只代理 open-call。HTTPS 是非 localhost 浏览器麦克风访问的前提。对外反代必须拦截 `/platform/v1`；允许交换服务内网地址访问它。open-switch `/switch/v1` 仅允许 open-call 来源；跨机器可使用内部 TLS。
+前端静态文件由 Nginx 托管，浏览器 API/WS 只代理 open-call。HTTPS 是非 localhost 浏览器麦克风访问的前提。对外反代仅公开 `/api/v1` 与静态资源；open-switch `/switch/v2` 不对浏览器暴露，由本服务内网调用；跨机器可使用内部 TLS。
 
 SIP 配置和每个设备的密码只在 open-switch；SIP UDP 5060 及 RTP 范围仅对设备/SBC 网络开放。示例 WebRTC 10000–20000 与 SIP 20002–20100 不重叠。公网 NAT、TLS SIP、TURN 均须现场验证。
 
 `/health` 与 `/health/live` 是存活探针；`/health/ready` 同时检查业务库和 open-switch，依赖不可用时返回 503。受保护的 `/api/v1/status` 供管理员和主管查看数据库、交换服务、活动通话、WebSocket、Webhook 积压与进程指标，不返回本地目录。
 
-备份必须包括：两份 PostgreSQL 数据、两份配置、open-switch 的录音和 prompts。open-call 配置导出包含用户、坐席、技能、队列、绑定、DID、IVR 发布版本和 Webhook 订阅，可先用 `dry_run=true` 预检再导入；密码摘要和 Webhook 密钥不导出，因此完整灾备仍以 PostgreSQL 物理或逻辑备份为准。监控 Webhook 死信、open-switch outbox 与录音清理失败记录，禁止直接丢弃积压数据。
+备份必须包括：两份 PostgreSQL 数据、两份配置、open-switch 的录音和 prompts。open-call 配置导出包含用户、坐席、技能、队列、绑定、DID、IVR 发布版本和 Webhook 订阅，可先用 `dry_run=true` 预检再导入；密码摘要和 Webhook 密钥不导出，因此完整灾备仍以 PostgreSQL 物理或逻辑备份为准。监控 Switch 事件游标滞后、Webhook 死信与录音清理失败记录，禁止直接丢弃积压数据。
 
 升级前先备份数据库，在同版本副本上运行迁移两次验证幂等，再切换生产。`bootstrap.enabled` 在生产必须为 `false`；JWT 密钥至少 32 字符，集成密钥至少 16 字符。修改密码、角色或禁用账号会立即撤销现有 REST、刷新令牌和 WebSocket 会话。

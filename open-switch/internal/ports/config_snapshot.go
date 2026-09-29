@@ -39,7 +39,7 @@ type QueueSnapshot struct {
 	PriorityEnabled bool `json:"priority_enabled"`
 }
 
-// IVRNodeSnapshot IVR 节点简化表示（Phase 1 细化）。
+// IVRNodeSnapshot IVR 节点简化表示（第一阶段细化）。
 type IVRNodeSnapshot struct {
 	// Type 节点类型：play / menu / route_queue 等。
 	Type string `json:"type"`
@@ -63,7 +63,7 @@ type IVRSnapshot struct {
 	Root IVRNodeSnapshot `json:"root"`
 }
 
-// DIDRouteSnapshot is the authoritative ingress match.
+// DIDRouteSnapshot 权威的呼入号码路由匹配结果。
 type DIDRouteSnapshot struct {
 	ApplicationID string `json:"application_id"`
 	ConfigVersion int64  `json:"config_version"`
@@ -78,16 +78,18 @@ type DIDRouteSnapshot struct {
 type BusinessHours struct {
 	// Timezone IANA 时区名。
 	Timezone string `json:"timezone"`
-	// WeekdayHours 周一到周日是否营业的简化 JSON 或结构，Phase 1 实现。
+	// WeekdayHours 周一到周日是否营业的简化 JSON 或结构，第一阶段实现。
 	WeekdayHours string `json:"weekday_hours"`
 }
 
 // ConfigSnapshotPort 由 L4 configpub 实现，L3 IVR/路由只读已发布配置。
 type ConfigSnapshotPort interface {
-	// GetQueue 读取队列快照；不存在返回 error。
+	// GetQueue 读取队列快照；不存在时返回错误。
 	GetQueue(ctx context.Context, queueID string) (QueueSnapshot, error)
-	// GetLatestIVR 读取流程最新 published 快照。
+	// GetLatestIVR 读取流程最新已发布快照。
 	GetLatestIVR(ctx context.Context, flowID string) (IVRSnapshot, error)
+	// GetIVRSnapshot 按配置版本与流程版本读取已发布快照（用于崩溃恢复）。
+	GetIVRSnapshot(ctx context.Context, configVersion int64, flowID string, flowVersion int) (IVRSnapshot, error)
 	// GetBusinessHours 读取全局或队列级工作时间。
 	GetBusinessHours(ctx context.Context, queueID string) (BusinessHours, error)
 	// ResolveDID 将中继与 DID 解析为已激活的 IVR/队列入口及应用作用域。

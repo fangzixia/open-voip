@@ -1,3 +1,4 @@
+// IVR 流程可视化编辑器：草稿编辑、校验、模拟与发布绑定。
 import { LitElement, html, nothing } from "lit";
 import { NODE_TYPES, validateIVR, simulateIVR, layoutIVR } from "./ivr-model.js";
 import { ivrEditorStyles } from "./views/ivr-styles.js";

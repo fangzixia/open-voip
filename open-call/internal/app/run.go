@@ -23,6 +23,7 @@ import (
 	"open-call/internal/layers/biz/audit"
 	"open-call/internal/layers/biz/auth"
 	"open-call/internal/layers/biz/authz"
+	"open-call/internal/layers/biz/businessaction"
 	"open-call/internal/layers/biz/cdr"
 	"open-call/internal/layers/biz/configio"
 	"open-call/internal/layers/biz/configpub"
@@ -107,6 +108,7 @@ func Run(configPath string) error {
 	auditSvc := audit.NewService(db)
 	cfgIO := configio.NewService(db)
 	guestSvc := guest.NewService(db, switchClient, cfg.Public.GuestBaseURL)
+	businessActions := businessaction.NewService(db)
 
 	wsHub.Configure(authSvc, switchClient, agentSvc, switchClient, hookSvc)
 
@@ -114,32 +116,34 @@ func Run(configPath string) error {
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	go monitorLogDisk(workerCtx, log, cfg.Log.Dir)
-	go consumeSwitchEvents(workerCtx, db, switchClient, wsHub, log)
+	// Switch HTTP callback 投影事件；后台仅重试出站 WebSocket/Webhook 投递。
+	go runSwitchOutboxDelivery(workerCtx, db, wsHub, log)
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
 	apiRouter := apphttp.NewRouter(apphttp.RouterDeps{
-		Config:          *cfg,
-		Auth:            authSvc,
-		Authorization:   authzSvc,
-		OIDC:            oidcSvc,
-		Users:           userSvc,
-		Agents:          agentSvc,
-		Queues:          queueSvc,
-		Guests:          guestSvc,
-		CDR:             cdrRecorder,
-		IVR:             ivrSvc,
-		Skills:          skillSvc,
-		Recordings:      recMeta,
-		Reports:         reportSvc,
-		Webhooks:        hookSvc,
-		Audit:           auditSvc,
-		ConfigIO:        cfgIO,
-		Snapshots:       configSnap,
-		ConfigPublisher: configPublisher,
-		AgentRuntime:    switchClient,
-		Hub:             wsHub,
-		Calls:           switchClient,
+		Config:             *cfg,
+		SwitchEventHandler: SwitchEventHTTP(db, cfg.Integration, wsHub, businessActions, switchClient),
+		Auth:               authSvc,
+		Authorization:      authzSvc,
+		OIDC:               oidcSvc,
+		Users:              userSvc,
+		Agents:             agentSvc,
+		Queues:             queueSvc,
+		Guests:             guestSvc,
+		CDR:                cdrRecorder,
+		IVR:                ivrSvc,
+		Skills:             skillSvc,
+		Recordings:         recMeta,
+		Reports:            reportSvc,
+		Webhooks:           hookSvc,
+		Audit:              auditSvc,
+		ConfigIO:           cfgIO,
+		Snapshots:          configSnap,
+		ConfigPublisher:    configPublisher,
+		AgentRuntime:       switchClient,
+		Hub:                wsHub,
+		Calls:              switchClient,
 		Status: apphttp.StatusProvider{
 			DB:            db,
 			Runtime:       switchClient,

@@ -15,21 +15,20 @@ import (
 	"open-call/internal/errs"
 )
 
-// WrapSwitchBFF 将 /api/v1/calls 与相关 supervisor 通话路径代理到 open-switch。
+// WrapSwitchBFF 将允许的 /api/v1 通话动作经 switchapi 服务端调用；IVR 资源仍走受限反向代理。
 func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, next http.Handler, allowedOrigins ...[]string) http.Handler {
 	target, err := url.Parse(strings.TrimRight(cfg.SwitchBaseURL, "/"))
 	if err != nil {
 		panic(err)
 	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	ivrProxy := httputil.NewSingleHostReverseProxy(target)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 30 * time.Second
-	proxy.Transport = transport
+	ivrProxy.Transport = transport
 	switchClient := switchapi.NewClient(cfg)
-	origDirector := proxy.Director
-	proxy.Director = func(r *http.Request) {
+	origDirector := ivrProxy.Director
+	ivrProxy.Director = func(r *http.Request) {
 		origDirector(r)
-		// Switch 只接受服务命令；删除浏览器伪造的身份提示头。
 		r.Header.Del("X-Principal")
 		r.Header.Del("X-Agent-ID")
 		r.Header.Set("Authorization", "Bearer "+cfg.Secret)
@@ -39,13 +38,11 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		if traceID := observability.From(r.Context()).TraceID; traceID != "" {
 			r.Header.Set("X-Trace-ID", traceID)
 		}
-		if callID := switchCallID(r.URL.Path); callID != "" {
-			r.Header.Set("X-Call-ID", callID)
-		}
 	}
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+	ivrProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		httpapi.Failure(w, http.StatusBadGateway, "switch_unavailable", "交换服务暂不可用")
 	}
+
 	protected := middleware.Auth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := middleware.PrincipalFromContext(r.Context())
 		if !ok {
@@ -65,7 +62,27 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 			httpapi.Error(w, err)
 			return
 		}
-		proxy.ServeHTTP(w, r)
+		r = attachSwitchMutation(r)
+		if err := serveSwitchBFF(w, r, switchClient); err != nil {
+			httpapi.Error(w, err)
+			return
+		}
+	}))
+
+	ivrProtected := middleware.Auth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := middleware.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.Error(w, errs.Unauthorized("未认证"))
+			return
+		}
+		code := switchPermission(r.Method, r.URL.Path)
+		if !p.IsGuest() && !p.Has(code) {
+			httpapi.Error(w, errs.Forbidden("无权限"))
+			return
+		}
+		r = r.Clone(r.Context())
+		r.URL.Path = strings.Replace(r.URL.Path, "/api/v1/ivr-assets", "/switch/v2/ivr-assets", 1)
+		ivrProxy.ServeHTTP(w, r)
 	}))
 
 	origins := []string{}
@@ -73,6 +90,10 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		origins = allowedOrigins[0]
 	}
 	return middleware.RequestID(httpapi.Recover(middleware.CORS(origins)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isIVRAssetPath(r.URL.Path) {
+			ivrProtected.ServeHTTP(w, r)
+			return
+		}
 		if !shouldProxyToSwitch(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
@@ -81,6 +102,10 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		r.URL.Path = mapSwitchPath(r.URL.Path)
 		protected.ServeHTTP(w, r)
 	}))))
+}
+
+func isIVRAssetPath(path string) bool {
+	return path == "/api/v1/ivr-assets" || strings.HasPrefix(path, "/api/v1/ivr-assets/")
 }
 
 func switchPermission(method, path string) string {
@@ -116,8 +141,8 @@ func mapSwitchPath(path string) string {
 	switch {
 	case path == "/api/v1/calls/outbound":
 		return "/switch/v2/calls/outbound"
-	case strings.HasPrefix(path, "/api/v1/ivr-assets"):
-		return strings.Replace(path, "/api/v1/ivr-assets", "/switch/v2/ivr-assets", 1)
+	case path == "/api/v1/calls":
+		return "/switch/v2/calls"
 	case strings.HasPrefix(path, "/api/v1/calls/"):
 		return strings.Replace(path, "/api/v1/calls/", "/switch/v2/calls/", 1)
 	case strings.HasPrefix(path, "/api/v1/supervisor/calls/"):
@@ -130,27 +155,33 @@ func mapSwitchPath(path string) string {
 }
 
 func shouldProxyToSwitch(path string) bool {
-	if path == "/api/v1/ivr-assets" || strings.HasPrefix(path, "/api/v1/ivr-assets/") {
-		return true
+	if isIVRAssetPath(path) {
+		return false
 	}
-	if path == "/api/v1/calls/outbound" {
+	if path == "/api/v1/calls/outbound" || path == "/api/v1/calls" {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/v1/calls/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/api/v1/calls/"), "/")
-		if len(parts) == 1 {
-			return parts[0] != "inbound"
+		if len(parts) == 1 && parts[0] != "" && parts[0] != "inbound" && parts[0] != "outbound" {
+			return true
 		}
 		suffix := strings.Join(parts[1:], "/")
 		switch suffix {
-		case "answer", "decline", "hangup", "hold", "transfer", "transfer/complete", "video/request", "video/respond", "video/downgrade", "screen-share", "conference", "dtmf", "turn-credentials":
+		case "answer", "decline", "hangup", "hold", "transfer", "transfer/complete", "video/request", "video/respond", "video/downgrade", "screen-share", "conference", "dtmf", "turn-credentials", "bridges", "bridge":
 			return true
 		}
-		if len(parts) == 4 && parts[1] == "legs" {
+		if len(parts) >= 3 && parts[1] == "legs" {
 			switch parts[3] {
-			case "offer", "answer", "ice", "mute":
+			case "offer", "answer", "ice", "mute", "hold", "reject", "playbacks":
 				return true
 			}
+			if len(parts) >= 5 && parts[3] == "playbacks" {
+				return true
+			}
+		}
+		if len(parts) >= 3 && parts[1] == "bridges" {
+			return true
 		}
 		return false
 	}

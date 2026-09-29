@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// BusinessAction describes a bounded request for an application-owned decision.
+// BusinessAction 表示一次有界业务决策请求：IVR 暂停等待业务系统选择已声明的结果分支。
 type BusinessAction struct {
 	ID       string
 	CallID   string
@@ -17,6 +17,7 @@ type BusinessAction struct {
 	Outcome  string
 }
 
+// BusinessActionStore 持久化并解析业务动作的生命周期。
 type BusinessActionStore interface {
 	BeginBusinessAction(context.Context, BusinessAction) error
 	GetBusinessAction(context.Context, string) (BusinessAction, error)

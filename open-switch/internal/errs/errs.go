@@ -31,7 +31,7 @@ const (
 
 // APIError 可映射为 HTTP JSON 错误体。
 type APIError struct {
-	// Kind 对应 error 字段，如 unauthorized。
+	// Kind 对应响应 JSON 中的 error 种类，如 unauthorized。
 	Kind string
 	// Code 可选业务码。
 	Code string
@@ -39,6 +39,8 @@ type APIError struct {
 	Message string
 	// HTTP 状态码。
 	HTTP int
+	// Data 可选附加数据（如版本冲突时的最新通话视图）。
+	Data any
 }
 
 func (e *APIError) Error() string {
@@ -95,6 +97,19 @@ func Conflict(msg, code string) *APIError {
 	return &APIError{Kind: "conflict", Code: code, Message: msg, HTTP: http.StatusConflict}
 }
 
+// VersionConflict 乐观锁版本冲突（HTTP 409），Data 为最新通话视图。
+func VersionConflict(view any, msg string) *APIError {
+	if msg == "" {
+		msg = "通话版本已变化"
+	}
+	return &APIError{Kind: "conflict", Code: "VERSION_MISMATCH", Message: msg, HTTP: http.StatusConflict, Data: view}
+}
+
+// CursorExpired 事件游标早于保留窗口（HTTP 410）。
+func CursorExpired(msg string) *APIError {
+	return &APIError{Kind: "cursor_expired", Code: "CURSOR_EXPIRED", Message: msg, HTTP: http.StatusGone}
+}
+
 // Unprocessable 无法处理（HTTP 422）。
 func Unprocessable(msg, code string) *APIError {
 	return &APIError{Kind: "invalid_request", Code: code, Message: msg, HTTP: http.StatusUnprocessableEntity}
@@ -110,7 +125,7 @@ func Internal(msg string) *APIError {
 	return &APIError{Kind: "internal_error", Message: msg, HTTP: http.StatusInternalServerError}
 }
 
-// AsAPIError 将任意 error 转为 APIError。
+// AsAPIError 将任意错误转为 APIError。
 func AsAPIError(err error) *APIError {
 	if err == nil {
 		return nil

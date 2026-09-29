@@ -20,7 +20,7 @@ type CallStore struct {
 	limits map[string]int
 }
 
-// SetApplicationLimits configures hard admission limits for API and SIP ingress alike.
+// SetApplicationLimits 为 API 与 SIP 入站设置应用级并发硬上限。
 func (s *CallStore) SetApplicationLimits(limits map[string]int) { s.limits = limits }
 
 // NewCallStore 创建通话持久化适配器。
@@ -79,7 +79,7 @@ func (s *CallStore) InsertCall(ctx context.Context, rec ports.CallRecord) error 
 	})
 }
 
-// InsertCallWithLeg records the call and its first leg atomically.
+// InsertCallWithLeg 在同一事务中创建通话及其第一条腿。
 func (s *CallStore) InsertCallWithLeg(ctx context.Context, rec ports.CallRecord, leg ports.CallLegRecord) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		store := &CallStore{db: tx, limits: s.limits}

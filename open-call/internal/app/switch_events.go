@@ -16,14 +16,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// consumeSwitchEvents replays the Switch's durable event stream into the
-// business WebSocket/webhook hub. The cursor advances with the durable projection and delivery intent.
-func consumeSwitchEvents(ctx context.Context, db *gorm.DB, client *switchapi.Client, sink ports.CallEventPublisher, log *slog.Logger) {
-	ticker := time.NewTicker(time.Second)
+// runSwitchOutboxDelivery 投递已投影的出站事件（Switch HTTP callback 为主路径）。
+func runSwitchOutboxDelivery(ctx context.Context, db *gorm.DB, sink ports.CallEventPublisher, log *slog.Logger) {
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if err := consumeSwitchBatch(ctx, db, client, sink); err != nil && ctx.Err() == nil {
-			log.Warn("Switch 事件待重试", "err", err)
+		if err := DeliverSwitchEvents(ctx, db, sink); err != nil && ctx.Err() == nil {
+			log.Warn("Switch 出站事件投递重试", "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -33,28 +32,8 @@ func consumeSwitchEvents(ctx context.Context, db *gorm.DB, client *switchapi.Cli
 	}
 }
 
-func consumeSwitchBatch(ctx context.Context, db *gorm.DB, client *switchapi.Client, sink ports.CallEventPublisher) error {
-	if err := deliverSwitchEvents(ctx, db, sink); err != nil {
-		return err
-	}
-	var cursor int64
-	if err := db.WithContext(ctx).Raw("SELECT last_event_id FROM oc_switch_event_cursor WHERE id=1").Scan(&cursor).Error; err != nil {
-		return err
-	}
-	events, err := client.ListEvents(ctx, cursor)
-	if err != nil {
-		return err
-	}
-	for _, ev := range events {
-		if err := commitSwitchEvent(ctx, db, ev); err != nil {
-			return err
-		}
-	}
-	return deliverSwitchEvents(ctx, db, sink)
-}
-
-// commitSwitchEvent commits the inbox, projection, delivery intent and cursor together.
-func commitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event) error {
+// CommitSwitchEvent 在同一事务中写入收件箱、业务投影、出站载荷并推进游标。
+func CommitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event, _ ports.CallEventPublisher) error {
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var cursor int64
 		if err := tx.Raw("SELECT last_event_id FROM oc_switch_event_cursor WHERE id=1 FOR UPDATE").Scan(&cursor).Error; err != nil {
@@ -71,6 +50,7 @@ func commitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event) err
 		}
 		callID := ev.CallID
 		if ev.TargetOnly {
+			// 仅面向坐席的事件不携带 call_id，避免客户侧 WebSocket 订阅收到。
 			callID = ""
 		}
 		payload := make(map[string]any, len(ev.Payload)+4)
@@ -92,8 +72,8 @@ func commitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event) err
 	})
 }
 
-// Delivery is at least once: a crash after delivery can replay the stable event ID.
-func deliverSwitchEvents(ctx context.Context, db *gorm.DB, sink ports.CallEventPublisher) error {
+// DeliverSwitchEvents 向 Hub 发布未投递的出站事件；至少投递一次，崩溃后可凭稳定 event_id 重放。
+func DeliverSwitchEvents(ctx context.Context, db *gorm.DB, sink ports.CallEventPublisher) error {
 	var rows []models.SwitchEventOutbox
 	if err := db.WithContext(ctx).Where("delivered_at IS NULL").Order("event_id").Limit(100).Find(&rows).Error; err != nil {
 		return err
@@ -113,7 +93,7 @@ func deliverSwitchEvents(ctx context.Context, db *gorm.DB, sink ports.CallEventP
 	return nil
 }
 
-// projectSwitchEvent is idempotent; replay after a delivery failure cannot duplicate history.
+// projectSwitchEvent 将技术类事件投影到业务库（话单、录音元数据、坐席状态历史）；幂等，投递失败后重放不会重复写入。
 func projectSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event) error {
 	raw, err := json.Marshal(ev.Payload)
 	if err != nil {

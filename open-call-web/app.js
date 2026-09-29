@@ -1,3 +1,4 @@
+// 统一登录壳：管理员与坐席入口、SSO 与令牌存储。
 import {LitElement, css, html} from "lit";
 import {authMe, authOptions, changePassword, exchangeSSOTicket, login, popSSOTicket, startSSO} from "./shared/api.js";
 import {apiEvents} from "./shared/http-client.js";

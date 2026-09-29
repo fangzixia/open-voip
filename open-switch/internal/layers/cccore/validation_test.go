@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// TestPublishedGraphAndCalendarValidation 校验 IVR 图与营业时间的边界用例。
 func TestPublishedGraphAndCalendarValidation(t *testing.T) {
 	for _, raw := range []string{`always`, `{"timezone":"Asia/Hong_Kong","mon":"09:00-18:00","2026-10-01":"closed"}`} {
 		if err := validateHours(raw); err != nil {

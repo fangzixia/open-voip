@@ -24,7 +24,8 @@ func (d RouterDeps) handleCallGet(w http.ResponseWriter, r *http.Request) {
 
 func (d RouterDeps) handleCallAnswer(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AgentID string `json:"agent_id"`
+		AgentID         string `json:"agent_id"`
+		ExpectedVersion int64  `json:"expected_version"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
@@ -34,7 +35,8 @@ func (d RouterDeps) handleCallAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.InvalidRequest("agent_id 必填"))
 		return
 	}
-	if err := d.CallControl.Answer(r.Context(), chi.URLParam(r, "callId"), body.AgentID); err != nil {
+	ctx := callMutationContext(r, body.ExpectedVersion)
+	if err := d.CallControl.Answer(ctx, chi.URLParam(r, "callId"), body.AgentID); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -52,14 +54,16 @@ func (d RouterDeps) handleCallHangup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Reason string `json:"reason"`
+		Reason          string `json:"reason"`
+		ExpectedVersion int64  `json:"expected_version"`
 	}
 	_ = decodeJSON(r, &body)
 	reason := dto.HangupReason(body.Reason)
 	if reason == "" {
 		reason = dto.HangupReasonNormal
 	}
-	if err := d.CallControl.Hangup(r.Context(), chi.URLParam(r, "callId"), reason); err != nil {
+	ctx := callMutationContext(r, body.ExpectedVersion)
+	if err := d.CallControl.Hangup(ctx, chi.URLParam(r, "callId"), reason); err != nil {
 		writeErr(w, err)
 		return
 	}

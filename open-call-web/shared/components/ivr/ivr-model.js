@@ -1,3 +1,4 @@
+/** IVR 节点类型与界面展示名称。 */
 export const NODE_TYPES = {
   play: "播放语音",
   menu: "按键菜单",

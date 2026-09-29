@@ -1,6 +1,9 @@
 import { request } from "./http-client.js";
 import { formatDate, formatDateTime } from "./datetime.js";
+import { callMutate, setCallVersion } from "./call-mutation.js";
 const apiFetch = request;
+
+export { setCallVersion, getCallVersion } from "./call-mutation.js";
 
 export function fetchStatus() {
   return apiFetch("/api/v1/status", { method: "GET" });
@@ -77,19 +80,65 @@ export function guestJoin(queueId, sessionType, priority = 0, userId = "") {
   });
 }
 
-export function getCall(callId) {
-  return apiFetch(`/api/v1/calls/${callId}`);
+export async function getCall(callId) {
+  const view = await apiFetch(`/api/v1/calls/${callId}`);
+  if (view?.version != null) setCallVersion(view.version);
+  return view;
+}
+
+export async function listOpenCalls() {
+  const data = await apiFetch("/api/v1/calls?status=open");
+  return data?.items || [];
+}
+
+export function createBridge(callId, legA, legB) {
+  return callMutate(`/api/v1/calls/${callId}/bridges`, {
+    action: "bridge",
+    callId,
+    method: "POST",
+    body: { leg_ids: [legA, legB], leg_a: legA, leg_b: legB },
+  });
 }
 
 export function answerCall(callId) {
-  return apiFetch(`/api/v1/calls/${callId}/answer`, { method: "POST" });
+  return callMutate(`/api/v1/calls/${callId}/answer`, { action: "answer", callId, method: "POST", body: {} });
 }
 
 export function hangupCall(callId, reason = "normal") {
-  return apiFetch(`/api/v1/calls/${callId}/hangup`, {
-    method: "POST",
-    body: JSON.stringify({ reason }),
+  return callMutate(`/api/v1/calls/${callId}/hangup`, { action: "hangup", callId, method: "POST", body: { reason } });
+}
+
+export function declineCall(callId) {
+  return callMutate(`/api/v1/calls/${callId}/decline`, { action: "decline", callId, method: "POST", body: {} });
+}
+
+export function holdLeg(callId, legId, on) {
+  return callMutate(`/api/v1/calls/${callId}/legs/${legId}/hold`, { action: "leg.hold", callId, method: "POST", body: { on } });
+}
+
+export function rejectLeg(callId, legId, reason = "") {
+  return callMutate(`/api/v1/calls/${callId}/legs/${legId}/reject`, { action: "leg.reject", callId, method: "POST", body: { reason } });
+}
+
+export function startLegPlayback(callId, legId, assetId) {
+  return callMutate(`/api/v1/calls/${callId}/legs/${legId}/playbacks`, { action: "leg.playback", callId, method: "POST", body: { asset_id: assetId } });
+}
+
+export function stopLegPlayback(callId, legId, playbackId) {
+  return callMutate(`/api/v1/calls/${callId}/legs/${legId}/playbacks/${playbackId}`, { action: "leg.playback.stop", callId, method: "DELETE", body: {} });
+}
+
+export function replaceBridge(callId, bridgeId, legA, legB) {
+  return callMutate(`/api/v1/calls/${callId}/bridges/${bridgeId}`, {
+    action: "bridge.replace",
+    callId,
+    method: "PUT",
+    body: { leg_ids: [legA, legB], leg_a: legA, leg_b: legB },
   });
+}
+
+export function endBridge(callId, bridgeId) {
+  return callMutate(`/api/v1/calls/${callId}/bridges/${bridgeId}`, { action: "bridge.end", callId, method: "DELETE", body: {} });
 }
 
 export function postOffer(callId, legId) {
@@ -163,21 +212,15 @@ export function outboundCall(destination) {
 }
 
 export function holdCall(callId, on) {
-  return apiFetch(`/api/v1/calls/${callId}/hold`, {
-    method: "POST",
-    body: JSON.stringify({ on }),
-  });
+  return callMutate(`/api/v1/calls/${callId}/hold`, { action: "hold", callId, method: "POST", body: { on } });
 }
 
 export function transferCall(callId, body) {
-  return apiFetch(`/api/v1/calls/${callId}/transfer`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  return callMutate(`/api/v1/calls/${callId}/transfer`, { action: "transfer", callId, method: "POST", body });
 }
 
 export function completeTransfer(callId) {
-  return apiFetch(`/api/v1/calls/${callId}/transfer/complete`, { method: "POST" });
+  return callMutate(`/api/v1/calls/${callId}/transfer/complete`, { action: "transfer.complete", callId, method: "POST", body: {} });
 }
 
 export function requestVideo(callId) {

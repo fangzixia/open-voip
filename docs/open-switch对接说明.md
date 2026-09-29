@@ -1,84 +1,148 @@
 # open-switch 对接说明
 
-适用于 `/switch/v1`。open-switch 是部署在内网的软交换后端；外部应用负责用户认证、权限、业务路由、坐席、队列、话单和录音业务数据。Switch 只验证调用方的服务密钥，信任服务命令中的 `agent_id`、`leg_id` 等字段，不解释终端用户身份。
+适用于 **`/switch/v2`**。open-switch 是部署在内网的软交换后端：承载 SIP/WebRTC 媒体、通话状态机，以及在 Switch 库内激活的 DID、队列、ACD、坐席话务状态与 IVR 执行。业务系统（范例为 open-call，也可为第三方）负责终端用户认证与权限、业务主数据编辑、配置发布、事件消费，以及需要查业务库的 IVR `business_action` 决策。
 
-## 部署模式与信任边界
+Switch **不会**在呼叫路径上同步查询业务库，也**没有** `integration.mode`、`platform_base_url` 或 `/platform/v1`。运行时队列/ACD/IVR 只读 Switch 内已激活的配置快照。Switch 在事件落库后向业务系统登记的 **`events_callback_url` POST 推送**（非终端用户回调）。
 
-`integration.mode` 可设为：
+## 鉴权与信任边界
 
-| 模式 | 用途 | 业务依赖 |
-| --- | --- | --- |
-| `call_center`（默认） | 与 open-call 配套，沿用队列、ACD、坐席、IVR 流程 | 需要 `integration.platform_base_url` |
-| `external` | 其他应用直接编排呼叫和媒体腿 | 不调用 Platform API |
+业务系统调用 `POST /switch/v2/integrations/register`（`X-Register-Token`）登记 `application_id` 与 `events_callback_url`；Switch **生成** integrator `secret` 并在新建时返回一次。除 `/health` 与登记接口外，每个 `/switch/v2` 请求须携带：
 
-两种模式都要求 `integration.secret`（至少 8 个字符）。每个 `/switch/v1` 请求携带 `Authorization: Bearer <integration.secret>`；`/health` 无需密钥。Switch API 只在可信内网暴露，前端与终端设备通过自己的应用后端访问。`X-Principal` 不再参与 Switch 鉴权，Switch 不校验用户、坐席、号码、队列的业务权限。调用应用必须在发命令前完成这些检查，隔离不同租户，并限制可拨号码和 SIP 中继。
+```http
+Authorization: Bearer <Switch 签发的 secret>
+```
 
-### 模式配置
+校验通过后绑定 `application_id` 租户作用域。open-call 在 YAML 中配置 `integration.switch_base_url`、`application_id`、`secret`（register 获得）、`events_callback_url`。
+
+Switch 信任请求体中的 `agent_id`、`leg_id`、`queue_id` 等字段，**不**校验终端用户身份。`X-Principal` 不参与 Switch 鉴权。业务系统必须在 BFF 完成 JWT/权限检查。
+
+### 配置示例（Switch）
 
 ```yaml
 integration:
-  mode: external
-  secret: "replace_with_a_shared_service_secret"
-  platform_base_url: "" # external 模式可留空
+  register_token: "replace_with_random_register_token_32+"
+  allow_open_register: false
 ```
 
-既有 open-call 部署保持 `mode: call_center`，并继续配置 `platform_base_url`。切换模式前应结束现有通话；媒体会话无法跨进程重启恢复，Switch 启动时会将未结束的通话标记为异常结束。
+### 配置示例（open-call）
 
-## external 模式：控制一通双腿呼叫
+```yaml
+integration:
+  switch_base_url: "http://127.0.0.1:8082"
+  application_id: "cc-prod"
+  secret: "<register 响应 data.secret>"
+  events_callback_url: "http://127.0.0.1:8080/api/v1/integration/switch/events"
+  register_token: "..."
+```
 
-请求和响应使用 JSON。成功响应统一为 `{"code":"OK","message":"成功","data":...}`，下文的 CallView 和列表均位于 `data`。`call_id` 如由应用提供，必须是 UUID；重复提交相同的 `call_id` 和呼叫字段会返回原通话，字段不一致返回 `409`。不提供时 Switch 生成 UUID。当前每通 external 呼叫最多两个媒体腿，只支持一对一桥接；会议、盲转、咨询转和 ACD 属于 `call_center` 模式的接口。
+登记步骤见 [switch-standalone-runbook.md](./switch-standalone-runbook.md)。
 
-1. `POST /switch/v1/calls/direct` 创建通话。请求示例：
+Switch API 仅在内网暴露；浏览器与 SIP 终端通过业务系统 BFF 或自建后端访问。
+
+## 集成方式（非互斥）
+
+同一 Switch 进程同时注册「双腿编排」与「呼叫中心」接口，不再用 `call_center` / `external` 模式开关裁剪路由。
+
+| 方式 | 典型调用方 | 说明 |
+| --- | --- | --- |
+| **open-call 配套** | open-call BFF + `switchapi` | 发布配置到 Switch；BFF 鉴权后调用 Switch；**HTTP callback** 接收事件并投影/WebSocket |
+| **自建控制器** | 任意持 secret 的后端 | `calls/direct`、呼叫中心 API；登记 callback URL；可选 `GET /events` 对账 |
+
+升级或切换集成方式前宜结束现有通话。媒体房间无法跨进程保留：Switch 启动时会尝试从 `os_ivr_sessions` 恢复 **IVR**，从库表恢复 **排队/振铃** 并重新建媒体与派单；**通话中/保持/转接中** 等已桥接状态仍会收尾结束，客户端需重新建链。
+
+## 双腿编排（`calls/direct`）
+
+请求与响应为 JSON。成功响应为 `{"code":"OK","message":"成功","data":...}`，下文 CallView 位于 `data`。`call_id` 若由应用提供须为 UUID；相同 `call_id` 与字段重复提交返回原通话，字段不一致返回 `409`。未提供时 Switch 生成 UUID。每通 direct 呼叫当前最多两个媒体腿，默认一对一桥接；会议、咨询转、盲转等使用下文呼叫中心接口。
+
+1. `POST /switch/v2/calls/direct` 创建通话。示例：
 
    ```json
    {"call_id":"c636f668-2af5-4c45-9853-0c5de1024eb1","direction":"outbound","caller":"1001","callee":"13800000000","session_type":"audio","initial_leg_role":"agent","agent_id":"a-01"}
    ```
 
-   `direction` 为 `inbound|outbound|internal`，默认 `inbound`；`session_type` 为 `audio|video`，默认 `audio`；`initial_leg_role` 为 `customer|agent|pstn`，默认 `customer`；`agent_id` 可关联第一腿的坐席。响应 `201` 为 CallView，含 `id`、`state: created`、`legs[].id`。若第一腿是 WebRTC，可在创建后直接完成 Offer/Answer/ICE。
+   `direction`：`inbound|outbound|internal`；`session_type`：`audio|video`；`initial_leg_role`：`customer|agent|pstn`；`agent_id` 可关联第一腿坐席。
 
 2. 添加第二腿：
 
-   - `POST /switch/v1/calls/{callId}/legs`，body `{"role":"agent","agent_id":"a-01"}`，创建 WebRTC 腿，返回 `201` CallView。`role` 允许 `customer|agent|supervisor`。
-   - 或 `POST /switch/v1/calls/{callId}/legs/sip`，body `{"destination":"13800000000","trunk_id":"trunk-1"}`，创建 PSTN 腿并异步拨号，返回 `202` CallView。通过事件 `leg.dialing`、`leg.answered`、`leg.failed` 判断拨号结果。
+   - `POST /switch/v2/calls/{callId}/legs`，body `{"role":"agent","agent_id":"a-01"}`，WebRTC 腿，`role` 允许 `customer|agent|supervisor`。
+   - 或 `POST /switch/v2/calls/{callId}/legs/sip`，body `{"destination":"13800000000","trunk_id":"trunk-1"}`（可用 `route_group_id` 作中继别名），建议带 `Idempotency-Key`；响应含 `command_id`、`leg_id`；`GET /switch/v2/commands/{commandId}` 查询拨号结果；事件 `leg.connected` / `command.failed` 等判断结果。
 
-3. WebRTC 信令：`POST /calls/{callId}/legs/{legId}/offer` 获取本地 SDP；`POST .../answer` 提交 `{"sdp":"...","type":"answer"}`；`POST .../ice` 提交 ICE candidate；`POST .../mute` 控制本腿静音。上述路径均带 `/switch/v1` 前缀。`GET /calls/{callId}/turn-credentials?subject=<应用侧主体>` 获取临时 TURN 凭据。
+3. WebRTC 信令（均带 `/switch/v2` 前缀）：`.../legs/{legId}/offer|answer|ice|mute`；`GET .../turn-credentials?subject=<应用侧主体>` 获取 TURN 凭据。
 
-4. 双腿媒体均已连接后，调用 `POST /switch/v1/calls/{callId}/bridge`，body `{"leg_a":"...","leg_b":"..."}`。桥接前不会互相转发媒体；桥接成功后通话进入 `active`，产生 `call.answered`。删除其中一腿会撤销桥接。
+4. 双腿媒体就绪后 `POST /switch/v2/calls/{callId}/bridge`（别名 `/bridges`，body 可用 `leg_ids`），body `{"leg_a":"...","leg_b":"..."}`。桥接成功后产生 `bridge.active` 与 `call.answered`（事件 payload 可含 `bridge_id`）；Switch 同步写入运行库表 `os_bridges`。IVR 进行时在 `os_ivr_sessions` 记录当前节点与超时，入队或挂断时清除。
 
-5. `DELETE /switch/v1/calls/{callId}/legs/{legId}` 移除单腿；`POST /switch/v1/calls/{callId}/hangup` 结束整通呼叫。`GET /switch/v1/calls/{callId}` 读取通话状态。`GET /switch/v1/internal/calls/{callId}` 是应用后端使用的同类视图。
+5. `DELETE /switch/v2/calls/{callId}/legs/{legId}` 移除单腿；`POST .../hangup` 结束呼叫；`GET .../calls/{callId}` 或 `GET .../internal/calls/{callId}` 查询状态。
 
-SIP 入呼和设备 INVITE 也会在 external 模式自动创建以 PSTN 为第一腿的 direct 呼叫，发出 `call.created`。应用从事件中取得 `call_id` 和 `leg_id`，添加第二腿后桥接。SIP 监听地址、路由和中继仍由 `sip` 配置决定。
+SIP 入呼在 Switch 侧按**已激活 DID 快照**路由到队列或 IVR，无需业务系统同步查询。设备外呼等场景亦可从事件取得 `call_id` 后再编排第二腿。
 
-### 通用媒体控制
-
-两种模式都提供 `hangup`、`video/request`（body `from_leg_id`）、`video/respond`、`video/downgrade`、`screen-share`（body `leg_id`、`on`）、`dtmf`（body `leg_id`、`digit`）和 WebRTC 信令。录制只在 external 模式由控制器显式发起：
+### 显式录制（编排场景）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/switch/v1/calls/{callId}/recording/start` | body `{"mode":"audio"}` 或 `{"mode":"video_composite"}`，返回录制元数据 |
-| POST | `/switch/v1/calls/{callId}/recording/stop` | 返回文件路径、大小等元数据 |
-| GET | `/switch/v1/internal/recordings/{callId}/{recordingId}` | 获取录制文件 |
-| DELETE | 同上 | 删除录制文件 |
+| POST | `/switch/v2/calls/{callId}/recording/start` | `{"mode":"audio"}` 或 `{"mode":"video_composite"}` |
+| POST | `/switch/v2/calls/{callId}/recording/stop` | 返回文件元数据 |
+| GET/DELETE | `/switch/v2/internal/recordings/{callId}/{recordingId}` | 读写录音文件 |
 
-应用自行决定录制策略、告知、权限、留存、话单关联和文件访问控制。Switch 保存文件并返回元数据，不在 external 模式写应用的话单或调用录制元数据回调。
+队列入呼的录制策略由配置快照中的 `recording_policy` 等字段驱动，由 Switch 自动执行；业务系统通过 `recording.saved` 等事件同步元数据。
+
+## 呼叫中心运行接口
+
+在已发布配置与坐席签入前提下，业务系统（通常经 open-call BFF）调用：
+
+- `POST /switch/v2/calls/inbound`、`POST /switch/v2/calls/outbound`
+- `POST /switch/v2/calls/{callId}/answer|decline|hold|transfer|transfer/complete|conference`
+- `POST /switch/v2/supervisor/calls/{callId}/listen`、`POST /switch/v2/supervisor/agents/{agentId}/force-check-out`
+
+命令使用请求体中的 `agent_id`；升视频使用 `from_leg_id`；TURN 使用 `subject` 查询参数。
+
+### 配置与坐席（管理面）
+
+业务系统编译不可变配置包并写入 Switch（open-call 使用 `configpub`）：
+
+- `POST /switch/v2/configuration/versions`（别名 `/config-versions`）— 存储快照
+- `POST /switch/v2/configuration/versions/{version}/activate` — 激活
+- `GET /switch/v2/configuration/versions/{version}` — 查看版本元数据
+- `POST /switch/v2/calls` — 创建无媒体腿的空 Call（`business_ref` / `metadata`）
+- `GET /switch/v2/routing-sessions/{callId}` — 路由会话与队列项只读快照
+
+坐席运行时：
+
+- `POST /switch/v2/agents/{agentId}/check-in|check-out`
+- `PUT /switch/v2/agents/{agentId}/presence`
+- `GET /switch/v2/agents/{agentId}/session`
+- `GET /switch/v2/queues/{queueId}/status`
+
+`GET/POST /switch/v2/ivr-assets` 管理 IVR 音频资源。
+
+### IVR 业务判断节点
+
+流程进入 `business_action` 节点时，Switch 发布 `business_action.requested` 并挂起，直到：
+
+`POST /switch/v2/calls/{callId}/business-actions/{actionId}/complete`，body `{"outcome":"<已声明分支>"}`
+
+业务系统须根据 `action` 类型查询自有业务库后回填 outcome；超时走 IVR 快照中的默认分支。Switch **不会**主动 HTTP 调用 open-call 完成该步骤。
+
+### 通用媒体控制
+
+`hangup`、`video/request`、`video/respond`、`video/downgrade`、`screen-share`、`dtmf` 与 WebRTC 信令在编排与呼叫中心场景共用。
 
 ## 事件与重放
 
-`GET /switch/v1/events?after_id=0&limit=100` 的 `data` 为 `{"items":[...]}`，可用 `call_id` 过滤单通通话。每项包含全局递增 `id`、通话内 `seq`、`call_id`、`type`、`agent_id`、`target_only`、`payload`、`created_at`。按 `id` 升序读取，处理成功后保存最后一个 `id`，下次作为 `after_id`；单次最多返回 500 项。`target_only: true` 表示事件原本只发给指定坐席，应用应按 `agent_id` 定向分发，避免对所有通话参与者重复广播。
+写操作可在 JSON 中传 `expected_version`（与 `GET /calls/{callId}` 的 `version` 一致）；冲突返回 `409`、`VERSION_MISMATCH`，`data` 为最新通话视图。下列写操作支持 `Idempotency-Key`（记入 `os_commands`）：`hangup`、`answer`、`decline`、`hold`、`transfer`、`bridge` / `bridge.replace`、`leg.leave`、SIP 拨号等。`PUT /calls/{callId}/bridges/{bridgeId}` 可原子替换 `leg_ids`；`POST /calls/{callId}/legs/{legId}/hold`（body `on`）、`reject`、`playbacks` 与方案 §5 对齐。对账可用 `GET /switch/v2/calls?status=open`（返回 `items`）或 `GET /switch/v2/internal/calls`。
 
-事件持久化后可按游标重放；消费端应按事件 `id` 去重，并在启动或断线后用 `GET /switch/v1/internal/calls`、`GET /switch/v1/calls/{callId}` 对账。事件写入与通话状态更新目前不是同一个数据库事务，个别内部事件发布失败也可能只留下通话状态；因此事件不能作为唯一的最终状态依据。事件表目前不自动清理，部署时需监控增长，确定所有消费方的保留窗口后再设计清理策略。
+`GET /switch/v2/events?after_id=0&limit=100`，可用 `call_id` 过滤。`data` 为 `{"items":[...]}`，每项含全局递增 `id`、通话内 `seq`、`call_id`、`type`、`agent_id`、`target_only`、`payload`、`created_at`。按 `id` 升序消费，成功后以最后 `id` 作为下次 `after_id`；单次最多 500 条。`target_only: true` 时按 `agent_id` 定向分发。
 
-## call_center 模式与 open-call
+open-call 在 callback 处理中写入 `oc_switch_event_cursor` 与出站队列，并发布 WebSocket；payload 附带 `switch_event_id`、`switch_call_seq`。Switch POST body 与 `/events` 单条 item 同 schema；响应须 `{"accepted":true,"event_id":N}`（包在标准 `data` 内亦可）。
 
-原有 Platform API、队列、ACD、坐席、IVR 和话单流程仍在 `call_center` 模式运行。Switch API 的 `answer`、`decline`、`outbound`、班长监听等命令现在用请求体中的 `agent_id`，升视频用 `from_leg_id`，TURN 用 `subject` 查询参数；Switch 不再读取 `X-Principal`。open-call BFF 验证终端令牌、权限、通话及媒体腿归属后，填入受信任的字段并转发；其服务端 Switch 客户端也使用显式字段。open-call 从 Switch 事件流按数据库游标轮询并分发 WebSocket / webhook，payload 会增加 `switch_event_id` 与 `switch_call_seq`；故障重试可能重复分发，接收方可按 `switch_event_id` 去重。
+事件与通话状态更新目前不是同一数据库事务；对账时使用 `GET /switch/v2/internal/calls` 与 `GET /switch/v2/calls/{callId}`。事件表需按 `event_retention_days` 与运维策略监控容量。
 
-`call_center` 独有路径包括 `/calls/inbound`、`/calls/outbound`、`/calls/{id}/answer|decline|hold|transfer|transfer/complete|conference` 和 `/supervisor/...`；external 模式不注册这些路径。`/switch/v1/ivr-assets` 在两种模式下可用于管理音频资源。
+Switch 进程重启时：`ivr` / `queued` / `ringing` 会尝试恢复并重建媒体；**active** / **held** / **transferring** 会保留通话并发布 `call.media_reconnect_required`，客户端须重建 WebRTC/SIP 媒体。持久化 `UpdateCall` 与 `call.state_changed` 在同一事务；其余业务事件（如 `call.answered`）发布失败会使写操作返回错误。详见 [§9 验收清单](./section9-acceptance-checklist.md)。
 
 ## 部署与联调检查
 
-1. 为 Switch 使用独立 PostgreSQL 数据库；启动时执行迁移，创建 `os_call_events`。open-call 的数据库迁移会创建 `oc_switch_event_cursor`。
-2. 限制 Switch HTTP、SIP、RTP 的网络访问范围；服务密钥仅交给可信控制器。应用后端负责终端认证和业务授权。
-3. 用固定 `call_id` 创建测试呼叫，验证重复提交、第二腿、信令、桥接、挂断和事件游标重放；SIP 通话另测中继失败与 `leg.failed`。
-4. 在 open-call 配套场景，先部署支持显式字段和事件轮询的 open-call，再部署本版 Switch；检查 BFF 转发与事件消费。两端均完成迁移后再开放业务流量。
+1. Switch 使用独立 PostgreSQL（`os_*` 表）；open-call 使用业务库（`oc_*` 表，含 `oc_switch_event_cursor`）。禁止跨服务直连对方库表做运行时查询。
+2. 限制 Switch HTTP、SIP、RTP 访问范围；应用密钥仅配置在服务端。
+3. 发布配置 → 坐席签入 → 入呼/出呼 → 验证 `/events` 游标与 WebSocket。
+4. 固定 `call_id` 测 direct 重复提交、桥接、挂断与事件重放；SIP 场景另测 `leg.failed` 等。
 
-Switch API 仍为 `/switch/v1`，但信任边界和部分字段已变化，旧版控制器需要同步升级。返回 `4xx` 表示请求或状态错误，`5xx` 表示 Switch 或依赖故障；客户端对重试命令应使用稳定 `call_id`，并在超时后先查询通话状态。
+`/switch/v1` 与 Platform 同步查询已移除，旧版客户端须升级到 `/switch/v2`。`4xx` 为请求或状态错误，`5xx` 为 Switch 或依赖故障；重试命令应使用稳定 `call_id`，超时后先查询通话状态。

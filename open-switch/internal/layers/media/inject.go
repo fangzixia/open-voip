@@ -16,7 +16,7 @@ import (
 	"math/rand/v2"
 )
 
-// resolvePrompt accepts only asset IDs in the authenticated application's namespace.
+// resolvePrompt 仅解析当前应用命名空间下的 WAV 素材 ID。
 func (s *Service) resolvePrompt(ctx context.Context, path string) string {
 	if scope.Application(ctx) == "" || filepath.Ext(path) != ".wav" {
 		return ""

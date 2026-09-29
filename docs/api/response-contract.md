@@ -1,6 +1,6 @@
 # 统一 API 响应（1.1）
 
-适用范围：浏览器 `/api/v1`、CC 提供的 `/platform/v1`、Switch 提供的 `/switch/v1`。请求体继续使用各接口的业务字段，无需增加外层包装。
+适用范围：浏览器 `/api/v1`、open-call 服务端调用 Switch 的 `/switch/v2`。请求体继续使用各接口的业务字段，无需增加外层包装。
 
 成功示例（HTTP 200/201/202）：
 
@@ -14,10 +14,16 @@
 {"code":"AGENT_BUSY","message":"坐席忙","data":null,"request_id":"request-123","error":"conflict"}
 ```
 
+乐观锁冲突（HTTP 409，`data` 为最新通话视图）：
+
+```json
+{"code":"VERSION_MISMATCH","message":"通话版本已变化，请刷新后重试","data":{"id":"…","version":12,"state":"ringing"},"request_id":"request-123","error":"conflict"}
+```
+
 - `code` 为稳定字符串；成功固定 `OK`，失败优先使用业务码，没有业务码时采用大写错误分类，如 `UNAUTHORIZED`、`RATE_LIMITED`、`SWITCH_UNAVAILABLE`。
 - `message` 用于显示；`data` 承载原业务响应，包括列表的 `items`/分页字段。无返回数据的操作改为 HTTP 200 + `data:null`，不再返回 204。
-- `request_id` 与响应头 `X-Request-ID` 一致；同步 CC → Switch、Switch → CC 调用透传请求 ID。异步回调产生新的请求 ID。
-- `trace_id` 通过 `X-Trace-ID` 贯穿浏览器、CC、Switch 及异步 Platform 回调；缺失时由入口服务生成并在响应头返回。
+- `request_id` 与响应头 `X-Request-ID` 一致；open-call → Switch 调用透传请求 ID。
+- `trace_id` 通过 `X-Trace-ID` 贯穿浏览器、open-call 与 Switch；缺失时由入口服务生成并在响应头返回。
 - `X-Call-ID`、`X-Leg-ID` 和 `X-Client-Session-ID` 用于补充通话、媒体腿和浏览器会话关联，不替代业务路径中的 ID 校验。
 - 保留正确的 HTTP 状态码。`error` 是失败时的兼容分类字段；不要通过匹配 `message` 判断业务逻辑。
 - 鉴权、限流、404、405、处理器异常、BFF 连接失败都采用同一 JSON 格式。

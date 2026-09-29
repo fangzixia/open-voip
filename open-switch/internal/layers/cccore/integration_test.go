@@ -15,6 +15,7 @@ import (
 	"time"
 )
 
+// TestConfigurationIsolationAndConcurrentDispatch 验证多应用配置隔离与并发派单互不串扰。
 func TestConfigurationIsolationAndConcurrentDispatch(t *testing.T) {
 	dsn := os.Getenv("OPEN_VOIP_TEST_DSN")
 	if dsn == "" {

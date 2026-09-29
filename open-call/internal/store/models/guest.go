@@ -14,7 +14,7 @@ type GuestSession struct {
 	AllowedMedia string `gorm:"size:16;not null;default:audio;comment:允许媒介"`
 	// Priority 由受信任的签发方设置，访客不能自行提升。
 	Priority int `gorm:"not null;default:0;comment:队列优先级"`
-	// Token 入会 token 哈希或明文（内网 Demo 可简化）。
+	// Token 入会 token 哈希或明文（内网演示可简化）。
 	Token string `gorm:"size:128;uniqueIndex;not null;comment:入会 token"`
 	// ExpiresAt 过期时间 UTC。
 	ExpiresAt time.Time `gorm:"index;comment:过期时间"`

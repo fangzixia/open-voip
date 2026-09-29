@@ -1,6 +1,6 @@
 # open-switch
 
-软交换服务：WebRTC/SIP 媒体、Call FSM、对内 **Switch API**（`/switch/v1`）。
+软交换服务：WebRTC/SIP 媒体、Call FSM、对内 **Switch API**（`/switch/v2`），以及在 Switch 库内运行的 DID/队列/ACD/坐席话务状态与 IVR。
 
 - 对接说明（含 open-call 范例）：[../docs/open-switch对接说明.md](../docs/open-switch对接说明.md)
 - 配置示例：[deploy/config.example.yml](deploy/config.example.yml)
@@ -12,7 +12,7 @@ go build -o bin/open-switch ./cmd/open-switch
 go run ./cmd/open-switch -config deploy/config.example.yml
 ```
 
-默认监听 `127.0.0.1:8082`（内网）。`integration.mode: call_center` 时配置 `integration.platform_base_url` 指向 open-call；`external` 时由其他可信应用调用 `/switch/v1/calls/direct` 和双腿桥接接口，无需 Platform API。Switch 信任持有服务密钥的调用方，不处理终端用户鉴权。完整流程见[对接说明](../docs/open-switch对接说明.md)。
+默认监听 `127.0.0.1:8082`（内网）。业务系统通过 `POST /switch/v2/integrations/register` 登记租户并获取 Switch 签发的 `secret`（Switch YAML **不**配置 `applications[]`）。事件落库后 POST 到业务方登记的 `events_callback_url`。完整流程见[对接说明](../docs/open-switch对接说明.md)与 [runbook](../docs/switch-standalone-runbook.md)。
 
 视频录像需要 FFmpeg。设置 `recordings.ffmpeg_path` 为可执行文件路径，或将 FFmpeg 加入 `PATH`；
 `recordings.video_format` 可选 `webm`（VP8/Opus）或 `mp4`（H.264/AAC）。每通视频呼叫保存一份同时含画面和声音的文件。

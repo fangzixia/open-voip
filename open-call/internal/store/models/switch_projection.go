@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// AgentStateProjection is read-only history received from the Switch event stream.
+// AgentStateProjection 来自 Switch 事件流的坐席路由状态变更历史（只读投影）。
 type AgentStateProjection struct {
 	ID        int64 `gorm:"primaryKey;autoIncrement:false"`
 	AgentID   string

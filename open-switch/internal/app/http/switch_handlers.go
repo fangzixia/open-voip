@@ -43,13 +43,15 @@ func (d RouterDeps) handleHold(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		On bool `json:"on"`
+		On              bool  `json:"on"`
+		ExpectedVersion int64 `json:"expected_version"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := d.CallControl.Hold(r.Context(), chi.URLParam(r, "callId"), body.On); err != nil {
+	ctx := callMutationContext(r, body.ExpectedVersion)
+	if err := d.CallControl.Hold(ctx, chi.URLParam(r, "callId"), body.On); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -61,12 +63,19 @@ func (d RouterDeps) handleTransfer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	var req dto.TransferRequest
-	if err := decodeJSON(r, &req); err != nil {
+	var body struct {
+		Mode            string `json:"mode"`
+		TargetAgentID   string `json:"target_agent_id"`
+		TargetQueueID   string `json:"target_queue_id"`
+		ExpectedVersion int64  `json:"expected_version"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := d.CallControl.Transfer(r.Context(), chi.URLParam(r, "callId"), req); err != nil {
+	req := dto.TransferRequest{Mode: body.Mode, TargetAgentID: body.TargetAgentID, TargetQueueID: body.TargetQueueID}
+	ctx := callMutationContext(r, body.ExpectedVersion)
+	if err := d.CallControl.Transfer(ctx, chi.URLParam(r, "callId"), req); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -264,7 +273,8 @@ func (d RouterDeps) handleListen(w http.ResponseWriter, r *http.Request) {
 
 func (d RouterDeps) handleDecline(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AgentID string `json:"agent_id"`
+		AgentID         string `json:"agent_id"`
+		ExpectedVersion int64  `json:"expected_version"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
@@ -274,7 +284,8 @@ func (d RouterDeps) handleDecline(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.InvalidRequest("agent_id 必填"))
 		return
 	}
-	if err := d.CallControl.Decline(r.Context(), chi.URLParam(r, "callId"), body.AgentID); err != nil {
+	ctx := callMutationContext(r, body.ExpectedVersion)
+	if err := d.CallControl.Decline(ctx, chi.URLParam(r, "callId"), body.AgentID); err != nil {
 		writeErr(w, err)
 		return
 	}

@@ -20,6 +20,23 @@ import (
 func (s *Service) Hold(ctx context.Context, callID string, on bool) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
+	hash := "hold|" + boolString(on)
+	return s.runIdempotentMutation(ctx, callID, "hold", hash, func() error {
+		return s.doHold(ctx, callID, on)
+	})
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
+func (s *Service) doHold(ctx context.Context, callID string, on bool) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	s.mu.Unlock()
@@ -502,7 +519,7 @@ func (s *Service) overflow(ctx context.Context, callID string) bool {
 		if err := s.routeQueue(ctx, callID, q.OverflowQueueID); err != nil {
 			return false
 		}
-		_ = s.publishCall(ctx, callID, "queue.overflow", "", map[string]any{"call_id": callID, "queue_id": q.OverflowQueueID})
+		_ = s.publishCall(ctx, callID, "queue.overflowed", "", map[string]any{"call_id": callID, "queue_id": q.OverflowQueueID})
 		return true
 	case "voicemail":
 		s.startVoicemail(ctx, callID)

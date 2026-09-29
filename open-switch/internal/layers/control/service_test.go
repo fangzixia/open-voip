@@ -87,6 +87,9 @@ func (fakeCfg) GetQueue(_ context.Context, id string) (ports.QueueSnapshot, erro
 func (fakeCfg) GetLatestIVR(context.Context, string) (ports.IVRSnapshot, error) {
 	return ports.IVRSnapshot{}, errs.ErrNotImplemented
 }
+func (fakeCfg) GetIVRSnapshot(context.Context, int64, string, int) (ports.IVRSnapshot, error) {
+	return ports.IVRSnapshot{}, errs.ErrNotImplemented
+}
 func (fakeCfg) GetBusinessHours(context.Context, string) (ports.BusinessHours, error) {
 	return ports.BusinessHours{WeekdayHours: "always"}, nil
 }
@@ -376,7 +379,7 @@ func TestOverflowAndVideoRequest(t *testing.T) {
 	}
 	found := false
 	for _, typ := range ev.types {
-		if typ == "queue.overflow" {
+		if typ == "queue.overflowed" {
 			found = true
 		}
 	}

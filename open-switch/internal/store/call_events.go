@@ -26,11 +26,14 @@ type CallEventRow struct {
 
 func (CallEventRow) TableName() string { return "os_call_events" }
 
-// CallEvents persists controller events for cursor-based replay.
-type CallEvents struct{ DB *gorm.DB }
+// CallEvents 持久化控制器事件，供游标 API 增量回放。
+type CallEvents struct {
+	DB *gorm.DB
+	// AfterAppend 在事件成功落库后异步回调（integrator HTTP 推送等）。
+	AfterAppend func(ctx context.Context, row CallEventRow)
+}
 
-// PublishCallEvent implements ports.CallEventPublisher. Events are durable before
-// they are exposed through the cursor API.
+// PublishCallEvent 实现 ports.CallEventPublisher：事件先落库，再通过游标对外暴露。
 func (s CallEvents) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 	return s.Append(ctx, &ev)
 }
@@ -51,9 +54,9 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 	if len(raw) == 0 || string(raw) == "null" {
 		raw = []byte("{}")
 	}
-	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// A global transaction lock keeps committed rows in ID order. Without it,
-		// a reader could advance past an uncommitted lower ID from another call.
+	var createdAt time.Time
+	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 全局事务锁保证已提交行按 ID 有序；否则读游标可能跳过另一通话尚未提交的更小 ID。
 		var locked int64
 		if err := tx.Raw("SELECT 1 FROM (SELECT pg_advisory_xact_lock(67104231)) AS lock_held").Scan(&locked).Error; err != nil {
 			return err
@@ -62,7 +65,7 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 		if err := tx.Raw("SELECT COALESCE(MAX(seq), 0) + 1 FROM os_call_events WHERE application_id = ? AND call_id::text = ?", ev.ApplicationID, ev.CallID).Scan(&seq).Error; err != nil {
 			return err
 		}
-		createdAt := time.Now().UTC()
+		createdAt = time.Now().UTC()
 		var callID any
 		if ev.CallID != "" {
 			callID = ev.CallID
@@ -77,6 +80,29 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 		ev.Seq = seq
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if s.AfterAppend != nil && ev.ID > 0 {
+		row := CallEventRow{
+			ApplicationID: ev.ApplicationID,
+			ID:            ev.ID,
+			CallID:        ev.CallID,
+			Seq:           ev.Seq,
+			Version:       ev.Version,
+			AgentID:       ev.AgentID,
+			TargetOnly:    ev.TargetOnly,
+			Type:          ev.Type,
+			Payload:       append(json.RawMessage(nil), raw...),
+			CreatedAt:     createdAt,
+		}
+		if ev.CommandID != "" {
+			cid := ev.CommandID
+			row.CommandID = &cid
+		}
+		go s.AfterAppend(context.Background(), row)
+	}
+	return nil
 }
 
 func (s CallEvents) List(ctx context.Context, afterID int64, callID string, limit int) ([]CallEventRow, error) {
@@ -93,4 +119,17 @@ func (s CallEvents) List(ctx context.Context, afterID int64, callID string, limi
 	var rows []CallEventRow
 	err := q.Order("id").Limit(limit).Find(&rows).Error
 	return rows, err
+}
+
+// MinRetainedEventID 返回应用下仍保留的最小事件 ID（无事件时返回 0）。
+func (s CallEvents) MinRetainedEventID(ctx context.Context, applicationID string) (int64, error) {
+	var minID int64
+	err := s.DB.WithContext(ctx).Raw("SELECT COALESCE(MIN(id), 0) FROM os_call_events WHERE application_id = ?", applicationID).Scan(&minID).Error
+	return minID, err
+}
+
+// PurgeBefore 删除指定时间之前的事件，返回删除行数。
+func (s CallEvents) PurgeBefore(ctx context.Context, applicationID string, before time.Time) (int64, error) {
+	res := s.DB.WithContext(ctx).Exec("DELETE FROM os_call_events WHERE application_id = ? AND created_at < ?", applicationID, before)
+	return res.RowsAffected, res.Error
 }

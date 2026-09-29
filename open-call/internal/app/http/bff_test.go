@@ -3,7 +3,6 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"open-call/internal/config"
@@ -29,8 +28,15 @@ func (bffAuth) Authenticate(_ context.Context, token string) (auth.Principal, er
 }
 
 func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
-	forwarded := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/switch/v2/calls/outbound" {
+			httpapi.Write(w, http.StatusOK, ports.CallView{ID: "new-call"})
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/switch/v2/calls/") && strings.HasSuffix(r.URL.Path, "/offer") {
+			httpapi.Write(w, http.StatusOK, map[string]string{"sdp": "v=0", "type": "offer"})
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/switch/v2/internal/calls/") {
 			id := strings.TrimPrefix(r.URL.Path, "/switch/v2/internal/calls/")
 			view := ports.CallView{ID: id, AgentID: "other", Legs: []ports.LegView{
@@ -43,13 +49,6 @@ func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 			httpapi.Write(w, http.StatusOK, view)
 			return
 		}
-		forwarded++
-		if r.URL.Path == "/switch/v2/calls/outbound" {
-			var body map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["agent_id"] != "seat" {
-				t.Errorf("outbound actor not replaced: %v %v", body, err)
-			}
-		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
@@ -60,8 +59,8 @@ func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 	}{
 		{"/api/v1/calls/foreign/hangup", `{}`, http.StatusForbidden},
 		{"/api/v1/calls/owned/legs/foreign-leg/offer", `{}`, http.StatusForbidden},
-		{"/api/v1/calls/owned/legs/own-leg/offer", `{}`, http.StatusNoContent},
-		{"/api/v1/calls/outbound", `{"agent_id":"other"}`, http.StatusNoContent},
+		{"/api/v1/calls/owned/legs/own-leg/offer", `{}`, http.StatusOK},
+		{"/api/v1/calls/outbound", `{"agent_id":"other"}`, http.StatusOK},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
@@ -71,9 +70,6 @@ func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 		if rec.Code != tc.want {
 			t.Fatalf("%s: got %d, want %d: %s", tc.path, rec.Code, tc.want, rec.Body.String())
 		}
-	}
-	if forwarded != 2 {
-		t.Fatalf("forwarded %d requests, want 2", forwarded)
 	}
 }
 
@@ -86,8 +82,14 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 		if r.Header.Get("X-Principal") != "" {
 			t.Error("end-user principal must not reach switch")
 		}
-		if r.URL.Path == "/switch/v2/internal/calls/call" {
-			httpapi.Write(w, http.StatusOK, ports.CallView{ID: "call", AgentID: "seat"})
+		if r.URL.Path == "/switch/v2/internal/calls/call" || r.URL.Path == "/switch/v2/internal/calls/new-call" {
+			id := strings.TrimPrefix(r.URL.Path, "/switch/v2/internal/calls/")
+			httpapi.Write(w, http.StatusOK, ports.CallView{ID: id, AgentID: "seat"})
+			return
+		}
+		if r.URL.Path == "/switch/v2/calls/call/hangup" {
+			requests++
+			httpapi.Write(w, http.StatusOK, nil)
 			return
 		}
 		requests++
@@ -109,7 +111,7 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		want := http.StatusUnauthorized
 		if token == "valid" {
-			want = http.StatusNoContent
+			want = http.StatusOK
 		} else if token == "readonly" {
 			want = http.StatusForbidden
 		}

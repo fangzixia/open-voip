@@ -44,7 +44,7 @@ func Error(w http.ResponseWriter, err error) {
 	if code == "" {
 		code = strings.ToUpper(api.Kind)
 	}
-	write(w, api.HTTP, Response{Code: code, Message: api.Message, Error: api.Kind})
+	write(w, api.HTTP, Response{Code: code, Message: api.Message, Error: api.Kind, Data: api.Data})
 }
 
 func Failure(w http.ResponseWriter, status int, kind, message string) {

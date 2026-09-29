@@ -3,7 +3,10 @@
 export function adminViewActions(host, operations) {
   return {
     ...operations,
-    navigate: (id) => { host.nav = id; },
+    navigate: (id) => {
+      host.nav = id;
+      if (id === "runtime" && typeof host.loadRuntime === "function") void host.loadRuntime();
+    },
     setUsername: (value) => { host.username = value; },
     setPassword: (value) => { host.password = value; },
     updateNewQueue: (patch) => { host.newQueue = { ...host.newQueue, ...patch }; },
@@ -19,5 +22,6 @@ export function adminViewActions(host, operations) {
     resetCdr: () => { host.cdrCaller = ""; host.cdrResult = ""; },
     setQaCallId: (value) => { host.qaCallId = value; },
     setQaLabel: (value) => { host.qaLabel = value; },
+    setBridgeForm: (patch) => { host.bridgeForm = { ...host.bridgeForm, ...patch }; },
   };
 }

@@ -2,8 +2,11 @@ package http
 
 import (
 	"context"
-	"github.com/go-chi/chi/v5"
 	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 )
 
@@ -28,4 +31,17 @@ func (d SwitchRouterDeps) handleInternalCalls(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+func (d SwitchRouterDeps) handleListOpenCalls(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("status") != "" && r.URL.Query().Get("status") != "open" {
+		writeErr(w, errs.InvalidRequest("仅支持 status=open"))
+		return
+	}
+	v, err := d.Runtime.ListCalls(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": v})
 }

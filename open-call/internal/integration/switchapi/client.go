@@ -50,6 +50,9 @@ func (c *Client) do(ctx context.Context, method, path string, in any, out any) e
 	}
 	req.Header.Set("Authorization", "Bearer "+c.secret)
 	req.Header.Set("Content-Type", "application/json")
+	if m := mutationFrom(ctx); m.IdempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", m.IdempotencyKey)
+	}
 	setTraceHeaders(req, ctx)
 	observability.Emit(ctx, "switch.request.started", map[string]any{"method": method, "path": path})
 	res, err := c.http.Do(req)
@@ -107,19 +110,29 @@ func (c *Client) GetCall(ctx context.Context, callID string) (ports.CallView, er
 }
 
 func (c *Client) Answer(ctx context.Context, callID, agentID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/answer", map[string]string{"agent_id": agentID}, nil)
+	body := map[string]any{"agent_id": agentID}
+	applyMutation(ctx, body)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/answer", body, nil)
 }
 
 func (c *Client) Decline(ctx context.Context, callID, agentID string) error {
-	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/decline", map[string]string{"agent_id": agentID}, nil)
+	body := map[string]any{"agent_id": agentID}
+	applyMutation(ctx, body)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/decline", body, nil)
 }
 
 func (c *Client) Hangup(ctx context.Context, callID string, reason dto.HangupReason) error {
-	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/hangup", map[string]string{"reason": string(reason)}, nil)
+	body := map[string]any{"reason": string(reason)}
+	applyMutation(ctx, body)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/hangup", body, nil)
 }
 
 func (c *Client) Transfer(ctx context.Context, callID string, req dto.TransferRequest) error {
-	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/transfer", req, nil)
+	body := map[string]any{
+		"mode": req.Mode, "target_agent_id": req.TargetAgentID, "target_queue_id": req.TargetQueueID,
+	}
+	applyMutation(ctx, body)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/transfer", body, nil)
 }
 
 func (c *Client) CompleteTransfer(ctx context.Context, callID string) error {
@@ -139,7 +152,9 @@ func (c *Client) StartIVR(ctx context.Context, callID, snapshotID string) error 
 }
 
 func (c *Client) Hold(ctx context.Context, callID string, on bool) error {
-	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/hold", map[string]bool{"on": on}, nil)
+	body := map[string]any{"on": on}
+	applyMutation(ctx, body)
+	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/hold", body, nil)
 }
 
 func (c *Client) RequestVideo(ctx context.Context, callID, fromLegID string) error {
@@ -180,7 +195,7 @@ func (c *Client) ForceReleaseAgent(ctx context.Context, agentID, policy string) 
 
 var _ ports.CallControlPort = (*Client)(nil)
 
-// CompleteBusinessAction submits a business-owned decision without controlling media destinations.
+// CompleteBusinessAction 向 Switch 提交业务侧决策结果（不直接控制媒体目的地）。
 func (c *Client) CompleteBusinessAction(ctx context.Context, callID, actionID, outcome string) error {
 	return c.do(ctx, http.MethodPost, "/switch/v2/calls/"+callID+"/business-actions/"+actionID+"/complete", map[string]string{"outcome": outcome}, nil)
 }

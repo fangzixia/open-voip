@@ -2,6 +2,9 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -12,8 +15,8 @@ import (
 	"open-switch/internal/scope"
 )
 
-// CreateDirect creates a controller-owned call without querying a Platform API.
-// The first leg is returned to the controller for WebRTC negotiation or SIP ingress.
+// CreateDirect 由控制器直接创建通话，不查询业务平台 API。
+// 返回的第一条腿供 WebRTC 协商或 SIP 入站使用。
 func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (ports.CallView, error) {
 	if req.CallID == "" {
 		req.CallID = uuid.NewString()
@@ -56,8 +59,8 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 	} else if !errors.Is(err, errs.ErrNotFound) {
 		return ports.CallView{}, err
 	}
-	// Audio rooms use PCMU from creation so an outbound SIP leg can be added
-	// after a WebRTC offer without silently switching codecs mid-call.
+	// 语音房间自创建起使用 PCMU，以便在 WebRTC 协商后追加出局 SIP 腿，
+	// 且不会在通话中途静默切换编解码。
 	if req.SessionType == dto.SessionTypeAudio {
 		if m, ok := s.deps.Media.(interface{ PrepareSIP(string) }); ok {
 			m.PrepareSIP(req.CallID)
@@ -78,6 +81,44 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 		return ports.CallView{}, err
 	}
 	rt := &runtimeCall{rec: rec, legs: []ports.CallLegRecord{leg}, caller: req.Caller, callee: req.Callee}
+	s.mu.Lock()
+	s.calls[req.CallID] = rt
+	s.mu.Unlock()
+	return toView(rt), nil
+}
+
+// CreateStubCall 创建无媒体腿的空通话，供后续按方案加腿与桥接。
+func (s *Service) CreateStubCall(ctx context.Context, req dto.StubCallRequest) (ports.CallView, error) {
+	if req.CallID == "" {
+		req.CallID = uuid.NewString()
+	}
+	if _, err := uuid.Parse(req.CallID); err != nil {
+		return ports.CallView{}, errs.InvalidRequest("call_id 必须为 UUID")
+	}
+	ctx, unlock := s.command(ctx, req.CallID)
+	defer unlock()
+	if existing, err := s.deps.Calls.GetCall(ctx, req.CallID); err == nil {
+		return s.GetCall(ctx, existing.ID)
+	} else if !errors.Is(err, errs.ErrNotFound) {
+		return ports.CallView{}, err
+	}
+	meta := ""
+	if len(req.Metadata) > 0 {
+		raw, err := json.Marshal(req.Metadata)
+		if err != nil {
+			return ports.CallView{}, errs.InvalidRequest("metadata 无效")
+		}
+		meta = string(raw)
+	}
+	now := time.Now().UTC()
+	rec := ports.CallRecord{
+		Version: 1, ApplicationID: scope.Application(ctx), ID: req.CallID, BusinessRef: req.BusinessRef, Metadata: meta,
+		Direction: "internal", SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
+		return ports.CallView{}, err
+	}
+	rt := &runtimeCall{rec: rec}
 	s.mu.Lock()
 	s.calls[req.CallID] = rt
 	s.mu.Unlock()
@@ -114,9 +155,12 @@ func (s *Service) AddDirectLeg(ctx context.Context, callID string, req dto.Direc
 	return view, nil
 }
 
-func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.DirectSIPRequest) (ports.CallView, error) {
+func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.DirectSIPRequest) (ports.DirectSIPResult, error) {
 	if req.Destination == "" {
-		return ports.CallView{}, errs.InvalidRequest("destination 必填")
+		return ports.DirectSIPResult{}, errs.InvalidRequest("destination 必填")
+	}
+	if req.TrunkID == "" && req.RouteGroupID != "" {
+		req.TrunkID = req.RouteGroupID
 	}
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -124,30 +168,48 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 	rt := s.calls[callID]
 	s.mu.Unlock()
 	if rt == nil || rt.rec.State == stateEnded || rt.rec.QueueID != nil {
-		return ports.CallView{}, errs.Conflict("通话不可拨号", "")
+		return ports.DirectSIPResult{}, errs.Conflict("通话不可拨号", "")
 	}
 	if len(rt.legs) >= 2 {
-		return ports.CallView{}, errs.Conflict("直接控制通话最多支持两个媒体腿", "")
+		return ports.DirectSIPResult{}, errs.Conflict("直接控制通话最多支持两个媒体腿", "")
 	}
 	if rt.rec.SessionType != dto.SessionTypeAudio {
-		return ports.CallView{}, errs.Unprocessable("SIP 腿仅支持语音", "")
+		return ports.DirectSIPResult{}, errs.Unprocessable("SIP 腿仅支持语音", "")
 	}
 	if m, ok := s.deps.Media.(interface{ PrepareSIP(string) }); ok {
 		m.PrepareSIP(callID)
 	}
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
-		return ports.CallView{}, err
+		return ports.DirectSIPResult{}, err
 	}
 	leg := ports.CallLegRecord{ID: uuid.NewString(), CallID: callID, Role: dto.LegRolePSTN, CreatedAt: time.Now().UTC()}
 	if err := s.deps.Calls.InsertLeg(ctx, leg); err != nil {
-		return ports.CallView{}, err
+		return ports.DirectSIPResult{}, err
 	}
 	s.mu.Lock()
 	rt.legs = append(rt.legs, leg)
 	view := toView(rt)
 	s.mu.Unlock()
-	_ = s.publishCall(ctx, callID, "leg.dialing", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "destination": req.Destination})
-	go func() {
+	cmdID := ""
+	if s.deps.Commands != nil {
+		cmd, reused, err := s.deps.Commands.Accept(ctx, callID, scope.Idempotency(ctx), sipDialRequestHash(req), "sip.dial", map[string]any{
+			"call_id": callID, "leg_id": leg.ID, "destination": req.Destination, "trunk_id": req.TrunkID,
+		})
+		if err != nil {
+			return ports.DirectSIPResult{}, err
+		}
+		cmdID = cmd.ID
+		if reused {
+			legID, _ := cmd.Result["leg_id"].(string)
+			if legID == "" {
+				legID = leg.ID
+			}
+			return ports.DirectSIPResult{View: view, CommandID: cmdID, LegID: legID}, nil
+		}
+		_ = s.deps.Commands.MarkRunning(ctx, cmdID)
+	}
+	s.emitCall(ctx, callID, "leg.dialing", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "destination": req.Destination, "command_id": cmdID})
+	go func(commandID string) {
 		dialCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		err := s.deps.Media.OriginateSIP(dialCtx, callID, leg.ID, req.Destination, req.TrunkID)
@@ -159,15 +221,30 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 		s.mu.Unlock()
 		if !alive {
 			_ = s.deps.Media.LeaveRoom(lockedCtx, callID, leg.ID)
+			if s.deps.Commands != nil && commandID != "" {
+				_ = s.deps.Commands.Complete(lockedCtx, commandID, "failed", "call_ended", map[string]any{"leg_id": leg.ID})
+			}
 			return
 		}
 		if err != nil {
-			_ = s.publishCall(lockedCtx, callID, "leg.failed", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "error": err.Error()})
+			s.emitCall(lockedCtx, callID, "leg.failed", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "error": err.Error()})
+			if s.deps.Commands != nil && commandID != "" {
+				_ = s.deps.Commands.Complete(lockedCtx, commandID, "failed", "dial_failed", map[string]any{"leg_id": leg.ID, "error": err.Error()})
+			}
 			return
 		}
-		_ = s.publishCall(lockedCtx, callID, "leg.answered", "", map[string]any{"call_id": callID, "leg_id": leg.ID})
-	}()
-	return view, nil
+		s.emitCall(lockedCtx, callID, "leg.connected", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "type": "sip"})
+		s.emitCall(lockedCtx, callID, "leg.answered", "", map[string]any{"call_id": callID, "leg_id": leg.ID})
+		if s.deps.Commands != nil && commandID != "" {
+			_ = s.deps.Commands.Complete(lockedCtx, commandID, "succeeded", "", map[string]any{"leg_id": leg.ID})
+		}
+	}(cmdID)
+	return ports.DirectSIPResult{View: view, CommandID: cmdID, LegID: leg.ID}, nil
+}
+
+func sipDialRequestHash(req dto.DirectSIPRequest) string {
+	sum := sha256.Sum256([]byte(req.Destination + "|" + req.TrunkID + "|" + req.RouteGroupID))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Service) BridgeDirect(ctx context.Context, callID, a, b string) error {
@@ -176,6 +253,16 @@ func (s *Service) BridgeDirect(ctx context.Context, callID, a, b string) error {
 	}
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
+	hash := "bridge|" + a + "|" + b
+	return s.runIdempotentMutation(ctx, callID, "bridge", hash, func() error {
+		return s.bridgeDirectOnce(ctx, callID, a, b)
+	})
+}
+
+func (s *Service) bridgeDirectOnce(ctx context.Context, callID, a, b string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	s.mu.Unlock()
@@ -201,12 +288,92 @@ func (s *Service) BridgeDirect(ctx context.Context, callID, a, b string) error {
 		}
 		return err
 	}
-	return s.publishCall(ctx, callID, "call.answered", "", map[string]any{"call_id": callID, "leg_a": a, "leg_b": b})
+	bridgePayload := map[string]any{"call_id": callID, "leg_a": a, "leg_b": b}
+	if s.deps.Bridges != nil {
+		bridgeID, err := s.deps.Bridges.ActivatePair(ctx, rt.rec.ApplicationID, callID, a, b)
+		if err != nil {
+			return err
+		}
+		if bridgeID != "" {
+			bridgePayload["bridge_id"] = bridgeID
+		}
+	}
+	if err := s.publishCall(ctx, callID, "bridge.active", "", bridgePayload); err != nil {
+		return err
+	}
+	return s.publishCall(ctx, callID, "call.answered", "", bridgePayload)
+}
+
+func (s *Service) ReplaceBridge(ctx context.Context, callID, bridgeID, legA, legB string) error {
+	if legA == "" || legB == "" || legA == legB {
+		return errs.InvalidRequest("需要两个不同的 leg_id")
+	}
+	ctx, unlock := s.command(ctx, callID)
+	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
+	hash := "bridge.replace|" + bridgeID + "|" + legA + "|" + legB
+	return s.runIdempotentMutation(ctx, callID, "bridge.replace", hash, func() error {
+		s.mu.Lock()
+		rt := s.calls[callID]
+		s.mu.Unlock()
+		if rt == nil || rt.rec.State == stateEnded {
+			return errs.Conflict("通话不可桥接", "")
+		}
+		if _, err := s.deps.Calls.GetLeg(ctx, callID, legA); err != nil {
+			return err
+		}
+		if _, err := s.deps.Calls.GetLeg(ctx, callID, legB); err != nil {
+			return err
+		}
+		if s.deps.Bridges == nil {
+			return errs.ErrNotImplemented
+		}
+		if err := s.deps.Bridges.ReplacePair(ctx, rt.rec.ApplicationID, callID, bridgeID, legA, legB); err != nil {
+			return err
+		}
+		if m, ok := s.deps.Media.(interface{ UnbridgeLegs(string) }); ok {
+			m.UnbridgeLegs(callID)
+		}
+		if err := s.deps.Media.BridgeLegs(ctx, callID, legA, legB); err != nil {
+			return err
+		}
+		payload := map[string]any{"call_id": callID, "bridge_id": bridgeID, "leg_a": legA, "leg_b": legB}
+		return s.publishCall(ctx, callID, "bridge.updated", "", payload)
+	})
+}
+
+func (s *Service) EndBridge(ctx context.Context, callID, bridgeID string) error {
+	ctx, unlock := s.command(ctx, callID)
+	defer unlock()
+	s.mu.Lock()
+	rt := s.calls[callID]
+	s.mu.Unlock()
+	appID := ""
+	if rt != nil {
+		appID = rt.rec.ApplicationID
+	}
+	if s.deps.Bridges == nil {
+		return errs.ErrNotImplemented
+	}
+	if err := s.deps.Bridges.EndBridge(ctx, appID, callID, bridgeID); err != nil {
+		return err
+	}
+	s.emitCall(ctx, callID, "bridge.ended", "", map[string]any{"call_id": callID, "bridge_id": bridgeID})
+	return nil
 }
 
 func (s *Service) LeaveDirectLeg(ctx context.Context, callID, legID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	hash := "leg.leave|" + legID
+	return s.runIdempotentMutation(ctx, callID, "leg.leave", hash, func() error {
+		return s.leaveDirectLegOnce(ctx, callID, legID)
+	})
+}
+
+func (s *Service) leaveDirectLegOnce(ctx context.Context, callID, legID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	s.mu.Unlock()

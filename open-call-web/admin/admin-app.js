@@ -1,9 +1,10 @@
+// 管理端应用入口：身份、路由、队列/IVR/DID 等配置与发布。
 import { NAV, renderApp } from "./views/shell.js";
 import { identityActions, newIdentityUserDraft } from "./controllers/identity.js";
 import { bindApiFeedback } from "../shared/http-client.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, publishSwitchConfig, startSSO, upsertDid } from "../shared/api.js";
+import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, publishSwitchConfig, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
 import "../shared/components/ivr/ivr-editor.js";
@@ -48,6 +49,7 @@ export class AdminApp extends LitElement {
     cdrResult: { type: String },
     clock: { type: String },
     authOptions: { type: Object }, me: { type: Object }, roles: { type: Array }, permissionsCatalog: { type: Array }, groupMappings: { type: Array }, selectedUser: { type: String }, identities: { type: Array }, newRole: { type: Object }, newMapping: { type: Object }, identityInput: { type: Object }, agentProfileDraft: { type: Object }, newIdentityUser: { type: Object },
+    openCalls: { type: Array }, runtimeCall: { type: Object }, bridgeForm: { type: Object },
   };
 
   static styles = appStyles;
@@ -102,7 +104,10 @@ export class AdminApp extends LitElement {
     this.cdrCaller = "";
     this.cdrResult = "";
     this.clock = "";
-    this.authOptions = null; this.me = null; this.roles = []; this.permissionsCatalog = []; this.groupMappings = []; this.selectedUser = ""; this.identities = []; this.newRole = { id: "", name: "", permissions: [] }; this.newMapping = { group: "", roles: [] }; this.identityInput = { issuer: "", subject: "" }; this.agentProfileDraft = { extension: "", terminal_type: "webrtc", video_capable: false }; this.newIdentityUser = newIdentityUserDraft();
+    this.authOptions = null; this.me = null; this.roles = []; this.permissionsCatalog = []; this.groupMappings = []; this.selectedUser = ""; this.identities = []; this.newRole = { id: "", name: "", permissions: [] }; this.newMapping = { group: "", roles: [] }; this.identityInput = { issuer: "", subject: "" }; this.agentProfileDraft = { extension: "", terminal_type: "webrtc", video_capable: false };     this.newIdentityUser = newIdentityUserDraft();
+    this.openCalls = [];
+    this.runtimeCall = null;
+    this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
   }
 
   connectedCallback() {
@@ -153,7 +158,7 @@ export class AdminApp extends LitElement {
     this.error = "";
     this.me = await authMe();
     const allow = (code) => this.me?.permissions?.includes(code);
-    const navPermission = { overview: "status.read", queues: "queues.read", agents: "agents.read", dids: "dids.read", cdr: "cdr.read", recordings: "recordings.read", ivr: "ivr.read", webhooks: "webhooks.read", audit: "audit.read", identity: "users.read" };
+    const navPermission = { overview: "status.read", runtime: "calls.read", queues: "queues.read", agents: "agents.read", dids: "dids.read", cdr: "cdr.read", recordings: "recordings.read", ivr: "ivr.read", webhooks: "webhooks.read", audit: "audit.read", identity: "users.read" };
     const canOpen = (key) => key === "identity" ? ["users.read", "users.create", "roles.read", "identity.read"].some(allow) : allow(navPermission[key]);
     if (!canOpen(this.nav)) this.nav = Object.keys(navPermission).find(canOpen) || "identity";
     const jobs = [
@@ -310,13 +315,72 @@ export class AdminApp extends LitElement {
     return (this.agents || []).filter((a) => a.state === "idle").length;
   }
 
+  async #loadRuntime() {
+    try {
+      this.openCalls = await listOpenCalls();
+      this.error = "";
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async #selectRuntimeCall(callId) {
+    try {
+      this.runtimeCall = await getCall(callId);
+      this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
+      this.error = "";
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async #createBridge() {
+    const { leg_a: a, leg_b: b } = this.bridgeForm;
+    if (!this.runtimeCall?.id || !a || !b) return;
+    try {
+      await createBridge(this.runtimeCall.id, a, b);
+      this.notice = "已请求建立桥接";
+      await this.#selectRuntimeCall(this.runtimeCall.id);
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async #replaceBridge() {
+    const { bridge_id, leg_a: a, leg_b: b } = this.bridgeForm;
+    if (!this.runtimeCall?.id || !bridge_id || !a || !b) return;
+    try {
+      await replaceBridge(this.runtimeCall.id, bridge_id, a, b);
+      this.notice = "桥接腿已替换";
+      await this.#selectRuntimeCall(this.runtimeCall.id);
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async #endBridge() {
+    const { bridge_id } = this.bridgeForm;
+    if (!this.runtimeCall?.id || !bridge_id) return;
+    try {
+      await endBridge(this.runtimeCall.id, bridge_id);
+      this.notice = "桥接已拆除";
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   render() {
     return renderApp(this, {
       addHook: (...args) => this.#addHook(...args),
       addSkill: (...args) => this.#addSkill(...args),
       bindAll: (...args) => this.#bindAll(...args),
       bindSkill: (...args) => this.#bindSkill(...args),
+      createBridge: (...args) => this.#createBridge(...args),
       createQueue: (...args) => this.#createQueue(...args),
+      endBridge: (...args) => this.#endBridge(...args),
+      loadRuntime: (...args) => this.#loadRuntime(...args),
+      replaceBridge: (...args) => this.#replaceBridge(...args),
+      selectRuntimeCall: (...args) => this.#selectRuntimeCall(...args),
       crumb: (...args) => this.#crumb(...args),
       downloadRec: (...args) => this.#downloadRec(...args),
       exportCdr: () => downloadCdrCsv(),

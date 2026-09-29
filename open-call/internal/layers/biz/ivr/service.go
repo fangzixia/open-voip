@@ -237,7 +237,7 @@ func (s *Service) validateDocWithDB(db *gorm.DB, d Doc) error {
 			return errs.InvalidRequest("节点 " + id + " 无效按键重试不能超过 5 次")
 		}
 		switch n.Type {
-		case "play", "menu", "route_queue", "time_check", "hangup", "business_action":
+		case "play", "menu", "route_queue", "time_check", "hangup", "business_action", "tts", "asr":
 		default:
 			return errs.InvalidRequest("节点 " + id + " 类型无效")
 		}

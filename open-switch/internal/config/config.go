@@ -29,20 +29,16 @@ type Config struct {
 	TURN TURNConfig `yaml:"turn"`
 	// SIP 可选 PSTN 中继；未启用则不监听 5060。
 	SIP SIPConfig `yaml:"sip"`
-	// Applications 可调用 Switch 的业务系统及其资源作用域。
-	Applications []ApplicationConfig `yaml:"applications"`
+	// Integration 保护 integrator 登记接口；租户由业务方 register API 登记。
+	Integration IntegrationConfig `yaml:"integration"`
 }
 
-// ApplicationConfig 定义一个可信业务系统。终端用户身份仍由业务系统验证。
-type ApplicationConfig struct {
-	// ID 稳定应用标识，同时作为默认租户作用域。
-	ID string `yaml:"id"`
-	// Secret 服务间 Bearer 密钥。
-	Secret string `yaml:"secret"`
-	// EventRetentionDays 该应用事件保留目标天数。
-	EventRetentionDays int `yaml:"event_retention_days"`
-	// MaxConcurrentCalls 应用级并发上限，0 使用默认值。
-	MaxConcurrentCalls int `yaml:"max_concurrent_calls"`
+// IntegrationConfig 控制 /integrations/register 等登记入口。
+type IntegrationConfig struct {
+	// RegisterToken 登记与轮换 secret 时要求的 X-Register-Token；生产环境应配置。
+	RegisterToken string `yaml:"register_token"`
+	// AllowOpenRegister 为 true 且库内尚无租户时，允许无 token 登记（仅演示）。
+	AllowOpenRegister bool `yaml:"allow_open_register"`
 }
 
 // ServerConfig 定义 HTTP(S) 监听地址。
@@ -143,7 +139,7 @@ type SIPTrunkConfig struct {
 
 // LogConfig 定义 slog 输出。
 type LogConfig struct {
-	// Level 日志级别：debug / info / warn / error。
+	// Level 日志级别：debug（调试）/ info（信息）/ warn（警告）/ error（错误）。
 	Level string `yaml:"level"`
 	// Format json 或 text。
 	Format string `yaml:"format"`
@@ -222,34 +218,6 @@ func (c *Config) Validate() error {
 	if c.Recordings.VideoFormat != "webm" && c.Recordings.VideoFormat != "mp4" {
 		errs = append(errs, "recordings.video_format 必须为 webm 或 mp4")
 	}
-	if len(c.Applications) == 0 {
-		errs = append(errs, "applications 至少配置一个业务系统")
-	}
-	appIDs := map[string]bool{}
-	appSecrets := map[string]bool{}
-	for i, app := range c.Applications {
-		id := strings.TrimSpace(app.ID)
-		secret := strings.TrimSpace(app.Secret)
-		if id == "" || strings.ContainsAny(id, " /\\:@\r\n\t") {
-			errs = append(errs, fmt.Sprintf("applications[%d].id 无效", i))
-		} else if appIDs[id] {
-			errs = append(errs, fmt.Sprintf("applications[%d].id 重复", i))
-		}
-		appIDs[id] = true
-		if len(secret) < 16 {
-			errs = append(errs, fmt.Sprintf("applications[%d].secret 长度至少 16 字符", i))
-		} else if appSecrets[secret] {
-			errs = append(errs, fmt.Sprintf("applications[%d].secret 不能与其他应用重复", i))
-		}
-		appSecrets[secret] = true
-		if app.EventRetentionDays < 1 {
-			errs = append(errs, fmt.Sprintf("applications[%d].event_retention_days 必须大于 0", i))
-		}
-		if app.MaxConcurrentCalls < 1 {
-			errs = append(errs, fmt.Sprintf("applications[%d].max_concurrent_calls 必须大于 0", i))
-		}
-	}
-
 	level := strings.ToLower(strings.TrimSpace(c.Log.Level))
 	if level != "debug" && level != "info" && level != "warn" && level != "error" {
 		errs = append(errs, "log.level 必须为 debug/info/warn/error 之一")
@@ -317,8 +285,9 @@ func (c *Config) Validate() error {
 		}
 		seen := map[string]bool{}
 		for _, d := range c.SIP.Devices {
-			if !appIDs[d.ApplicationID] {
-				errs = append(errs, "SIP 设备必须绑定有效 application_id")
+			aid := strings.TrimSpace(d.ApplicationID)
+			if aid == "" || strings.ContainsAny(aid, " /\\:@\r\n\t") {
+				errs = append(errs, "SIP 设备必须配置有效 application_id")
 			}
 			if d.Username == "" || seen[d.Username] || strings.ContainsAny(d.Username, " @:;\r\n") {
 				errs = append(errs, "SIP 设备用户名无效或重复")
@@ -364,15 +333,6 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) applyDefaults() {
-	for i := range c.Applications {
-		c.Applications[i].ID = strings.TrimSpace(c.Applications[i].ID)
-		if c.Applications[i].EventRetentionDays <= 0 {
-			c.Applications[i].EventRetentionDays = 14
-		}
-		if c.Applications[i].MaxConcurrentCalls <= 0 {
-			c.Applications[i].MaxConcurrentCalls = 100
-		}
-	}
 	if strings.TrimSpace(c.Log.Dir) == "" {
 		c.Log.Dir = "./logs/open-switch"
 	}

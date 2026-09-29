@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// validateIVR 校验 IVR 图结构、分支、业务动作节点与可达性（发布前调用）。
 func validateIVR(payload string, queues map[string]bool) error {
 	var doc struct {
 		Start string `json:"start"`
@@ -62,6 +63,11 @@ func validateIVR(payload string, queues map[string]bool) error {
 				return errs.InvalidRequest("工作时间节点引用不存在的队列")
 			}
 			edges[id] = []string{node.Open, node.Closed}
+		case "tts", "asr":
+			if node.Default == "" {
+				return errs.InvalidRequest("tts/asr 节点必须指定 default 兜底分支")
+			}
+			edges[id] = []string{node.Default}
 		default:
 			return errs.InvalidRequest("不支持的 IVR 节点: " + node.Type)
 		}
@@ -99,6 +105,7 @@ func validateIVR(payload string, queues map[string]bool) error {
 	return nil
 }
 
+// validateHours 校验队列工作时间 JSON（时区、星期与 HH:MM 窗口）。
 func validateHours(raw string) error {
 	if raw == "always" {
 		return nil

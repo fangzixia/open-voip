@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// ConfigVersion is an immutable, validated application routing snapshot.
+// ConfigVersion 已校验、不可变的应用路由配置快照。
 type ConfigVersion struct {
 	ApplicationID string    `gorm:"primaryKey;size:64"`
 	Version       int64     `gorm:"primaryKey"`
@@ -15,7 +15,7 @@ type ConfigVersion struct {
 
 func (ConfigVersion) TableName() string { return "os_config_versions" }
 
-// ActiveConfig points to the snapshot used for new calls.
+// ActiveConfig 指向新通话所使用的已激活配置快照。
 type ActiveConfig struct {
 	ApplicationID string    `gorm:"primaryKey;size:64"`
 	Version       int64     `gorm:"not null"`

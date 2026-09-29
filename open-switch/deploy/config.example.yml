@@ -1,26 +1,19 @@
 # open-switch 配置示例（软交换：Switch API + 媒体/SIP）
-# 与业务系统分进程、分库部署；每个业务系统使用独立应用凭证与配置作用域。
+# 业务系统集成方通过 POST /switch/v2/integrations/register 登记；不在此配置租户。
 
 server:
-  # Switch API（/switch/v2）；建议仅内网监听，由业务系统 BFF 代理终端流量。
   listen: "127.0.0.1:8082"
 
-applications:
-  - id: "open-call"
-    secret: "change_me_integration"
-    event_retention_days: 14
-    max_concurrent_calls: 100
+integration:
+  register_token: "replace_with_random_register_token_32+"
+  allow_open_register: false
 
 database:
-  # 软交换库：仅存 calls/legs 等运行时话务；勿与 open-call 业务库混用。
   dsn: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_switch port=5432 sslmode=disable"
 
 recordings:
-  # 录音/录像文件落盘目录（本进程写入）。
   dir: "./data/recordings"
-  # 每通视频呼叫仅保存一份包含音频的成品；可选 webm 或 mp4。
   video_format: "webm"
-  # FFmpeg 可执行文件；留空时从 PATH 查找。视频录像必须安装 FFmpeg。
   ffmpeg_path: ""
   retain_days: 90
   notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
@@ -28,7 +21,6 @@ recordings:
 log:
   level: info
   format: json
-  # 同时输出 stdout、app.jsonl 与 trace.jsonl；按大小轮转为 gzip，归档不自动删除。
   dir: "./logs/open-switch"
   max_size_mb: 100
 
@@ -38,7 +30,6 @@ tls:
   key_file: ""
 
 ice:
-  # 内网可留空；跨 NAT 配置自己的 STUN/TURN。
   stun_urls: []
   udp_port_min: 10000
   udp_port_max: 20000
@@ -59,28 +50,12 @@ sip:
   transport: udp
   session_expires_sec: 0
   local_registrar: false
-  # 每个 SIP 坐席独立凭证，用户名与业务分机号一致。
   devices: []
   # devices:
-  #   - application_id: "open-call"
+  #   - application_id: "cc-prod"
   #     username: "1001"
   #     password: "REPLACE-WITH-UNIQUE-RANDOM-PASSWORD"
   #     allowed_cidrs: ["192.168.10.0/24"]
   tls_cert_file: ""
   tls_key_file: ""
   trunks: []
-  # 本机 MicroSIP：enabled/local_registrar true，allowed_cidrs 含 127.0.0.1/32。
-  # 运营商中继：register+username/password，from_user 为报备 DID，allowed_cidrs 为 SBC IP。
-  # - id: primary
-  #   host: "sip.carrier.example"
-  #   port: 5060
-  #   username: ""
-  #   password: ""
-  #   realm: ""
-  #   register: true
-  #   expire_sec: 300
-  #   from_user: "021xxxxxxxx"
-  #   codecs: ["PCMU", "PCMA"]
-  #   allowed_cidrs: ["1.2.3.4/32"]
-  #   strip_prefix: ""
-  #   prefix: ""

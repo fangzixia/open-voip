@@ -2,8 +2,11 @@ package control
 
 import (
 	"context"
+	"log/slog"
+
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
+	"open-switch/internal/scope"
 )
 
 // setAgentState 统一更新坐席状态并附带通话追踪信息。
@@ -25,15 +28,47 @@ func (s *Service) Recover(ctx context.Context) error {
 		return err
 	}
 	for _, rec := range records {
-		legs, err := s.deps.Calls.ListLegs(ctx, rec.ID)
+		appCtx := scope.WithApplication(ctx, rec.ApplicationID)
+		legs, err := s.deps.Calls.ListLegs(appCtx, rec.ID)
 		if err != nil {
 			return err
+		}
+		if rec.State == stateIVR && s.deps.IVRSessions != nil {
+			sess, err := s.deps.IVRSessions.GetIVRSession(appCtx, rec.ID)
+			if err == nil {
+				if err := s.recoverIVRCall(appCtx, rec, legs, sess); err != nil {
+					slog.Warn("IVR 恢复失败，将结束通话", "call_id", rec.ID, "error", err)
+				} else {
+					continue
+				}
+			}
+		}
+		if rec.State == stateQueued && rec.QueueID != nil {
+			if err := s.recoverQueuedCall(appCtx, rec, legs); err != nil {
+				slog.Warn("排队恢复失败，将结束通话", "call_id", rec.ID, "error", err)
+			} else {
+				continue
+			}
+		}
+		if rec.State == stateRinging {
+			if err := s.recoverRingingCall(appCtx, rec, legs); err != nil {
+				slog.Warn("振铃恢复失败，将结束通话", "call_id", rec.ID, "error", err)
+			} else {
+				continue
+			}
+		}
+		if rec.State == stateActive || rec.State == stateHeld || rec.State == stateTransferring {
+			if err := s.recoverActiveCall(appCtx, rec, legs); err != nil {
+				slog.Warn("已接通恢复失败，将结束通话", "call_id", rec.ID, "error", err)
+			} else {
+				continue
+			}
 		}
 		rt := &runtimeCall{rec: rec, legs: legs, caller: rec.Caller, callee: rec.Callee, activeAgent: rec.AgentID, offeredAgent: rec.OfferedAgent, answeredAt: rec.AnsweredAt}
 		s.mu.Lock()
 		s.calls[rec.ID] = rt
 		s.mu.Unlock()
-		if err := s.Hangup(ctx, rec.ID, dto.HangupReasonError); err != nil {
+		if err := s.Hangup(appCtx, rec.ID, dto.HangupReasonError); err != nil {
 			return err
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"open-switch/internal/store"
 )
 
+// businessActionRow 映射 os_business_actions 表行。
 type businessActionRow struct {
 	ID            string
 	ApplicationID string
@@ -30,6 +31,7 @@ type businessActionRow struct {
 
 func (businessActionRow) TableName() string { return "os_business_actions" }
 
+// BeginBusinessAction 创建待处理动作并发布 business_action.requested 事件。
 func (s *Service) BeginBusinessAction(ctx context.Context, a ports.BusinessAction) error {
 	app, err := applicationID(ctx)
 	if err != nil {
@@ -45,10 +47,13 @@ func (s *Service) BeginBusinessAction(ctx context.Context, a ports.BusinessActio
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
-		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: a.CallID, Type: "business_action.requested", Payload: map[string]any{"call_id": a.CallID, "action_id": a.ID, "node_id": a.NodeID, "action": a.Action, "deadline": a.Deadline}})
+		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: a.CallID, Type: "business_action.requested", Payload: map[string]any{
+			"call_id": a.CallID, "action_id": a.ID, "node_id": a.NodeID, "action": a.Action, "deadline": a.Deadline, "outcomes": a.Outcomes,
+		}})
 	})
 }
 
+// GetBusinessAction 按 ID 读取当前应用下的业务动作。
 func (s *Service) GetBusinessAction(ctx context.Context, id string) (ports.BusinessAction, error) {
 	app, err := applicationID(ctx)
 	if err != nil {
@@ -68,14 +73,17 @@ func (s *Service) GetBusinessAction(ctx context.Context, id string) (ports.Busin
 	return ports.BusinessAction{ID: row.ID, CallID: row.CallID, NodeID: row.NodeID, Action: row.Action, Outcomes: outcomes, Deadline: row.DeadlineAt, Status: row.Status, Outcome: row.Outcome}, nil
 }
 
+// ResolveBusinessAction 提交业务结果并发布 business_action.completed。
 func (s *Service) ResolveBusinessAction(ctx context.Context, id, outcome string) error {
 	return s.updateBusinessAction(ctx, id, outcome, false)
 }
 
+// ExpireBusinessAction 将超时动作标记为已过期并发布对应事件。
 func (s *Service) ExpireBusinessAction(ctx context.Context, id string) error {
 	return s.updateBusinessAction(ctx, id, "", true)
 }
 
+// updateBusinessAction 在行锁下校验截止时间、结果声明与终态，并写入事件流。
 func (s *Service) updateBusinessAction(ctx context.Context, id, outcome string, expire bool) error {
 	app, err := applicationID(ctx)
 	if err != nil {

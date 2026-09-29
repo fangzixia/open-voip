@@ -16,6 +16,7 @@ import (
 	"time"
 )
 
+// TestLocalCCLifecycleIntegration 覆盖 IVR 业务判断、完成/重复提交与超时等呼叫控制边界。
 func TestLocalCCLifecycleIntegration(t *testing.T) {
 	dsn := os.Getenv("OPEN_VOIP_TEST_DSN")
 	if dsn == "" {

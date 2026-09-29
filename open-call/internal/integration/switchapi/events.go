@@ -7,6 +7,7 @@ import (
 	"strconv"
 )
 
+// Event 是 Switch /switch/v2/events 游标 API 返回的一条持久化呼叫事件。
 type Event struct {
 	ApplicationID string         `json:"application_id"`
 	Version       int64          `json:"version"`
@@ -20,6 +21,7 @@ type Event struct {
 	CreatedAt     string         `json:"created_at"`
 }
 
+// ListEvents 按 after_id 增量拉取事件（运维对账；主路径为 Switch HTTP callback）。
 func (c *Client) ListEvents(ctx context.Context, afterID int64) ([]Event, error) {
 	var out struct {
 		Items []Event `json:"items"`

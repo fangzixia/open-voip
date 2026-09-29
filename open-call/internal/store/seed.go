@@ -14,7 +14,7 @@ import (
 	"open-call/internal/store/models"
 )
 
-// SeedIfEmpty 当 users 表为空时写入 Demo 管理员、坐席与队列。
+// SeedIfEmpty 当 users 表为空时写入演示用管理员、坐席与队列。
 func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) error {
 	if !cfg.Enabled {
 		return nil
@@ -185,7 +185,7 @@ func SeedIfEmpty(db *gorm.DB, cfg config.BootstrapConfig, log *slog.Logger) erro
 		return fmt.Errorf("空库种子: %w", err)
 	}
 	if log != nil {
-		log.Info("已写入 Demo 种子账号", "admin", "admin", "agent", "agent1", "agent2", "agent2", "supervisor", "supervisor", "did", "8001")
+		log.Info("已写入演示种子账号", "admin", "admin", "agent", "agent1", "agent2", "agent2", "supervisor", "supervisor", "did", "8001")
 	}
 	return nil
 }

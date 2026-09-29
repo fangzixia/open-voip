@@ -67,6 +67,31 @@ func (s *Service) GetLatestIVR(ctx context.Context, flowID string) (ports.IVRSna
 	return ports.IVRSnapshot{ApplicationID: appID, ConfigVersion: version, SnapshotID: row.FlowID, FlowID: row.FlowID, Version: row.Version, PayloadJSON: row.PayloadJSON}, nil
 }
 
+func (s *Service) GetIVRSnapshot(ctx context.Context, configVersion int64, flowID string, flowVersion int) (ports.IVRSnapshot, error) {
+	appID, err := applicationID(ctx)
+	if err != nil {
+		return ports.IVRSnapshot{}, err
+	}
+	if configVersion < 1 {
+		configVersion, err = s.versionFor(ctx, appID)
+		if err != nil {
+			return ports.IVRSnapshot{}, err
+		}
+	}
+	var row models.IVRPublishedSnapshot
+	q := s.db.WithContext(ctx).Where("application_id = ? AND config_version = ? AND flow_id = ?", appID, configVersion, flowID)
+	if flowVersion > 0 {
+		q = q.Where("version = ?", flowVersion)
+	}
+	if err := q.Order("version DESC").First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ports.IVRSnapshot{}, errs.NotFound("IVR 快照不存在")
+		}
+		return ports.IVRSnapshot{}, err
+	}
+	return ports.IVRSnapshot{ApplicationID: appID, ConfigVersion: configVersion, SnapshotID: row.FlowID, FlowID: row.FlowID, Version: row.Version, PayloadJSON: row.PayloadJSON}, nil
+}
+
 func (s *Service) GetBusinessHours(ctx context.Context, queueID string) (ports.BusinessHours, error) {
 	appID, err := applicationID(ctx)
 	if err != nil {
@@ -122,7 +147,7 @@ LIMIT 1`, did, trunkID, scope.Application(ctx), scope.Application(ctx), trunkID)
 
 func (s *Service) Now(context.Context) time.Time { return time.Now().UTC() }
 
-// RequestAgent atomically reserves one eligible, signed-in agent.
+// RequestAgent 原子地预留一名符合条件且已签入的坐席。
 func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dto.DispatchResult, error) {
 	appID, err := applicationID(ctx)
 	if err != nil {
@@ -184,7 +209,7 @@ AND NOT EXISTS (
  AND NOT EXISTS (SELECT 1 FROM os_agent_skills ags WHERE ags.application_id = qs.application_id AND ags.config_version = qs.config_version AND ags.agent_id = s.agent_id AND ags.skill_id = qs.skill_id)
 )
 ` + extra + " ORDER BY " + order + " LIMIT 1 FOR UPDATE OF s SKIP LOCKED"
-		// query argument order follows joins and filters.
+		// 查询参数顺序须与 JOIN 及 WHERE 条件一致。
 		if err := tx.Raw(query, args...).Scan(&picked).Error; err != nil {
 			return err
 		}
@@ -213,7 +238,13 @@ AND NOT EXISTS (
 			uuid.NewString(), appID, req.CallID, req.QueueID, picked, now, req.CallID).Error; err != nil {
 			return err
 		}
-		return publishAgentTx(ctx, tx, req.CallID, picked, "ringing", "acd")
+		if err := publishAgentTx(ctx, tx, req.CallID, picked, "ringing", "acd"); err != nil {
+			return err
+		}
+		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{
+			CallID: req.CallID, AgentID: picked, Type: "acd.agent_reserved",
+			Payload: map[string]any{"call_id": req.CallID, "queue_id": req.QueueID, "agent_id": picked},
+		})
 	})
 	if err != nil {
 		return dto.DispatchResult{}, err
@@ -256,8 +287,7 @@ func (s *Service) findAgent(ctx context.Context, predicate string, value any) (p
 	return ports.AgentInfo{ConfigVersion: version, TerminalType: row.TerminalType, SIPUsername: row.SIPUsername, AgentID: row.ID, UserID: row.UserID, Extension: row.Extension, VideoCapable: row.VideoCapable, DisplayName: row.DisplayName, State: state}, nil
 }
 
-// SetCallState is the call-control variant of SetState. Carrying callID
-// separately prevents state transitions from relying on encoded reason text.
+// SetCallState 是呼叫控制侧的 SetState：单独携带 callID，避免状态迁移依赖编码在 reason 里的文本。
 func (s *Service) SetCallState(ctx context.Context, callID, agentID, fromState, toState, reason string) error {
 	appID, err := applicationID(ctx)
 	if err != nil {
@@ -526,7 +556,7 @@ func derefString(value *string) string {
 	return *value
 }
 
-// RecoverReservations releases reservations that outlived their call after process recovery.
+// RecoverReservations 进程恢复后释放已随通话结束但仍占用的坐席预留。
 func (s *Service) RecoverReservations(ctx context.Context) error {
 	var rows []models.AgentSession
 	if err := s.db.WithContext(ctx).Raw(`SELECT s.* FROM os_agent_sessions s

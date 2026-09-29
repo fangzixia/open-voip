@@ -31,7 +31,7 @@ const (
 
 // APIError 可映射为 HTTP JSON 错误体。
 type APIError struct {
-	// Kind 对应 error 字段，如 unauthorized。
+	// Kind 对应响应 JSON 中的 error 种类，如 unauthorized。
 	Kind string
 	// Code 可选业务码。
 	Code string
@@ -110,7 +110,7 @@ func Internal(msg string) *APIError {
 	return &APIError{Kind: "internal_error", Message: msg, HTTP: http.StatusInternalServerError}
 }
 
-// AsAPIError 将任意 error 转为 APIError。
+// AsAPIError 将任意错误转为 APIError。
 func AsAPIError(err error) *APIError {
 	if err == nil {
 		return nil

@@ -19,6 +19,7 @@ import (
 	"open-switch/internal/errs"
 	"open-switch/internal/layers/cccore"
 	"open-switch/internal/layers/control"
+	"open-switch/internal/layers/integration"
 	"open-switch/internal/layers/media"
 	"open-switch/internal/ports/dto"
 	"open-switch/internal/scope"
@@ -68,7 +69,14 @@ func Run(configPath string) error {
 		return fmt.Errorf("媒体层: %w", err)
 	}
 
-	eventStore := store.CallEvents{DB: db}
+	appRegistry := store.NewApplicationRegistry(db)
+	if err := appRegistry.Reload(context.Background()); err != nil {
+		return fmt.Errorf("加载 integrator 登记: %w", err)
+	}
+	integratorDispatch := &integration.Dispatcher{DB: db, Registry: appRegistry, Log: log}
+	eventStore := store.CallEvents{DB: db, AfterAppend: integratorDispatch.Enqueue}
+	commandStore := store.Commands{DB: db}
+	routingStore := store.RoutingSessions{DB: db}
 	ccCore := cccore.New(db, eventStore, cccore.Options{
 		RecordingMode: "audio",
 		NotifyMessage: cfg.Recordings.NotifyMessage,
@@ -77,11 +85,13 @@ func Run(configPath string) error {
 	controlDeps := control.Deps{
 		BusinessActions: ccCore, Media: mediaSvc, ACD: ccCore, Config: ccCore, Agents: ccCore,
 		RecordingPolicy: ccCore, CDR: ccCore, Recordings: ccCore,
-		CallEvents: eventStore,
+		CallEvents: eventStore, Commands: commandStore,
+		Bridges: store.Bridges{DB: db}, IVRSessions: store.IVRSessions{DB: db},
+		Routing: routingStore,
 	}
 	callStore := store.NewCallStore(db)
 	limits := map[string]int{}
-	for _, application := range cfg.Applications {
+	for _, application := range appRegistry.List() {
 		limits[application.ID] = application.MaxConcurrentCalls
 	}
 	callStore.SetApplicationLimits(limits)
@@ -90,6 +100,9 @@ func Run(configPath string) error {
 
 	if err := callControl.Recover(context.Background()); err != nil {
 		return fmt.Errorf("遗留通话恢复: %w", err)
+	}
+	if err := commandStore.ReconcileStale(context.Background(), 2*time.Minute); err != nil {
+		return fmt.Errorf("异步命令恢复: %w", err)
 	}
 	if err := ccCore.RecoverReservations(context.Background()); err != nil {
 		return fmt.Errorf("坐席预留恢复: %w", err)
@@ -147,6 +160,9 @@ func Run(configPath string) error {
 		if appID == "" {
 			return "", "", errs.Forbidden("设备缺少应用绑定")
 		}
+		if !appRegistry.Exists(appID) {
+			return "", "", errs.Forbidden("application 未登记")
+		}
 		ctx = scope.WithApplication(ctx, appID)
 		_, routeErr := ccCore.ResolveDID(ctx, "*", destination)
 		if routeErr == nil {
@@ -163,7 +179,11 @@ func Run(configPath string) error {
 		CallControl: callControl,
 		Signaling:   callControl,
 	}
-	switchDeps := apphttp.SwitchRouterDeps{Config: *cfg, RouterDeps: deps, Runtime: callControl, Events: &eventStore, Direct: callControl, Admin: ccCore, BusinessActions: callControl}
+	switchDeps := apphttp.SwitchRouterDeps{
+		Config: *cfg, Applications: appRegistry, RouterDeps: deps, Runtime: callControl, Events: &eventStore,
+		Commands: &commandStore, Routing: &routingStore,
+		Direct: callControl, Admin: ccCore, BusinessActions: callControl,
+	}
 	router := apphttp.NewSwitchRouter(switchDeps)
 
 	srv := &http.Server{
@@ -175,6 +195,8 @@ func Run(configPath string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go monitorLogDisk(ctx, log, cfg.Log.Dir)
+	integratorDispatch.Start(ctx)
+	go runEventRetention(ctx, eventStore, appRegistry, log)
 	go callControl.Run(ctx)
 	go func() {
 		if err := mediaSvc.ServeSIP(ctx); err != nil {

@@ -10,7 +10,7 @@ type DIDRoute struct {
 	DID string `gorm:"column:d_id;size:32;uniqueIndex;not null;comment:DID 号码"`
 	// TrunkID 中继范围；* 表示全部中继。
 	TrunkID string `gorm:"size:64;not null;default:*;comment:中继 ID"`
-	// TargetType queue / ivr / reject。
+	// TargetType 目标类型：queue（队列）/ ivr / reject（拒接）。
 	TargetType string `gorm:"size:16;not null;comment:目标类型"`
 	// TargetID 队列或 IVR 流程 ID；reject 时为空。
 	TargetID *string `gorm:"type:uuid;comment:目标 ID"`

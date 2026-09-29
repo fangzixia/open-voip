@@ -2,6 +2,8 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"sort"
@@ -33,7 +35,7 @@ const (
 
 // Deps 为 L3 服务依赖的 Port，由 bootstrap 注入。
 type Deps struct {
-	BusinessActions ports.BusinessActionStore
+	BusinessActions ports.BusinessActionStore // IVR 业务判断节点：创建/完成/过期动作
 	Media           ports.MediaPort
 	ACD             ports.ACDDispatchPort
 	Config          ports.ConfigSnapshotPort
@@ -43,6 +45,10 @@ type Deps struct {
 	Calls           ports.CallPersistencePort
 	CallEvents      ports.CallEventPublisher
 	Recordings      ports.RecordingStorePort
+	Commands        ports.CommandStore
+	Bridges         ports.BridgeSessionPort
+	IVRSessions     ports.IVRSessionPort
+	Routing         ports.RoutingSessionPort
 }
 
 type runtimeCall struct {
@@ -70,6 +76,7 @@ type runtimeCall struct {
 	waitPrompt     string
 	consultFrom    string
 	transferMode   string
+	playbacks      map[string]string
 }
 
 // Service 实现 CallControlPort 与 SignalingPort。
@@ -188,6 +195,7 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	s.mu.Lock()
 	s.calls[callID] = rt
 	s.mu.Unlock()
+	_ = s.publishCall(ctx, callID, "leg.incoming", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "role": string(dto.LegRoleCustomer)})
 	ctx = observability.WithFields(ctx, observability.Fields{CallID: callID, QueueID: req.QueueID})
 	observability.Event(ctx, "control", "call.created", stateCreated, "ok", "", now, "session_type", string(req.SessionType), "priority", req.Priority)
 	slog.Info("呼入已创建", "call_id", callID, "queue_id", req.QueueID, "session_type", string(req.SessionType), "priority", req.Priority)
@@ -243,6 +251,15 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
+	return s.runIdempotentMutation(ctx, callID, "answer", "answer|"+agentID, func() error {
+		return s.doAnswer(ctx, callID, agentID)
+	})
+}
+
+func (s *Service) doAnswer(ctx context.Context, callID, agentID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	s.mu.Unlock()
@@ -310,7 +327,9 @@ func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 			return err
 		}
 		slog.Info("咨询转目标已接听", "call_id", callID, "agent_id", agentID)
-		_ = s.cdrUpsert(ctx, callID, "answered")
+		if err := s.cdrUpsert(ctx, callID, "answered"); err != nil {
+			return err
+		}
 		return s.publishCall(ctx, callID, "call.consulting", agentID, map[string]any{
 			"call_id": callID, "agent_id": agentID,
 		})
@@ -320,7 +339,9 @@ func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 		return err
 	}
 	slog.Info("通话已接通", "call_id", callID, "agent_id", agentID)
-	_ = s.cdrUpsert(ctx, callID, "answered")
+	if err := s.cdrUpsert(ctx, callID, "answered"); err != nil {
+		return err
+	}
 	return s.publishCall(ctx, callID, "call.answered", agentID, map[string]any{
 		"call_id":     callID,
 		"agent_id":    agentID,
@@ -332,6 +353,15 @@ func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 func (s *Service) Decline(ctx context.Context, callID, agentID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
+	return s.runIdempotentMutation(ctx, callID, "decline", "decline|"+agentID, func() error {
+		return s.doDecline(ctx, callID, agentID)
+	})
+}
+
+func (s *Service) doDecline(ctx context.Context, callID, agentID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	s.mu.Unlock()
@@ -342,6 +372,7 @@ func (s *Service) Decline(ctx context.Context, callID, agentID string) error {
 		return errs.Conflict("当前不是该坐席的振铃", errs.CodeCallNotRinging)
 	}
 	_ = s.setAgentState(ctx, callID, agentID, "ringing", "idle", "decline")
+	s.emitAcdOfferFailed(ctx, callID, agentID, rt.rec.QueueID, "decline")
 	s.mu.Lock()
 	consultFrom := rt.consultFrom
 	rt.offeredAgent = ""
@@ -367,6 +398,28 @@ func (s *Service) Decline(ctx context.Context, callID, agentID string) error {
 func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupReason) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
+	var cmdID string
+	if key := scope.Idempotency(ctx); key != "" && s.deps.Commands != nil {
+		hash := "hangup|" + string(reason)
+		cmd, replay, err := s.deps.Commands.Accept(ctx, callID, key, hash, "hangup", map[string]any{"call_id": callID})
+		if err != nil {
+			return err
+		}
+		cmdID = cmd.ID
+		if replay && cmd.Status == "succeeded" {
+			return nil
+		}
+		_ = s.deps.Commands.MarkRunning(ctx, cmdID)
+	}
+	completeHangupCmd := func(result string) {
+		if cmdID == "" || s.deps.Commands == nil {
+			return
+		}
+		_ = s.deps.Commands.Complete(ctx, cmdID, "succeeded", "", map[string]any{"call_id": callID, "result": result})
+	}
 	s.mu.Lock()
 	rt := s.calls[callID]
 	s.mu.Unlock()
@@ -376,11 +429,13 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 			return err
 		}
 		if rec.State == stateEnded {
+			completeHangupCmd("ended")
 			return nil
 		}
 		return errs.NotFound("通话运行时不存在")
 	}
 	if rt.rec.State == stateEnded {
+		completeHangupCmd("ended")
 		return nil
 	}
 
@@ -450,6 +505,18 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	if err := s.transition(ctx, callID, stateEnded); err != nil {
 		return err
 	}
+	if s.deps.Bridges != nil {
+		if bridgeIDs, err := s.deps.Bridges.EndByCall(ctx, rt.rec.ApplicationID, callID); err != nil {
+			slog.Warn("桥接结束落库失败", "call_id", callID, "err", err)
+		} else {
+			for _, bridgeID := range bridgeIDs {
+				s.emitCall(ctx, callID, "bridge.ended", "", map[string]any{"call_id": callID, "bridge_id": bridgeID})
+			}
+		}
+	}
+	if s.deps.IVRSessions != nil {
+		_ = s.deps.IVRSessions.DeleteIVRSession(ctx, callID)
+	}
 	_ = s.deps.Media.CloseRoom(ctx, callID)
 	_ = s.publishCall(ctx, callID, "call.ended", offered, map[string]any{
 		"call_id": callID,
@@ -483,14 +550,26 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	s.mu.Lock()
 	delete(s.calls, callID)
 	s.mu.Unlock()
+	completeHangupCmd(result)
 	return nil
+}
+
+func transferRequestHash(req dto.TransferRequest) string {
+	sum := sha256.Sum256([]byte(req.Mode + "|" + req.TargetAgentID + "|" + req.TargetQueueID))
+	return hex.EncodeToString(sum[:])
 }
 
 // Transfer 串行执行转接，避免同一通话的状态操作并发交错。
 func (s *Service) Transfer(ctx context.Context, callID string, req dto.TransferRequest) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
-	return s.doTransfer(ctx, callID, req)
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
+	hash := transferRequestHash(req)
+	return s.runIdempotentMutation(ctx, callID, "transfer", hash, func() error {
+		return s.doTransfer(ctx, callID, req)
+	})
 }
 
 // CompleteTransfer 结束咨询阶段，将客户接入目标坐席。
@@ -697,6 +776,7 @@ func (s *Service) tickCall(ctx context.Context, id string, now time.Time) {
 			agentID := rt.offeredAgent
 			if agentID != "" {
 				_ = s.setAgentState(ctx, id, agentID, "ringing", "idle", "offer_timeout")
+				s.emitAcdOfferFailed(ctx, id, agentID, rt.rec.QueueID, "offer_timeout")
 			}
 			s.mu.Lock()
 			consultFrom := ""
@@ -762,15 +842,22 @@ func (s *Service) tryDispatch(ctx context.Context, callID string) error {
 		return err
 	}
 	if err := s.ringDevice(ctx, callID, res.AgentID); err != nil {
-		return err
+		_ = s.setAgentState(ctx, callID, res.AgentID, "ringing", "idle", "ring_failed")
+		s.emitAcdOfferFailed(ctx, callID, res.AgentID, rt.rec.QueueID, "ring_failed")
+		_ = s.transition(ctx, callID, stateQueued)
+		return s.tryDispatch(ctx, callID)
 	}
-	return s.publishCall(ctx, callID, "call.ringing", res.AgentID, map[string]any{
+	ringPayload := map[string]any{
 		"call_id":      callID,
 		"queue_id":     deref(rt.rec.QueueID),
 		"queue_name":   rt.queueName,
 		"caller":       rt.caller,
 		"session_type": string(rt.rec.SessionType),
-	})
+		"agent_id":     res.AgentID,
+	}
+	s.emitCall(ctx, callID, "call.ringing", res.AgentID, ringPayload)
+	s.emitCall(ctx, callID, "leg.ringing", res.AgentID, ringPayload)
+	return nil
 }
 
 // transition 同步更新运行时和持久化状态；写库失败时恢复此前的内存记录。
@@ -877,9 +964,18 @@ func (s *Service) publishCall(ctx context.Context, callID, typ, agentID string, 
 			continue
 		}
 		seen[id] = struct{}{}
-		_ = s.deps.CallEvents.PublishCallEvent(ctx, ports.CallEvent{Type: typ, CallID: callID, AgentID: id, TargetOnly: true, Payload: payload})
+		if err2 := s.deps.CallEvents.PublishCallEvent(ctx, ports.CallEvent{Type: typ, CallID: callID, AgentID: id, TargetOnly: true, Payload: payload}); err2 != nil && err == nil {
+			err = err2
+		}
 	}
 	return err
+}
+
+// emitCall 发布呼叫事件；失败时记录日志，便于排查事件落库问题。
+func (s *Service) emitCall(ctx context.Context, callID, typ, agentID string, payload map[string]any) {
+	if err := s.publishCall(ctx, callID, typ, agentID, payload); err != nil {
+		slog.Warn("呼叫事件发布失败", "call_id", callID, "type", typ, "err", err)
+	}
 }
 
 func toView(rt *runtimeCall) ports.CallView {

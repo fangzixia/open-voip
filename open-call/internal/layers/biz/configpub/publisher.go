@@ -13,16 +13,18 @@ import (
 	"open-call/internal/store/models"
 )
 
-// Publisher compiles business drafts into one complete immutable Switch snapshot.
+// Publisher 将业务侧草稿编译为完整的、不可变 Switch 配置快照并发布。
 type Publisher struct {
 	db          *gorm.DB
 	switchAdmin ports.SwitchAdminPort
 }
 
+// NewPublisher 创建配置发布器。
 func NewPublisher(db *gorm.DB, switchAdmin ports.SwitchAdminPort) *Publisher {
 	return &Publisher{db: db, switchAdmin: switchAdmin}
 }
 
+// Publish 编译快照、存储并激活到 Switch。
 func (p *Publisher) Publish(ctx context.Context) (ports.SwitchConfigVersion, error) {
 	bundle, err := p.Build(ctx)
 	if err != nil {
@@ -35,6 +37,7 @@ func (p *Publisher) Publish(ctx context.Context) (ports.SwitchConfigVersion, err
 	return p.switchAdmin.ActivateConfig(ctx, stored.Version)
 }
 
+// Build 在只读事务中从业务库组装 Switch 配置包（不写入 Switch）。
 func (p *Publisher) Build(ctx context.Context) (ports.SwitchConfigBundle, error) {
 	var out ports.SwitchConfigBundle
 	err := p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

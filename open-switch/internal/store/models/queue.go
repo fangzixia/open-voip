@@ -29,7 +29,7 @@ type Queue struct {
 	AnnounceRecording bool `gorm:"not null;default:false;comment:是否播放录音告知"`
 	// PriorityEnabled 是否启用优先级入队。
 	PriorityEnabled bool `gorm:"not null;default:false;comment:是否优先级队列"`
-	// BusinessHoursJSON 工作时间 JSON，空表示 always。
+	// BusinessHoursJSON 工作时间 JSON，空表示始终营业（always）。
 	BusinessHoursJSON string `gorm:"type:text;comment:工作时间 JSON"`
 	// AfterHoursAction 非工作时间动作：hangup / voicemail。
 	AfterHoursAction string `gorm:"size:32;comment:非工作时间动作"`

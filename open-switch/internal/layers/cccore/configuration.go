@@ -1,4 +1,4 @@
-// Package cccore owns DID routing, immutable configuration, queues, ACD and agent routing state.
+// Package cccore 负责 DID 路由、不可变配置快照、队列、ACD 与坐席路由状态。
 package cccore
 
 import (
@@ -21,14 +21,14 @@ import (
 	"open-switch/internal/store/models"
 )
 
-// Options contains non-business technical defaults.
+// Options 非业务类的技术默认值（录音模式、保留天数等）。
 type Options struct {
 	RecordingMode string
 	NotifyMessage string
 	RetainDays    int
 }
 
-// Service is the authoritative call-centre runtime for one Switch database.
+// Service 是单个 Switch 数据库上的呼叫中心权威运行时。
 type Service struct {
 	db      *gorm.DB
 	events  ports.CallEventPublisher
@@ -61,7 +61,7 @@ func applicationID(ctx context.Context) (string, error) {
 	return id, nil
 }
 
-// StoreConfig validates and stores one immutable snapshot without activating it.
+// StoreConfig 校验并存储一份不可变配置快照，但不激活。
 func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (ports.ConfigVersionView, error) {
 	appID, err := applicationID(ctx)
 	if err != nil {
@@ -118,7 +118,7 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 	return configView(result), nil
 }
 
-// ActivateConfig atomically makes a validated snapshot authoritative for new calls.
+// ActivateConfig 原子地将已校验快照设为新通话的权威配置。
 func (s *Service) ActivateConfig(ctx context.Context, version int64) (ports.ConfigVersionView, error) {
 	appID, err := applicationID(ctx)
 	if err != nil {
@@ -422,7 +422,7 @@ WHERE candidate.application_id = ? AND candidate.config_version = ? AND active_r
 	return nil
 }
 
-// NormalizeDID keeps a deterministic dialled-number key without guessing local country rules.
+// NormalizeDID 生成确定性的被叫号码键，不推断本地国家/区号规则。
 func NormalizeDID(value string) string {
 	value = strings.TrimSpace(value)
 	var b strings.Builder

@@ -1,8 +1,8 @@
 # open-call
 
-呼叫中心服务：坐席/队列/ACD、CDR、对浏览器 **REST/WS**，并通过 BFF 代理通话信令到 open-switch。
+呼叫中心服务：坐席/队列等业务主数据、CDR 与录音元数据、对浏览器 **REST/WS**，并通过 BFF 经 `switchapi` 调用 open-switch 通话信令（IVR 资源上传仍走受限代理）。
 
-配套的 open-switch 使用 `integration.mode: call_center`。open-call 在 BFF 校验终端用户对通话及媒体腿的权限，向 Switch 下发显式 `agent_id` / `from_leg_id` 等字段，并从 `/switch/v1/events` 按持久游标消费事件。Switch 不读取 `X-Principal`；部署时两端服务密钥须一致。
+open-call 在 BFF 校验终端权限后调用 Switch；配置发布到 `/switch/v2/configuration/...`；Switch 通过 **HTTP callback**（`integration.events_callback_url`）推送事件并投影话单/录音。`integration.secret` 来自 Switch register API；见 [runbook](../docs/switch-standalone-runbook.md)。
 
 - 对接说明：[../docs/open-switch对接说明.md](../docs/open-switch对接说明.md)
 - 浏览器 API 契约：[../docs/api/openapi.yaml](../docs/api/openapi.yaml)

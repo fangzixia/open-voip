@@ -19,27 +19,6 @@ func TestLoadExampleConfig(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsShortApplicationSecret(t *testing.T) {
-	cfg := validBase()
-	cfg.Applications[0].Secret = "short"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected validation error")
-	}
-}
-
-func TestApplicationDefaults(t *testing.T) {
-	cfg := validBase()
-	cfg.Applications[0].EventRetentionDays = 0
-	cfg.Applications[0].MaxConcurrentCalls = 0
-	cfg.applyDefaults()
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Applications[0].EventRetentionDays != 14 || cfg.Applications[0].MaxConcurrentCalls != 100 {
-		t.Fatal("application defaults not applied")
-	}
-}
-
 func TestSIPEnabledRequiresExternalIPAndTrunk(t *testing.T) {
 	cfg := validBase()
 	cfg.SIP.Enabled = true
@@ -97,12 +76,11 @@ func TestSIPRejectsUnknownCodecAndTLSWithoutCert(t *testing.T) {
 
 func validBase() *Config {
 	return &Config{
-		Server:       ServerConfig{Listen: ":8080"},
-		Database:     DatabaseConfig{DSN: "host=localhost"},
-		Recordings:   RecordingsConfig{Dir: "./data"},
-		Log:          LogConfig{Level: "info", Format: "json"},
-		ICE:          ICEConfig{UDPPortMin: 10000, UDPPortMax: 20000},
-		Applications: []ApplicationConfig{{ID: "open-call", Secret: "change_me_integration", EventRetentionDays: 14, MaxConcurrentCalls: 100}},
+		Server:     ServerConfig{Listen: ":8080"},
+		Database:   DatabaseConfig{DSN: "host=localhost"},
+		Recordings: RecordingsConfig{Dir: "./data"},
+		Log:        LogConfig{Level: "info", Format: "json"},
+		ICE:        ICEConfig{UDPPortMin: 10000, UDPPortMax: 20000},
 	}
 }
 

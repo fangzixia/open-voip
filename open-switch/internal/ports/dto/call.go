@@ -21,7 +21,7 @@ type InboundRequest struct {
 	IVRFlowID     string `json:"-"`
 	// QueueID 目标队列 UUID。
 	QueueID string `json:"queue_id"`
-	// GuestSessionID 访客会话 ID，可空（Demo 直链）。
+	// GuestSessionID 访客会话 ID，可空（演示直链）。
 	GuestSessionID string `json:"guest_session_id"`
 	// SessionType 期望媒介类型。
 	SessionType SessionType `json:"session_type"`

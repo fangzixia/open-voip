@@ -19,7 +19,7 @@ type IVRFlow struct {
 // TableName 指定表名。
 func (IVRFlow) TableName() string { return "oc_ivr_flows" }
 
-// IVRPublishedSnapshot 已发布 IVR 快照，呼入只读最新 version。
+// IVRPublishedSnapshot 已发布 IVR 快照，呼入只读最新版本号。
 type IVRPublishedSnapshot struct {
 	// ID 快照 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:快照 ID"`

@@ -12,7 +12,7 @@ type GuestSession struct {
 	CallID *string `gorm:"type:uuid;index;comment:关联通话 ID"`
 	// AllowedMedia 允许的媒体：audio / video。
 	AllowedMedia string `gorm:"size:16;not null;default:audio;comment:允许媒介"`
-	// Token 入会 token 哈希或明文（内网 Demo 可简化）。
+	// Token 入会 token 哈希或明文（内网演示可简化）。
 	Token string `gorm:"size:128;uniqueIndex;not null;comment:入会 token"`
 	// ExpiresAt 过期时间 UTC。
 	ExpiresAt time.Time `gorm:"index;comment:过期时间"`

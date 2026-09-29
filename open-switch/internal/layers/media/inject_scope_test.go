@@ -8,6 +8,7 @@ import (
 	"testing"
 )
 
+// TestPromptApplicationIsolation 确认提示音路径按应用命名空间隔离。
 func TestPromptApplicationIsolation(t *testing.T) {
 	s := &Service{recDir: t.TempDir()}
 	a := scope.WithApplication(context.Background(), "a")

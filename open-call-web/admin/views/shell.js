@@ -14,9 +14,11 @@ import { renderQueues } from "./queues.js";
 import { renderRecs } from "./recordings.js";
 import { renderHooks } from "./webhooks.js";
 import { renderIdentity } from "./identity.js";
+import { renderRuntime } from "./runtime.js";
 
 export const NAV = [
   { id: "overview", label: "总览", group: "功能导航" },
+  { id: "runtime", label: "活跃通话", group: "话务管理" },
   { id: "queues", label: "队列", group: "话务管理" },
   { id: "agents", label: "坐席", group: "话务管理" },
   { id: "dids", label: "呼入号码", group: "话务管理" },
@@ -29,7 +31,7 @@ export const NAV = [
 ];
 
 const pagePermissions = {
-  overview: "status.read", queues: "queues.read", agents: "agents.read", dids: "dids.read",
+  overview: "status.read", runtime: "calls.read", queues: "queues.read", agents: "agents.read", dids: "dids.read",
   cdr: "cdr.read", recordings: "recordings.read", ivr: "ivr.read",
   webhooks: "webhooks.read", audit: "audit.read",
 };
@@ -71,6 +73,9 @@ export function renderApp(host, operations) {
       ${host.nav === "overview" ? page(renderOverview,
         ["agents", "cdr", "cdrCaller", "cdrResult", "hist", "live", "me", "queues", "status"],
         ["exportCdr", "filteredCdr", "idleAgents", "navigate", "resetCdr", "search", "setCdrCaller", "setCdrResult", "waiting"]) : ""}
+      ${host.nav === "runtime" ? page(renderRuntime,
+        ["bridgeForm", "me", "openCalls", "runtimeCall"],
+        ["createBridge", "endBridge", "loadRuntime", "replaceBridge", "selectRuntimeCall", "setBridgeForm"]) : ""}
       ${host.nav === "queues" ? page(renderQueues,
         ["agents", "me", "newQueue", "queues", "skillName", "skills"],
         ["addSkill", "bindAll", "bindSkill", "createQueue", "setBindAgentId", "setBindSkillId", "setSkillName", "toggleVip", "updateNewQueue"]) : ""}

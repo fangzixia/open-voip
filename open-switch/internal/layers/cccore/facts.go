@@ -16,7 +16,7 @@ import (
 	"open-switch/internal/store/models"
 )
 
-// Upsert stores the Switch-owned technical CDR. Business systems enrich their own projection from events.
+// Upsert 写入 Switch 侧技术话单；业务系统通过事件流自行维护增强投影。
 func (s *Service) Upsert(ctx context.Context, req ports.CDRWriteRequest) error {
 	appID := scope.Application(ctx)
 	if appID == "" {
@@ -49,7 +49,7 @@ func (s *Service) Upsert(ctx context.Context, req ports.CDRWriteRequest) error {
 	})
 }
 
-// Save stores recording technical metadata in the Switch database.
+// Save 在 Switch 库中保存录音技术元数据并发布 recording.saved 事件。
 func (s *Service) Save(ctx context.Context, rec ports.RecordingMeta) error {
 	appID := scope.Application(ctx)
 	if appID == "" {

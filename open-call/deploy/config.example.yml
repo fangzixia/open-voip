@@ -1,14 +1,20 @@
-# open-call 配置示例（呼叫中心：/api/v1 + /platform/v1 + BFF）
-# 通话控制经 BFF 代理至 open-switch；integration.secret 须与 open-switch 一致。
+# open-call 配置示例（呼叫中心：/api/v1 + BFF → open-switch /switch/v2）
+# integration.secret 须先通过 Switch register API 获取后填入。
 
 server:
   # 对浏览器/坐席客户端暴露的 API（含 WebSocket）。
   listen: "0.0.0.0:8080"
 
 integration:
-  secret: "change_me_integration"
-  # open-switch Switch API 根地址（BFF 与 guest/switchapi 客户端使用）。
   switch_base_url: "http://127.0.0.1:8082"
+  application_id: "cc-prod"
+  # Switch POST /integrations/register 返回的 secret（永不过期，勿提交到版本库）。
+  secret: "deploy-replace-with-switch-register-secret-value"
+  # Switch 内网推送事件地址（须与 register 时 events_callback_url 一致）。
+  events_callback_url: "http://127.0.0.1:8080/api/v1/integration/switch/events"
+  register_token: "replace_with_random_register_token_32+"
+  event_retention_days: 14
+  max_concurrent_calls: 100
 
 database:
   # 业务库：用户/坐席/队列/CDR 元数据等；勿与 open-switch 话务库混用。
@@ -41,10 +47,8 @@ oidc:
 log:
   level: info
   format: json
-  # stdout 之外分别写入 app.jsonl 与 trace.jsonl；轮转文件使用 gzip。
-  dir: "logs/open-call"
+  dir: "./logs/open-call"
   max_size_mb: 100
-  # 0 表示永久保留轮转文件。
   max_age_days: 0
 
 tls:
@@ -52,25 +56,23 @@ tls:
   cert_file: ""
   key_file: ""
 
-bootstrap:
-  # 只允许首次本机演示显式开启；生产环境保持 false 并通过受控初始化创建管理员。
-  enabled: false
-  admin_password: "StrongAdmin123"
-  agent_password: "StrongAgent123"
-
 webhook:
-  max_retries: 3
+  max_retries: 8
   timeout_sec: 5
 
 public:
-  # 访客入会页根 URL，用于生成 guest 链接（按实际前端域名填写）。
   guest_base_url: "https://cc.example.com/guest"
-  # 生产只允许已签发 token 入会。
   allow_direct_join: false
+
+bootstrap:
+  enabled: true
+  admin_password: "REPLACE-ADMIN-PASSWORD-12+"
+  agent_password: "REPLACE-AGENT-PASSWORD-12+"
 
 security:
   allowed_origins:
-    - "https://cc.example.com"
+    - "http://127.0.0.1:5173"
+    - "http://localhost:5173"
   login_requests_per_min: 10
   guest_requests_per_min: 30
   admin_requests_per_min: 120

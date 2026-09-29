@@ -1,9 +1,10 @@
+// 坐席工作台：签入、通话控制、WebRTC 与业务动作回调。
 import { NAV, renderApp } from "./views/shell.js";
 import { bindApiFeedback } from "../shared/http-client.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { answerCall, authMe, authOptions, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, screenShare, sendDtmf, setAgentState, startSSO, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
+import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, screenShare, sendDtmf, setAgentState, startSSO, setCallVersion, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
 import { applyAudioOutput, listMediaDevices, replaceInputDevice, setLocalMuted, startMediaSession, startScreenShare, stopMedia,  } from "../shared/webrtc.js";
@@ -190,6 +191,7 @@ export class AgentApp extends LitElement {
       if (!active && this.call) this.#endLocal(this.call.id);
       if (active) {
         this.call = active;
+        if (active.version != null) setCallVersion(active.version);
         const activeLeg = active.legs?.find((item) => item.agent_id === this.me.id);
         setCallContext({ call_id: active.id, leg_id: activeLeg?.id || "", queue_id: active.queue_id || "" });
         if (["active", "held"].includes(active.state) && !this.#pc && this.me.terminal_type !== "sip") await this.#rejoinMedia(active.session_type !== "audio");
@@ -234,6 +236,9 @@ export class AgentApp extends LitElement {
       }
     } else if (msg.type === "call.answered" && msg.payload?.call_id) {
       void this.#syncCalls();
+    } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.call?.id) {
+      this.notice = "交换服务已恢复，正在重新连接媒体…";
+      void this.#syncCalls().then(() => this.#rejoinMedia(this.call?.session_type !== "audio"));
     }
   }
 
@@ -289,7 +294,9 @@ export class AgentApp extends LitElement {
     this.#mediaConnecting = true;
     try {
       if (this.me?.terminal_type === "sip") { this.notice = "请在 SIP 话机接听"; return; }
- const call = await answerCall(this.incoming.call_id);
+      const incomingId = this.incoming.call_id;
+      await answerCall(incomingId);
+      const call = await getCall(incomingId);
       this.call = call;
       this.incoming = null;
       this.nav = "desk";
@@ -320,8 +327,15 @@ export class AgentApp extends LitElement {
     }
   }
 
-  #decline() {
-    this.#ws.send("call.decline", { call_id: this.incoming?.call_id, reason: "busy" });
+  async #decline() {
+    const id = this.incoming?.call_id;
+    if (id) {
+      try {
+        await declineCall(id);
+      } catch {
+        this.#ws.send("call.decline", { call_id: id, reason: "busy" });
+      }
+    }
     this.incoming = null;
   }
 

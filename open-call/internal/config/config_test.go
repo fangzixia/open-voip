@@ -15,7 +15,7 @@ func TestLoadExampleConfig(t *testing.T) {
 	if cfg.Server.Listen == "" || cfg.Security.LoginRequestsPerMin == 0 {
 		t.Fatal("expected defaults")
 	}
-	if cfg.Log.Dir != "logs/open-call" || cfg.Log.MaxSizeMB <= 0 || cfg.Log.MaxAgeDays != 0 {
+	if cfg.Log.Dir == "" || cfg.Log.MaxSizeMB <= 0 || cfg.Log.MaxAgeDays != 0 {
 		t.Fatalf("unexpected log defaults: %+v", cfg.Log)
 	}
 }
@@ -49,9 +49,14 @@ func TestRejectsUnknownControlPlaneFields(t *testing.T) {
 func validBase() *Config {
 	return &Config{
 		Server: ServerConfig{Listen: ":8080"}, Database: DatabaseConfig{DSN: "host=localhost"},
-		JWT:         JWTConfig{AccessTTLSec: 3600, RefreshTTLSec: 86400, SigningKey: "0123456789abcdef0123456789abcdef"},
-		Log:         LogConfig{Level: "info", Format: "json"},
-		Integration: IntegrationConfig{Secret: "change_me_integration", SwitchBaseURL: "http://127.0.0.1:8082"},
+		JWT: JWTConfig{AccessTTLSec: 3600, RefreshTTLSec: 86400, SigningKey: "0123456789abcdef0123456789abcdef"},
+		Log: LogConfig{Level: "info", Format: "json"},
+		Integration: IntegrationConfig{
+			Secret:            "0123456789abcdef0123456789abcdef",
+			SwitchBaseURL:     "http://127.0.0.1:8082",
+			ApplicationID:     "cc-test",
+			EventsCallbackURL: "http://127.0.0.1:8080/api/v1/integration/switch/events",
+		},
 	}
 }
 

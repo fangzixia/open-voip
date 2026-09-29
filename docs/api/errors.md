@@ -14,7 +14,7 @@
 | 401 | 未认证或 token 失效 |
 | 403 | 无权限（RBAC） |
 | 404 | 资源不存在 |
-| 409 | 状态冲突（如非 ringing 时 answer） |
+| 409 | 状态冲突（如非 ringing 时 answer、`expected_version` 不匹配） |
 | 422 | 业务规则拒绝 |
 | 500 | 服务器内部错误 |
 
@@ -44,6 +44,7 @@
 | `GUEST_TOKEN_EXPIRED` | 访客链接过期 |
 | `SIP_DISABLED` | 未配置 PSTN trunk |
 | `TRANSFER_FAILED` | 转接失败 |
+| `VERSION_MISMATCH` | 乐观锁：`expected_version` 与当前通话 `version` 不一致；`data` 为最新通话视图 |
 
 ---
 

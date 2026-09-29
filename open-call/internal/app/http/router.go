@@ -57,6 +57,7 @@ type RouterDeps struct {
 	Calls interface {
 		GetCall(context.Context, string) (ports.CallView, error)
 	}
+	SwitchEventHandler http.HandlerFunc
 }
 
 // NewRouter 构建 chi 路由。
@@ -75,6 +76,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r.Get("/health/ready", deps.Status.handleReady)
 
 	r.Route("/api/v1", func(api chi.Router) {
+		if deps.SwitchEventHandler != nil {
+			api.With(middleware.IntegrationAuth(deps.Config.Integration.Secret)).
+				Post("/integration/switch/events", deps.SwitchEventHandler)
+		}
+
 		api.With(middleware.RateLimit(deps.Config.Security.LoginRequestsPerMin)).Post("/auth/login", deps.handleLogin)
 		api.Get("/auth/options", deps.handleAuthOptions)
 		api.With(middleware.RateLimit(deps.Config.Security.LoginRequestsPerMin)).Post("/auth/refresh", deps.handleRefresh)

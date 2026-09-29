@@ -5,7 +5,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"open-switch/internal/config"
 	"open-switch/internal/ports"
 	"testing"
 )
@@ -20,14 +19,15 @@ func (authorizationCalls) GetCall(context.Context, string) (ports.CallView, erro
 }
 
 func TestSwitchTrustsAuthenticatedServiceWithoutPrincipal(t *testing.T) {
-	h := NewSwitchRouter(SwitchRouterDeps{Config: config.Config{Applications: []config.ApplicationConfig{{ID: "crm", Secret: "internal"}}}, RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}})
+	const secret = "internal-test-secret-32"
+	h := NewSwitchRouter(SwitchRouterDeps{Applications: testApplicationRegistry(secret), RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}})
 	cases := []struct {
 		token  string
 		status int
 	}{
 		{"", 401},
 		{"wrong", 401},
-		{"internal", 200},
+		{secret, 200},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, "/switch/v2/calls/c", nil)
@@ -42,10 +42,8 @@ func TestSwitchTrustsAuthenticatedServiceWithoutPrincipal(t *testing.T) {
 	}
 }
 
-type routeOnlyDirect struct{ ports.DirectControlPort }
-
 func TestLegacySwitchV1IsRemoved(t *testing.T) {
-	deps := SwitchRouterDeps{Config: config.Config{Applications: []config.ApplicationConfig{{ID: "crm", Secret: "internal"}}}, RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}}
+	deps := SwitchRouterDeps{Applications: testApplicationRegistry("internal-test-secret-32"), RouterDeps: RouterDeps{CallControl: authorizationCalls{}, Signaling: authorizationCalls{}}}
 	req := httptest.NewRequest(http.MethodGet, "/switch/v1/calls/c", nil)
 	rec := httptest.NewRecorder()
 	NewSwitchRouter(deps).ServeHTTP(rec, req)

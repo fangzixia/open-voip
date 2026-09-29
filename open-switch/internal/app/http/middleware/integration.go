@@ -1,32 +1,22 @@
 package middleware
 
 import (
-	"crypto/subtle"
 	"net/http"
-	"open-switch/internal/config"
-	"open-switch/internal/httpapi"
-	"open-switch/internal/scope"
 	"strings"
 
 	"open-switch/internal/errs"
+	"open-switch/internal/httpapi"
+	"open-switch/internal/scope"
+	"open-switch/internal/store"
 )
 
-// ApplicationAuth authenticates a trusted business service and binds its scope.
-func ApplicationAuth(apps []config.ApplicationConfig) func(http.Handler) http.Handler {
-	bySecret := make(map[string]string, len(apps))
-	for _, app := range apps {
-		bySecret[strings.TrimSpace(app.Secret)] = strings.TrimSpace(app.ID)
-	}
+// ApplicationAuth 校验受信任业务系统凭据，并将应用 ID 写入请求上下文。
+func ApplicationAuth(registry *store.ApplicationRegistry) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := bearerToken(r)
-			applicationID := ""
-			for secret, id := range bySecret {
-				if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1 {
-					applicationID = id
-				}
-			}
-			if applicationID == "" {
+			applicationID, ok := registry.ResolveSecret(token)
+			if !ok {
 				writeAuthError(w, errs.Unauthorized("业务系统凭据无效"))
 				return
 			}

@@ -2,7 +2,7 @@ import { NAV, renderApp } from "./views/shell.js";
 import { bindApiFeedback } from "../shared/http-client.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { LitElement } from "lit";
-import { guestJoin, guestJoinToken, hangupCall, listGuestQueues, respondVideo, sendDtmf } from "../shared/api.js";
+import { getCall, guestJoin, guestJoinToken, hangupCall, listGuestQueues, respondVideo, sendDtmf, setCallVersion } from "../shared/api.js";
 import { setAccessToken, clearAccessToken } from "../shared/auth-store.js";
 import { parseGuestInvite } from "../shared/guest-invite.js";
 import { appStyles } from "../shared/styles/index.js";
@@ -164,7 +164,7 @@ export class GuestApp extends LitElement {
       this.#cleanup();
       this.step = "ended";
       this.nav = "talk";
-    } else if (msg.type === "queue.position") {
+    } else if (msg.type === "queue.position" || msg.type === "queue.position_changed") {
       this.permissionHint = msg.payload?.message || "正在排队…";
       this.position = msg.payload?.position ?? this.position;
     } else if (msg.type === "call.voicemail") {
@@ -180,7 +180,13 @@ export class GuestApp extends LitElement {
     } else if (msg.type === "video.downgraded") {
       this.wantVideo = false;
       await this.#rejoin(false);
-    } else if (msg.type === "ivr.started" || msg.type === "ivr.prompt") {
+    } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.join?.call_id) {
+      this.notice = "正在重新连接通话…";
+      void getCall(this.join.call_id).then((view) => {
+        if (view?.version != null) setCallVersion(view.version);
+        return this.#rejoin(this.wantVideo);
+      });
+    } else if (msg.type === "ivr.started" || msg.type === "routing.entered_ivr" || msg.type === "ivr.prompt") {
       this.permissionHint = msg.payload?.prompt || "IVR 放音中，请按键";
       if (!this.#pc) await this.#enterMedia(false);
     }

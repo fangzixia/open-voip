@@ -19,8 +19,11 @@ import (
 // SwitchRouterDeps Switch API 依赖。
 type SwitchRouterDeps struct {
 	Config          config.Config
+	Applications    *store.ApplicationRegistry
 	Runtime         RuntimeReader
 	Events          *store.CallEvents
+	Commands        *store.Commands
+	Routing         *store.RoutingSessions
 	Direct          ports.DirectControlPort
 	Admin           ports.CallCenterAdminPort
 	BusinessActions interface {
@@ -42,60 +45,89 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 	r.Get("/health", handleHealth)
 
 	r.Route("/switch/v2", func(sw chi.Router) {
-		sw.Use(middleware.ApplicationAuth(deps.Config.Applications))
-		sw.Use(deps.authorizeCallResource)
-		sw.Post("/configuration/versions", deps.handleConfigStore)
-		sw.Get("/configuration/versions/{version}", deps.handleConfigGet)
-		sw.Post("/configuration/versions/{version}/activate", deps.handleConfigActivate)
-		sw.Post("/agents/{agentId}/check-in", deps.handleAgentCheckIn)
-		sw.Post("/agents/{agentId}/check-out", deps.handleAgentCheckOut)
-		sw.Put("/agents/{agentId}/presence", deps.handleAgentPresence)
-		sw.Get("/agents/{agentId}/session", deps.handleAgentSession)
-		sw.Get("/queues/{queueId}/status", deps.handleQueueStatus)
-		sw.Get("/internal/calls/{callId}", deps.handleInternalCall)
-		if deps.Events != nil {
-			sw.Get("/events", deps.handleEvents)
-		}
-		sw.Get("/ivr-assets", deps.handleIVRAssets)
-		sw.Post("/ivr-assets", deps.handleIVRAssetUpload)
-		sw.Get("/ivr-assets/{assetId}", deps.handleIVRAssetFile)
-		sw.Get("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
-		sw.Delete("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
-		if deps.Runtime != nil {
-			sw.Get("/internal/calls", deps.handleInternalCalls)
-		}
+		sw.With(middleware.RegisterAuth(deps.Config.Integration, deps.Applications)).Post("/integrations/register", deps.handleIntegrationRegister)
+		sw.With(middleware.RegisterAuth(deps.Config.Integration, deps.Applications)).Post("/integrations/{applicationId}/rotate-secret", deps.handleIntegrationRotateSecret)
 
-		sw.Post("/calls/direct", deps.handleDirectCreate)
-		sw.Post("/calls/{callId}/legs", deps.handleDirectLeg)
-		sw.Post("/calls/{callId}/legs/sip", deps.handleDirectSIP)
-		sw.Delete("/calls/{callId}/legs/{legId}", deps.handleDirectLeave)
-		sw.Post("/calls/{callId}/bridge", deps.handleDirectBridge)
-		sw.Post("/calls/{callId}/recording/start", deps.handleDirectRecordingStart)
-		sw.Post("/calls/{callId}/recording/stop", deps.handleDirectRecordingStop)
-		sw.Post("/calls/{callId}/business-actions/{actionId}/complete", deps.handleBusinessActionComplete)
-		sw.Get("/calls/{callId}", deps.handleCallGet)
-		sw.Post("/calls/{callId}/hangup", deps.handleCallHangup)
-		sw.Post("/calls/inbound", deps.handleSwitchInbound)
-		sw.Post("/calls/outbound", deps.handleOutbound)
-		sw.Post("/calls/{callId}/answer", deps.handleCallAnswer)
-		sw.Post("/calls/{callId}/decline", deps.handleDecline)
-		sw.Post("/calls/{callId}/hold", deps.handleHold)
-		sw.Post("/calls/{callId}/transfer", deps.handleTransfer)
-		sw.Post("/calls/{callId}/transfer/complete", deps.handleCompleteTransfer)
-		sw.Post("/calls/{callId}/conference", deps.handleConference)
-		sw.Post("/supervisor/calls/{callId}/listen", deps.handleListen)
-		sw.Post("/supervisor/agents/{agentId}/force-check-out", deps.handleForceCheckout)
-		sw.Post("/calls/{callId}/video/request", deps.handleVideoRequest)
-		sw.Post("/calls/{callId}/video/respond", deps.handleVideoRespond)
-		sw.Post("/calls/{callId}/video/downgrade", deps.handleVideoDowngrade)
-		sw.Post("/calls/{callId}/screen-share", deps.handleScreenShare)
-		sw.Post("/calls/{callId}/dtmf", deps.handleDTMF)
+		sw.Group(func(api chi.Router) {
+			api.Use(middleware.ApplicationAuth(deps.Applications))
+			api.Use(deps.authorizeCallResource)
+			api.Post("/configuration/versions", deps.handleConfigStore)
+			api.Get("/configuration/versions/{version}", deps.handleConfigGet)
+			api.Post("/configuration/versions/{version}/activate", deps.handleConfigActivate)
+			api.Post("/config-versions", deps.handleConfigStore)
+			api.Get("/config-versions/{version}", deps.handleConfigGet)
+			api.Post("/config-versions/{version}/activate", deps.handleConfigActivate)
+			api.Post("/agents/{agentId}/check-in", deps.handleAgentCheckIn)
+			api.Post("/agents/{agentId}/check-out", deps.handleAgentCheckOut)
+			api.Put("/agents/{agentId}/presence", deps.handleAgentPresence)
+			api.Get("/agents/{agentId}/session", deps.handleAgentSession)
+			api.Get("/queues/{queueId}/status", deps.handleQueueStatus)
+			api.Get("/internal/calls/{callId}", deps.handleInternalCall)
+			if deps.Events != nil {
+				api.Get("/events", deps.handleEvents)
+			}
+			if deps.Commands != nil {
+				api.Get("/commands/{commandId}", deps.handleCommandGet)
+			}
+			if deps.Routing != nil {
+				api.Get("/routing-sessions/{callId}", deps.handleRoutingSession)
+			}
+			api.Get("/ivr-assets", deps.handleIVRAssets)
+			api.Post("/ivr-assets", deps.handleIVRAssetUpload)
+			api.Get("/ivr-assets/{assetId}", deps.handleIVRAssetFile)
+			api.Get("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
+			api.Delete("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
+			if deps.Runtime != nil {
+				api.Get("/internal/calls", deps.handleInternalCalls)
+			}
 
-		sw.Post("/calls/{callId}/legs/{legId}/offer", deps.handleOffer)
-		sw.Post("/calls/{callId}/legs/{legId}/answer", deps.handleAnswerSDP)
-		sw.Post("/calls/{callId}/legs/{legId}/ice", deps.handleICE)
-		sw.Post("/calls/{callId}/legs/{legId}/mute", deps.handleMute)
-		sw.Get("/calls/{callId}/turn-credentials", deps.handleTURN)
+			api.Post("/calls", deps.handleStubCall)
+			api.Post("/calls/direct", deps.handleDirectCreate)
+			api.Post("/calls/{callId}/legs", deps.handleDirectLeg)
+			api.Post("/calls/{callId}/legs/webrtc", deps.handleDirectLeg)
+			api.Post("/calls/{callId}/legs/sip", deps.handleDirectSIP)
+			api.Delete("/calls/{callId}/legs/{legId}", deps.handleDirectLeave)
+			api.Post("/calls/{callId}/bridge", deps.handleDirectBridge)
+			api.Post("/calls/{callId}/bridges", deps.handleDirectBridgeAliases)
+			api.Put("/calls/{callId}/bridges/{bridgeId}", deps.handlePutBridge)
+			api.Delete("/calls/{callId}/bridges/{bridgeId}", deps.handleDeleteBridge)
+			api.Post("/calls/{callId}/legs/{legId}/hold", deps.handleLegHold)
+			api.Post("/calls/{callId}/legs/{legId}/reject", deps.handleLegReject)
+			api.Post("/calls/{callId}/legs/{legId}/playbacks", deps.handleLegPlaybackStart)
+			api.Delete("/calls/{callId}/legs/{legId}/playbacks/{playbackId}", deps.handleLegPlaybackStop)
+			api.Post("/calls/{callId}/recording/start", deps.handleDirectRecordingStart)
+			api.Post("/calls/{callId}/recording/stop", deps.handleDirectRecordingStop)
+			api.Post("/calls/{callId}/recordings", deps.handleDirectRecordingStart)
+			api.Post("/calls/{callId}/recordings/{recordingId}/stop", deps.handleDirectRecordingStop)
+			api.Post("/calls/{callId}/business-actions/{actionId}/complete", deps.handleBusinessActionComplete)
+			api.Post("/routing-sessions/{callId}/business-actions/{actionId}/complete", deps.handleBusinessActionComplete)
+			if deps.Runtime != nil {
+				api.Get("/calls", deps.handleListOpenCalls)
+			}
+			api.Get("/calls/{callId}", deps.handleCallGet)
+			api.Post("/calls/{callId}/hangup", deps.handleCallHangup)
+			api.Post("/calls/inbound", deps.handleSwitchInbound)
+			api.Post("/calls/outbound", deps.handleOutbound)
+			api.Post("/calls/{callId}/answer", deps.handleCallAnswer)
+			api.Post("/calls/{callId}/decline", deps.handleDecline)
+			api.Post("/calls/{callId}/hold", deps.handleHold)
+			api.Post("/calls/{callId}/transfer", deps.handleTransfer)
+			api.Post("/calls/{callId}/transfer/complete", deps.handleCompleteTransfer)
+			api.Post("/calls/{callId}/conference", deps.handleConference)
+			api.Post("/supervisor/calls/{callId}/listen", deps.handleListen)
+			api.Post("/supervisor/agents/{agentId}/force-check-out", deps.handleForceCheckout)
+			api.Post("/calls/{callId}/video/request", deps.handleVideoRequest)
+			api.Post("/calls/{callId}/video/respond", deps.handleVideoRespond)
+			api.Post("/calls/{callId}/video/downgrade", deps.handleVideoDowngrade)
+			api.Post("/calls/{callId}/screen-share", deps.handleScreenShare)
+			api.Post("/calls/{callId}/dtmf", deps.handleDTMF)
+
+			api.Post("/calls/{callId}/legs/{legId}/offer", deps.handleOffer)
+			api.Post("/calls/{callId}/legs/{legId}/answer", deps.handleAnswerSDP)
+			api.Post("/calls/{callId}/legs/{legId}/ice", deps.handleICE)
+			api.Post("/calls/{callId}/legs/{legId}/mute", deps.handleMute)
+			api.Get("/calls/{callId}/turn-credentials", deps.handleTURN)
+		})
 	})
 
 	return r
@@ -120,15 +152,15 @@ func (d SwitchRouterDeps) handleSwitchInbound(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, view)
 }
 
-// authorizeCallResource checks ownership before any handler can mutate a live call.
+// authorizeCallResource 在变更活跃通话前校验资源属于当前应用。
 func (d SwitchRouterDeps) authorizeCallResource(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, prefix := range []string{"/switch/v2/calls/", "/switch/v2/internal/calls/", "/switch/v2/internal/recordings/", "/switch/v2/supervisor/calls/"} {
+		for _, prefix := range []string{"/switch/v2/calls/", "/switch/v2/routing-sessions/", "/switch/v2/internal/calls/", "/switch/v2/internal/recordings/", "/switch/v2/supervisor/calls/"} {
 			if !strings.HasPrefix(r.URL.Path, prefix) {
 				continue
 			}
 			id := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")[0]
-			if prefix == "/switch/v2/calls/" && (id == "direct" || id == "inbound" || id == "outbound") {
+			if prefix == "/switch/v2/calls/" && (id == "direct" || id == "inbound" || id == "outbound" || r.Method == http.MethodPost && strings.TrimSuffix(r.URL.Path, "/") == "/switch/v2/calls") {
 				break
 			}
 			if _, err := d.CallControl.GetCall(r.Context(), id); err != nil {
@@ -140,6 +172,8 @@ func (d SwitchRouterDeps) authorizeCallResource(next http.Handler) http.Handler 
 		next.ServeHTTP(w, r)
 	})
 }
+
+// handleBusinessActionComplete 业务系统提交 IVR 业务判断节点的结果分支。
 func (d SwitchRouterDeps) handleBusinessActionComplete(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Outcome string `json:"outcome"`
