@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
+	"uuid"
 
 	"open-switch/internal/ports"
 	"open-switch/internal/scope"
@@ -27,9 +27,9 @@ func TestGetActiveConfigurationAfterActivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := New(db, store.CallEvents{DB: db}, Options{})
-	app := "active-read-" + uuid.NewString()
+	app := "active-read-" + uuid.New().String()
 	ctx := scope.WithApplication(context.Background(), app)
-	q := uuid.NewString()
+	q := uuid.New().String()
 	bundle := ports.ConfigBundle{
 		Queues: []ports.QueueConfig{{ID: q, Name: "voice"}},
 	}

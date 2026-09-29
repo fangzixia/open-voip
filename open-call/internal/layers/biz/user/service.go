@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"uuid"
 
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"

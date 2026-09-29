@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"

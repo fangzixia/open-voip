@@ -8,8 +8,8 @@ import (
 	"open-switch/internal/store"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm/clause"
+	"uuid"
 
 	"open-switch/internal/ports"
 	"open-switch/internal/scope"
@@ -32,7 +32,7 @@ func (s *Service) Upsert(ctx context.Context, req ports.CDRWriteRequest) error {
 	} else if req.EndedAt != nil {
 		wait = int(req.EndedAt.Sub(req.StartedAt).Seconds())
 	}
-	row := models.CDR{ID: uuid.NewString(), ApplicationID: appID, CallID: req.CallID, Direction: req.Direction, QueueID: uuidPointer(req.QueueID), AgentID: uuidPointer(req.AgentID), Caller: req.Caller, Callee: req.Callee, SessionType: string(req.SessionType), Result: req.Result, StartedAt: req.StartedAt, AnsweredAt: req.AnsweredAt, EndedAt: req.EndedAt, DurationSec: duration, WaitSec: wait, VideoStartedAt: req.VideoStartedAt, VideoUpgradeOk: req.VideoUpgradeOk, ScreenShareCount: req.ScreenShareCount, CreatedAt: now}
+	row := models.CDR{ID: uuid.New().String(), ApplicationID: appID, CallID: req.CallID, Direction: req.Direction, QueueID: uuidPointer(req.QueueID), AgentID: uuidPointer(req.AgentID), Caller: req.Caller, Callee: req.Callee, SessionType: string(req.SessionType), Result: req.Result, StartedAt: req.StartedAt, AnsweredAt: req.AnsweredAt, EndedAt: req.EndedAt, DurationSec: duration, WaitSec: wait, VideoStartedAt: req.VideoStartedAt, VideoUpgradeOk: req.VideoUpgradeOk, ScreenShareCount: req.ScreenShareCount, CreatedAt: now}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "call_id"}}, DoUpdates: clause.AssignmentColumns([]string{"application_id", "direction", "queue_id", "agent_id", "caller", "callee", "session_type", "result", "started_at", "answered_at", "ended_at", "duration_sec", "wait_sec", "video_started_at", "video_upgrade_ok", "screen_share_count"})}).Create(&row).Error; err != nil {
 			return err

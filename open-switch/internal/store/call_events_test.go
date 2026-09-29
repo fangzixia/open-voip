@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
 	"open-switch/internal/ports"
 	"open-switch/internal/store/migrate"
+	"uuid"
 )
 
 func TestCallEventsConcurrentCursorIntegration(t *testing.T) {
@@ -26,7 +26,7 @@ func TestCallEventsConcurrentCursorIntegration(t *testing.T) {
 	}
 	stream := CallEvents{DB: db}
 	ctx := context.Background()
-	calls := []string{uuid.NewString(), uuid.NewString()}
+	calls := []string{uuid.New().String(), uuid.New().String()}
 	defer db.Exec("DELETE FROM os_call_events WHERE call_id IN (?, ?)", calls[0], calls[1])
 	var wg sync.WaitGroup
 	errs := make(chan error, 20)

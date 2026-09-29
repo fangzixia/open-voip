@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
 	"open-switch/internal/datetime"
 	"open-switch/internal/layers/cccore"
@@ -14,6 +13,7 @@ import (
 	"os"
 	"testing"
 	"time"
+	"uuid"
 )
 
 // TestLocalCCLifecycleIntegration 覆盖 IVR 业务判断、完成/重复提交与超时等呼叫控制边界。
@@ -41,9 +41,9 @@ func TestLocalCCLifecycleIntegration(t *testing.T) {
 	svc.deps.Recordings = core
 	svc.deps.CallEvents = events
 	svc.deps.RecordingPolicy = core
-	app := "lifecycle-" + uuid.NewString()
+	app := "lifecycle-" + uuid.New().String()
 	ctx := scope.WithApplication(context.Background(), app)
-	q, a, flow := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	q, a, flow := uuid.New().String(), uuid.New().String(), uuid.New().String()
 	bundle := ports.ConfigBundle{
 		Queues: []ports.QueueConfig{{ID: q, Name: "voice", AgentIDs: []string{a}}},
 		Agents: []ports.AgentConfig{{ID: a, UserRef: "employee", Extension: "1001", Enabled: true}},

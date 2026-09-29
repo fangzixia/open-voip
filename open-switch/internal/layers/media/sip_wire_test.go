@@ -3,13 +3,13 @@ package media
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"net"
 	"open-switch/internal/config"
 	"open-switch/internal/ports/dto"
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 )
 
 // 使用模拟话机走真实 UDP 信令：REGISTER 挑战、鉴权注册、
@@ -74,7 +74,7 @@ func TestSIPDeviceRegisterAndRingOverUDP(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(response), "SIP/2.0 200") {
 		t.Fatalf("registration failed: %s %v", response, err)
 	}
-	callID := uuid.NewString()
+	callID := uuid.New().String()
 	svc.PrepareSIP(callID)
 	if err := svc.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
 		t.Fatal(err)

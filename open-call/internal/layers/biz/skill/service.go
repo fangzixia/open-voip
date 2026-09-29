@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"open-call/internal/errs"
 	"open-call/internal/ports"
@@ -45,7 +45,7 @@ func (s *Service) Create(ctx context.Context, name string) (DTO, error) {
 	if name == "" {
 		return DTO{}, errs.InvalidRequest("技能名称必填")
 	}
-	created, err := s.sw.CreateSkillConfig(ctx, ports.SwitchSkillConfig{ID: uuid.NewString(), Name: name})
+	created, err := s.sw.CreateSkillConfig(ctx, ports.SwitchSkillConfig{ID: uuid.New().String(), Name: name})
 	if err != nil {
 		return DTO{}, err
 	}

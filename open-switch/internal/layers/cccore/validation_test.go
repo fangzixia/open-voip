@@ -1,9 +1,9 @@
 package cccore
 
 import (
-	"github.com/google/uuid"
 	"open-switch/internal/ports"
 	"testing"
+	"uuid"
 )
 
 // TestPublishedGraphAndCalendarValidation 校验 IVR 图与营业时间的边界用例。
@@ -31,7 +31,7 @@ func TestPublishedGraphAndCalendarValidation(t *testing.T) {
 }
 
 func TestDuplicateExtensionsRejected(t *testing.T) {
-	b := ports.ConfigBundle{Agents: []ports.AgentConfig{{ID: uuid.NewString(), UserRef: "one", Extension: "1001"}, {ID: uuid.NewString(), UserRef: "two", Extension: "1001"}}}
+	b := ports.ConfigBundle{Agents: []ports.AgentConfig{{ID: uuid.New().String(), UserRef: "one", Extension: "1001"}, {ID: uuid.New().String(), UserRef: "two", Extension: "1001"}}}
 	normalizeBundle(&b)
 	if err := validateBundle(b); err == nil {
 		t.Fatal("duplicate extension accepted")

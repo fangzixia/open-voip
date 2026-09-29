@@ -15,8 +15,8 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
-	"github.com/google/uuid"
 	"github.com/icholy/digest"
+	"uuid"
 
 	"open-switch/internal/config"
 	"open-switch/internal/errs"

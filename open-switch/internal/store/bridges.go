@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/scope"
@@ -22,7 +22,7 @@ func (s Bridges) ActivatePair(ctx context.Context, applicationID, callID, legA, 
 	if applicationID == "" || callID == "" || legA == "" || legB == "" {
 		return "", nil
 	}
-	id := uuid.NewString()
+	id := uuid.New().String()
 	participants, _ := json.Marshal([]map[string]string{
 		{"leg_id": legA},
 		{"leg_id": legB},

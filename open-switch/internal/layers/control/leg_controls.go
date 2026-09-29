@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports/dto"
@@ -87,7 +87,7 @@ func (s *Service) StartLegPlayback(ctx context.Context, callID, legID, assetID s
 	if err := s.guardExpectedVersion(ctx, callID); err != nil {
 		return "", err
 	}
-	playbackID := uuid.NewString()
+	playbackID := uuid.New().String()
 	hash := fmt.Sprintf("leg.playback|%s|%s", legID, assetID)
 	var runErr error
 	err := s.runIdempotentMutation(ctx, callID, "leg.playback", hash, func() error {

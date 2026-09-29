@@ -3,13 +3,13 @@ package media
 import (
 	"context"
 	"encoding/binary"
-	"github.com/google/uuid"
 	"io"
 	"open-switch/internal/scope"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"uuid"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4/pkg/media"

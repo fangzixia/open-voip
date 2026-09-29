@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"net/http"
 	"open-switch/internal/errs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"uuid"
 )
 
 func (d SwitchRouterDeps) handleRecordingFile(w http.ResponseWriter, r *http.Request) {

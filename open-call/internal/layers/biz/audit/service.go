@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"uuid"
 
 	"open-call/internal/datetime"
 	"open-call/internal/store/models"

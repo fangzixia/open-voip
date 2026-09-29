@@ -2,24 +2,26 @@
 import { resolve } from "node:path";
 import { defineConfig, loadEnv } from "vite";
 
+const rootDir = import.meta.dirname;
+
 /** @type {import('vite').UserConfig} */
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, resolve(__dirname), "");
+  const env = loadEnv(mode, resolve(rootDir), "");
   const apiBase = (env.VITE_API_BASE || "").replace(/\/$/, "");
   const injectSnippet = apiBase
     ? `<script>window.__OPEN_VOIP__=Object.assign(window.__OPEN_VOIP__||{},{apiBase:${JSON.stringify(apiBase)}});</script>`
     : "";
 
   return {
-    root: resolve(__dirname),
+    root: resolve(rootDir),
     base: "./",
     build: {
-      outDir: resolve(__dirname, "dist"),
+      outDir: resolve(rootDir, "dist"),
       emptyOutDir: true,
       rollupOptions: {
         input: {
-          app: resolve(__dirname, "index.html"),
-          guest: resolve(__dirname, "guest/index.html"),
+          app: resolve(rootDir, "index.html"),
+          guest: resolve(rootDir, "guest/index.html"),
         },
       },
     },

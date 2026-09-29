@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"open-call/internal/layers/biz/authz"
@@ -16,6 +15,7 @@ import (
 	"open-call/internal/store"
 	"open-call/internal/store/migrate"
 	"open-call/internal/store/models"
+	"uuid"
 )
 
 func TestRolesAndIdentityIntegration(t *testing.T) {
@@ -34,7 +34,7 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 	err = db.Transaction(func(tx *gorm.DB) error {
 		ctx := context.Background()
 		svc := authz.NewService(tx)
-		uid := uuid.NewString()
+		uid := uuid.New().String()
 		name := "user-" + uid[:8]
 		u := models.User{ID: uid, Username: name, EmployeeNo: "E" + uid[:8], PasswordHash: "test", Role: "agent", AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		if err := tx.Create(&u).Error; err != nil {
@@ -71,8 +71,8 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 		if err != nil || created.AgentID == "" {
 			t.Fatalf("legacy role change removed agent profile: %+v %v", created, err)
 		}
-		sid := uuid.NewString()
-		session := models.AuthSession{ID: sid, UserID: uid, RefreshJTI: uuid.NewString(), CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
+		sid := uuid.New().String()
+		session := models.AuthSession{ID: sid, UserID: uid, RefreshJTI: uuid.New().String(), CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
 		if err := tx.Create(&session).Error; err != nil {
 			return err
 		}
@@ -108,7 +108,7 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 		if _, err := svc.NewOIDCUser(ctx, "https://id.test", "sub-employee", "different-"+uid[:8], "Existing", u.EmployeeNo, ids); err == nil {
 			t.Fatal("same employee number must not auto-link")
 		}
-		bindingSession := models.AuthSession{ID: uuid.NewString(), UserID: uid, RefreshJTI: uuid.NewString(), CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
+		bindingSession := models.AuthSession{ID: uuid.New().String(), UserID: uid, RefreshJTI: uuid.New().String(), CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
 		if err := tx.Create(&bindingSession).Error; err != nil {
 			return err
 		}

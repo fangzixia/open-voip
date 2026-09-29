@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/observability"

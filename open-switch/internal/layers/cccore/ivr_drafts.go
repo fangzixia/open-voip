@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -58,7 +58,7 @@ func (s *Service) CreateIVRFlow(ctx context.Context, name, draftJSON string) (po
 		return ports.IVRFlowView{}, errs.InvalidRequest("草稿 JSON 无效")
 	}
 	now := time.Now().UTC()
-	row := models.IVRFlow{ApplicationID: appID, ID: uuid.NewString(), Name: name, DraftJSON: draftJSON, CreatedAt: now, UpdatedAt: now}
+	row := models.IVRFlow{ApplicationID: appID, ID: uuid.New().String(), Name: name, DraftJSON: draftJSON, CreatedAt: now, UpdatedAt: now}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return ports.IVRFlowView{}, err
 	}

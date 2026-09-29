@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"open-call/internal/config"
@@ -27,6 +26,7 @@ import (
 	"open-call/internal/store"
 	"open-call/internal/store/migrate"
 	"open-call/internal/store/models"
+	"uuid"
 )
 
 func TestOIDCLoginTicketAndGroupRefresh(t *testing.T) {
@@ -134,14 +134,14 @@ func TestOIDCLoginTicketAndGroupRefresh(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		rescue := models.User{ID: uuid.NewString(), Username: "rescue-" + uuid.NewString()[:8], PasswordHash: passwordHash, Role: "admin", AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		rescue := models.User{ID: uuid.New().String(), Username: "rescue-" + uuid.New().String()[:8], PasswordHash: passwordHash, Role: "admin", AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		if err := tx.Create(&rescue).Error; err != nil {
 			return err
 		}
 		if err := tx.Create(&authz.UserRole{UserID: rescue.ID, RoleID: "admin"}).Error; err != nil {
 			return err
 		}
-		other := models.User{ID: uuid.NewString(), Username: "local-" + uuid.NewString()[:8], PasswordHash: passwordHash, Role: "agent", AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		other := models.User{ID: uuid.New().String(), Username: "local-" + uuid.New().String()[:8], PasswordHash: passwordHash, Role: "agent", AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		if err := tx.Create(&other).Error; err != nil {
 			return err
 		}

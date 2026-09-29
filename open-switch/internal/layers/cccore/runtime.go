@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -225,7 +225,7 @@ AND NOT EXISTS (
 			picked = ""
 			return nil
 		}
-		if err := tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: picked, FromState: "idle", ToState: "ringing", Reason: "acd", CallID: req.CallID, CreatedAt: now}).Error; err != nil {
+		if err := tx.Create(&models.AgentStateLog{ID: uuid.New().String(), ApplicationID: appID, AgentID: picked, FromState: "idle", ToState: "ringing", Reason: "acd", CallID: req.CallID, CreatedAt: now}).Error; err != nil {
 			return err
 		}
 		if queue.DispatchStrategy == "round_robin" {
@@ -235,7 +235,7 @@ AND NOT EXISTS (
 		}
 		if err := tx.Exec(`INSERT INTO os_acd_attempts (id,application_id,call_id,queue_id,agent_id,attempt,state,started_at)
  SELECT ?,?,?,?,?,COALESCE(MAX(attempt),0)+1,'offering',? FROM os_acd_attempts WHERE call_id=?`,
-			uuid.NewString(), appID, req.CallID, req.QueueID, picked, now, req.CallID).Error; err != nil {
+			uuid.New().String(), appID, req.CallID, req.QueueID, picked, now, req.CallID).Error; err != nil {
 			return err
 		}
 		if err := publishAgentTx(ctx, tx, req.CallID, picked, "ringing", "acd"); err != nil {
@@ -338,7 +338,7 @@ func (s *Service) setState(ctx context.Context, appID, callID, agentID, fromStat
 		} else if err := tx.Model(&sess).Updates(map[string]any{"state": toState, "current_call_id": nullableUUID(current), "busy_reason": reason, "pending_checkout": false, "updated_at": now}).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: agentID, FromState: sess.State, ToState: toState, Reason: reason, CallID: callID, CreatedAt: now}).Error; err != nil {
+		if err := tx.Create(&models.AgentStateLog{ID: uuid.New().String(), ApplicationID: appID, AgentID: agentID, FromState: sess.State, ToState: toState, Reason: reason, CallID: callID, CreatedAt: now}).Error; err != nil {
 			return err
 		}
 		if callID != "" {
@@ -410,7 +410,7 @@ func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string
 			return err
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			sess = models.AgentSession{ApplicationID: appID, ID: uuid.NewString(), AgentID: agentID, State: "idle", CheckedInAt: now, UpdatedAt: now}
+			sess = models.AgentSession{ApplicationID: appID, ID: uuid.New().String(), AgentID: agentID, State: "idle", CheckedInAt: now, UpdatedAt: now}
 			if err := tx.Create(&sess).Error; err != nil {
 				return err
 			}
@@ -422,7 +422,7 @@ func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string
 				return err
 			}
 		}
-		if err := tx.Create(&models.AgentStateLog{ID: uuid.NewString(), ApplicationID: appID, AgentID: agentID, FromState: "offline", ToState: "idle", Reason: "check-in", CreatedAt: now}).Error; err != nil {
+		if err := tx.Create(&models.AgentStateLog{ID: uuid.New().String(), ApplicationID: appID, AgentID: agentID, FromState: "offline", ToState: "idle", Reason: "check-in", CreatedAt: now}).Error; err != nil {
 			return err
 		}
 		return publishAgentTx(ctx, tx, "", agentID, "idle", "check-in")

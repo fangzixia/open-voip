@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"open-switch/internal/datetime"
 	"open-switch/internal/errs"

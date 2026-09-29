@@ -32,7 +32,6 @@ linters:
             - open-switch/internal/config
             - gorm.io/gorm
             - github.com/golang-jwt/jwt
-            - github.com/google/uuid
             - golang.org/x/crypto
         layering-control:
           files:
@@ -50,7 +49,6 @@ linters:
             - open-switch/internal/ports
             - open-switch/internal/ports/dto
             - open-switch/internal/errs
-            - github.com/google/uuid
         layering-media:
           files:
             - internal/layers/media/**
@@ -66,7 +64,6 @@ linters:
             - open-switch/internal/errs
             - open-switch/internal/config
             - github.com/pion
-            - github.com/google/uuid
             - github.com/emiago
             - github.com/icholy/digest
   exclusions:

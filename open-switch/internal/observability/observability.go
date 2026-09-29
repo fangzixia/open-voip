@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"uuid"
 )
 
 const (
@@ -36,7 +36,7 @@ type Fields struct {
 	TraceID, RequestID, CallID, LegID, AgentID, QueueID string
 }
 
-func NewID() string { return uuid.NewString() }
+func NewID() string { return uuid.New().String() }
 
 func WithFields(ctx context.Context, add Fields) context.Context {
 	cur := FromContext(ctx)

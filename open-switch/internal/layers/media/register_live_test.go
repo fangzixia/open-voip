@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // 向运行中的 open-switch 发 REGISTER，验证本机 USB/软电话所用账号能否注册。
@@ -56,7 +56,7 @@ func probeRegister(serverAddr, requestURI, user, password, domain string) error 
 		return err
 	}
 	deviceAddr := device.LocalAddr().String()
-	callID := uuid.NewString()
+	callID := uuid.New().String()
 	register := func(cseq int, auth string) string {
 		extra := ""
 		if auth != "" {
@@ -139,7 +139,7 @@ func probeInviteDID(serverAddr, domain, user, password, did string) error {
 		return err
 	}
 	deviceAddr := device.LocalAddr().String()
-	callID := uuid.NewString()
+	callID := uuid.New().String()
 	fromTag := "probeinv"
 	inviteURI := fmt.Sprintf("sip:%s@%s", did, domain)
 	sdp := "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0 8 101\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\n"

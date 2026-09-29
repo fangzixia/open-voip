@@ -2,7 +2,6 @@ package cccore
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"uuid"
 )
 
 // TestConfigurationIsolationAndConcurrentDispatch 验证多应用配置隔离与并发派单互不串扰。
@@ -30,13 +30,13 @@ func TestConfigurationIsolationAndConcurrentDispatch(t *testing.T) {
 	}
 	events := store.CallEvents{DB: db}
 	svc := New(db, events, Options{})
-	app := "integration-" + uuid.NewString()
+	app := "integration-" + uuid.New().String()
 	ctx := scope.WithApplication(context.Background(), app)
-	q, a, b, flow := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	q, a, b, flow := uuid.New().String(), uuid.New().String(), uuid.New().String(), uuid.New().String()
 	bundle := ports.ConfigBundle{
 		Queues: []ports.QueueConfig{{ID: q, Name: "voice", AgentIDs: []string{a, b}}},
 		Agents: []ports.AgentConfig{{ID: a, UserRef: "u1", Extension: "1001", Enabled: true}, {ID: b, UserRef: "u2", Extension: "1002", Enabled: false}},
-		DIDs:   []ports.DIDConfig{{ID: uuid.NewString(), TrunkID: app, DID: "8001", TargetType: "queue", TargetID: q}},
+		DIDs:   []ports.DIDConfig{{ID: uuid.New().String(), TrunkID: app, DID: "8001", TargetType: "queue", TargetID: q}},
 		IVRs:   []ports.IVRConfig{{FlowID: flow, Version: 1, PayloadJSON: `{"start":"end","nodes":{"end":{"type":"hangup"}}}`}},
 	}
 	v, err := svc.StoreConfig(ctx, bundle)
@@ -68,7 +68,7 @@ func TestConfigurationIsolationAndConcurrentDispatch(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make(chan dto.DispatchResult, 8)
 	errors := make(chan error, 8)
-	callID := uuid.NewString()
+	callID := uuid.New().String()
 	now := time.Now().UTC()
 	if err := store.NewCallStore(db).InsertCall(ctx, ports.CallRecord{ID: callID, ConfigVersion: &v.Version, Direction: "inbound", State: "queued", QueueID: &q, SessionType: dto.SessionTypeAudio, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestConfigurationIsolationAndConcurrentDispatch(t *testing.T) {
 			t.Fatalf("dispatch=%+v", r)
 		}
 	}
-	other, err := svc.RequestAgent(ctx, dto.DispatchRequest{CallID: uuid.NewString(), QueueID: q})
+	other, err := svc.RequestAgent(ctx, dto.DispatchRequest{CallID: uuid.New().String(), QueueID: q})
 	if err != nil || other.AgentID != "" {
 		t.Fatalf("agent reserved twice: %+v %v", other, err)
 	}

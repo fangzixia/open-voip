@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -26,7 +26,7 @@ func (s *Service) ListQueueConfigs(ctx context.Context) ([]ports.QueueConfig, er
 // CreateQueueConfig 创建队列并激活新版本。
 func (s *Service) CreateQueueConfig(ctx context.Context, in ports.QueueConfig) (ports.QueueConfig, error) {
 	if !validUUID(in.ID) {
-		in.ID = uuid.NewString()
+		in.ID = uuid.New().String()
 	}
 	normalizeBundle(&ports.ConfigBundle{Queues: []ports.QueueConfig{in}})
 	var created ports.QueueConfig
@@ -132,7 +132,7 @@ func (s *Service) ListSkillConfigs(ctx context.Context) ([]ports.SkillConfig, er
 // CreateSkillConfig 创建技能。
 func (s *Service) CreateSkillConfig(ctx context.Context, in ports.SkillConfig) (ports.SkillConfig, error) {
 	if !validUUID(in.ID) {
-		in.ID = uuid.NewString()
+		in.ID = uuid.New().String()
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	var created ports.SkillConfig
@@ -201,7 +201,7 @@ func (s *Service) ListAgentConfigs(ctx context.Context) ([]ports.AgentConfig, er
 // UpsertAgentConfig 创建或更新坐席路由资料。
 func (s *Service) UpsertAgentConfig(ctx context.Context, in ports.AgentConfig) (ports.AgentConfig, error) {
 	if !validUUID(in.ID) {
-		in.ID = uuid.NewString()
+		in.ID = uuid.New().String()
 	}
 	normalizeBundle(&ports.ConfigBundle{Agents: []ports.AgentConfig{in}})
 	var out ports.AgentConfig
@@ -261,7 +261,7 @@ func (s *Service) ListDIDConfigs(ctx context.Context) ([]ports.DIDConfig, error)
 // UpsertDIDConfig 创建或更新 DID（按 id 或新建）。
 func (s *Service) UpsertDIDConfig(ctx context.Context, in ports.DIDConfig) (ports.DIDConfig, error) {
 	if !validUUID(in.ID) {
-		in.ID = uuid.NewString()
+		in.ID = uuid.New().String()
 	}
 	normalizeBundle(&ports.ConfigBundle{DIDs: []ports.DIDConfig{in}})
 	var out ports.DIDConfig

@@ -8,18 +8,18 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 	"open-switch/internal/scope"
+	"uuid"
 )
 
 // CreateDirect 由控制器直接创建通话，不查询业务平台 API。
 // 返回的第一条腿供 WebRTC 协商或 SIP 入站使用。
 func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (ports.CallView, error) {
 	if req.CallID == "" {
-		req.CallID = uuid.NewString()
+		req.CallID = uuid.New().String()
 	}
 	if _, err := uuid.Parse(req.CallID); err != nil {
 		return ports.CallView{}, errs.InvalidRequest("call_id 必须为 UUID")
@@ -71,7 +71,7 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 	}
 	now := time.Now().UTC()
 	rec := ports.CallRecord{Version: 1, ApplicationID: scope.Application(ctx), ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
-	leg := ports.CallLegRecord{ID: uuid.NewString(), CallID: req.CallID, Role: req.InitialLegRole, CreatedAt: now}
+	leg := ports.CallLegRecord{ID: uuid.New().String(), CallID: req.CallID, Role: req.InitialLegRole, CreatedAt: now}
 	if req.AgentID != "" {
 		leg.AgentID = &req.AgentID
 	}
@@ -90,7 +90,7 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 // CreateStubCall 创建无媒体腿的空通话，供后续按方案加腿与桥接。
 func (s *Service) CreateStubCall(ctx context.Context, req dto.StubCallRequest) (ports.CallView, error) {
 	if req.CallID == "" {
-		req.CallID = uuid.NewString()
+		req.CallID = uuid.New().String()
 	}
 	if _, err := uuid.Parse(req.CallID); err != nil {
 		return ports.CallView{}, errs.InvalidRequest("call_id 必须为 UUID")
@@ -140,7 +140,7 @@ func (s *Service) AddDirectLeg(ctx context.Context, callID string, req dto.Direc
 	if len(rt.legs) >= 2 {
 		return ports.CallView{}, errs.Conflict("直接控制通话最多支持两个媒体腿", "")
 	}
-	leg := ports.CallLegRecord{ID: uuid.NewString(), CallID: callID, Role: req.Role, CreatedAt: time.Now().UTC()}
+	leg := ports.CallLegRecord{ID: uuid.New().String(), CallID: callID, Role: req.Role, CreatedAt: time.Now().UTC()}
 	if req.AgentID != "" {
 		leg.AgentID = &req.AgentID
 	}
@@ -182,7 +182,7 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
 		return ports.DirectSIPResult{}, err
 	}
-	leg := ports.CallLegRecord{ID: uuid.NewString(), CallID: callID, Role: dto.LegRolePSTN, CreatedAt: time.Now().UTC()}
+	leg := ports.CallLegRecord{ID: uuid.New().String(), CallID: callID, Role: dto.LegRolePSTN, CreatedAt: time.Now().UTC()}
 	if err := s.deps.Calls.InsertLeg(ctx, leg); err != nil {
 		return ports.DirectSIPResult{}, err
 	}

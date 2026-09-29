@@ -3,7 +3,7 @@ package configpub
 import (
 	"context"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"open-call/internal/errs"
 	"open-call/internal/ports"
@@ -75,7 +75,7 @@ func (s *SnapshotService) UpsertDID(ctx context.Context, trunkID, did, targetTyp
 		}
 	}
 	if id == "" {
-		id = uuid.NewString()
+		id = uuid.New().String()
 	}
 	cfg := ports.SwitchDIDConfig{ID: id, TrunkID: trunkID, DID: did, TargetType: targetType, TargetID: targetID}
 	out, err := s.sw.UpsertDIDConfig(ctx, cfg)

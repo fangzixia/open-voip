@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -39,7 +39,7 @@ func (s Commands) Accept(ctx context.Context, callID, idempotencyKey, requestHas
 		return ports.CommandView{}, false, errs.Forbidden("缺少应用作用域")
 	}
 	if idempotencyKey == "" {
-		idempotencyKey = uuid.NewString()
+		idempotencyKey = uuid.New().String()
 	}
 	var existing commandRow
 	err := s.DB.WithContext(ctx).Where("application_id = ? AND idempotency_key = ?", appID, idempotencyKey).First(&existing).Error
@@ -57,7 +57,7 @@ func (s Commands) Accept(ctx context.Context, callID, idempotencyKey, requestHas
 		raw = []byte("{}")
 	}
 	now := time.Now().UTC()
-	id := uuid.NewString()
+	id := uuid.New().String()
 	row := commandRow{
 		ID: id, ApplicationID: appID, CallID: strPtr(callID), IdempotencyKey: idempotencyKey,
 		RequestHash: requestHash, Type: typ, Status: "accepted", Result: string(raw),

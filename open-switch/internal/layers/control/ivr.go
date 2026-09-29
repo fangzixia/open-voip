@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -243,7 +243,7 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 	case "business_action":
 		// 暂停 IVR 媒体推进，等待业务系统通过 API 提交已声明的结果分支。
 		if rt.ivr.actionID == "" {
-			rt.ivr.actionID = uuid.NewString()
+			rt.ivr.actionID = uuid.New().String()
 			rt.ivr.entered = time.Now().UTC()
 			rt.ivr.timeout = time.Duration(node.TimeoutSec) * time.Second
 			if err := s.deps.BusinessActions.BeginBusinessAction(ctx, ports.BusinessAction{ID: rt.ivr.actionID, CallID: callID, NodeID: rt.ivr.node, Action: node.Action, Outcomes: node.Choices, Deadline: rt.ivr.entered.Add(rt.ivr.timeout)}); err != nil {

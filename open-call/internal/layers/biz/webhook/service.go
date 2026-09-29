@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,8 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -26,6 +27,21 @@ import (
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
+
+// nameSpaceOID 为 RFC 9562 OID 命名空间；标准库无 NewSHA1，本地实现 UUID v5。
+var nameSpaceOID = uuid.MustParse("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
+
+func nameUUID(ns uuid.UUID, name []byte) uuid.UUID {
+	h := sha1.New()
+	_, _ = h.Write(ns[:])
+	_, _ = h.Write(name)
+	sum := h.Sum(nil)
+	var u uuid.UUID
+	copy(u[:], sum[:16])
+	u[6] = (u[6] & 0x0f) | 0x50
+	u[8] = (u[8] & 0x3f) | 0x80
+	return u
+}
 
 // SubDTO 是 Webhook 订阅的对外表示，签名密钥不会回传。
 type SubDTO struct {
@@ -202,7 +218,7 @@ func (s *Service) Dispatch(ctx context.Context, eventType string, payload map[st
 	}
 	eventID := uuid.New().String()
 	if sourceID, ok := payload["switch_event_id"]; ok {
-		eventID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint(payload["application_id"])+":"+fmt.Sprint(sourceID))).String()
+		eventID = nameUUID(nameSpaceOID, []byte(fmt.Sprint(payload["application_id"])+":"+fmt.Sprint(sourceID))).String()
 	}
 	ids := observability.From(ctx)
 	body, err := datetime.Marshal(map[string]any{
@@ -219,7 +235,7 @@ func (s *Service) Dispatch(ctx context.Context, eventType string, payload map[st
 			if json.Unmarshal([]byte(sub.EventTypes), &types) != nil || !matchType(types, eventType) {
 				continue
 			}
-			deliveryID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(eventID+":"+sub.ID)).String()
+			deliveryID := nameUUID(nameSpaceOID, []byte(eventID+":"+sub.ID)).String()
 			row := models.WebhookDelivery{ID: deliveryID, EventID: eventID, SubscriptionID: sub.ID,
 				EventType: eventType, Payload: string(body), Status: "pending", NextAttemptAt: now, CreatedAt: now, UpdatedAt: now}
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {

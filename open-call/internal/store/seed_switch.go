@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"uuid"
 
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
@@ -53,8 +53,8 @@ func SeedSwitchDemoConfig(sw ports.SwitchAdminPort, db *gorm.DB, log *slog.Logge
 			return fmt.Errorf("同步坐席 %s: %w", ag.Extension, err)
 		}
 	}
-	audioID := uuid.NewString()
-	videoID := uuid.NewString()
+	audioID := uuid.New().String()
+	videoID := uuid.New().String()
 	agentIDs := make([]string, 0, len(agents))
 	for _, ag := range agents {
 		agentIDs = append(agentIDs, ag.ID)
@@ -76,7 +76,7 @@ func SeedSwitchDemoConfig(sw ports.SwitchAdminPort, db *gorm.DB, log *slog.Logge
 		return fmt.Errorf("创建视频队列: %w", err)
 	}
 	if _, err := sw.UpsertDIDConfig(ctx, ports.SwitchDIDConfig{
-		ID: uuid.NewString(), TrunkID: "*", DID: "8001", TargetType: "queue", TargetID: audioQ.ID,
+		ID: uuid.New().String(), TrunkID: "*", DID: "8001", TargetType: "queue", TargetID: audioQ.ID,
 	}); err != nil {
 		return fmt.Errorf("创建 DID 8001: %w", err)
 	}

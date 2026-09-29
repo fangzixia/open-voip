@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"uuid"
 
 	"open-call/internal/datetime"
 	"open-call/internal/errs"

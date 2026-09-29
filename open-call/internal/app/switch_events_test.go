@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"open-call/internal/datetime"
@@ -18,6 +17,7 @@ import (
 	"open-call/internal/store"
 	"open-call/internal/store/migrate"
 	"open-call/internal/store/models"
+	"uuid"
 )
 
 // TestSwitchEventProjectionReplay 验证事件投影与出站投递在崩溃重放场景下保持幂等。
@@ -38,7 +38,7 @@ func TestSwitchEventProjectionReplay(t *testing.T) {
 	ctx := context.Background()
 	started := time.Now().UTC().Truncate(time.Second)
 	answered, ended := started.Add(5*time.Second), started.Add(35*time.Second)
-	callID, recordingID, agentID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	callID, recordingID, agentID := uuid.New().String(), uuid.New().String(), uuid.New().String()
 	payload := func(v any) map[string]any {
 		t.Helper()
 		raw, err := datetime.Marshal(v)
@@ -113,7 +113,7 @@ func TestEventInboxProjectionCursorAndDelivery(t *testing.T) {
 		if err := tx.Raw("SELECT last_event_id FROM oc_switch_event_cursor WHERE id=1").Scan(&cursor).Error; err != nil {
 			t.Fatal(err)
 		}
-		ev := switchapi.Event{ID: cursor + 1, ApplicationID: "projection-test", AgentID: uuid.NewString(), Type: "agent.routing_state_changed", CreatedAt: "invalid", Payload: map[string]any{"state": "idle"}}
+		ev := switchapi.Event{ID: cursor + 1, ApplicationID: "projection-test", AgentID: uuid.New().String(), Type: "agent.routing_state_changed", CreatedAt: "invalid", Payload: map[string]any{"state": "idle"}}
 		if err := CommitSwitchEvent(ctx, tx, ev, nil); err == nil {
 			t.Fatal("invalid projection committed")
 		}

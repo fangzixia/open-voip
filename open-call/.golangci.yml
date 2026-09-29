@@ -31,7 +31,6 @@ linters:
             - open-call/internal/integration/switchapi
             - gorm.io/gorm
             - github.com/golang-jwt/jwt
-            - github.com/google/uuid
             - golang.org/x/crypto
   exclusions:
     rules:

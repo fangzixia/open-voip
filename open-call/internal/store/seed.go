@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"uuid"
 
 	"open-call/internal/config"
 	"open-call/internal/layers/biz/auth"

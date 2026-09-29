@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"uuid"
 
 	"open-call/internal/config"
 	"open-call/internal/errs"
@@ -128,7 +128,7 @@ func (s *Service) IssueOIDC(ctx context.Context, user models.User, encryptedRefr
 		return TokenPair{}, err
 	}
 	now := time.Now().UTC()
-	sid := uuid.NewString()
+	sid := uuid.New().String()
 	pair, jti, exp, err := s.buildPair(user, agentID, sid, now)
 	if err != nil {
 		return TokenPair{}, err

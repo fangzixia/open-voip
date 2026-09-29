@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"open-call/internal/errs"
 	"open-call/internal/store/models"
+	"uuid"
 )
 
 type Role struct {
@@ -317,7 +317,7 @@ func (s *Service) NewOIDCUser(ctx context.Context, issuer, subject, loginName, u
 		if count > 0 {
 			return errs.Conflict("同登录名或工号用户已存在，请管理员先绑定外部身份", "")
 		}
-		u = models.User{ID: uuid.NewString(), Username: loginName, EmployeeNo: employeeNo, PasswordHash: "!oidc-only", Role: "agent", DisplayName: username, AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		u = models.User{ID: uuid.New().String(), Username: loginName, EmployeeNo: employeeNo, PasswordHash: "!oidc-only", Role: "agent", DisplayName: username, AuthVersion: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		if err := tx.Create(&u).Error; err != nil {
 			return err
 		}
