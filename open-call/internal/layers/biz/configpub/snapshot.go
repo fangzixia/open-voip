@@ -2,14 +2,11 @@ package configpub
 
 import (
 	"context"
-	"errors"
-	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 
 	"open-call/internal/errs"
-	"open-call/internal/store/models"
+	"open-call/internal/ports"
 )
 
 // DIDDTO DID 路由。
@@ -21,29 +18,25 @@ type DIDDTO struct {
 	TargetID   string `json:"target_id,omitempty"`
 }
 
-// SnapshotService 管理业务侧 DID 草稿与队列/IVR 绑定。
+// SnapshotService 通过 Switch 管理 DID 与队列 IVR 绑定。
 type SnapshotService struct {
-	db *gorm.DB
+	sw ports.SwitchAdminPort
 }
 
 // NewSnapshotService 创建配置快照服务。
-func NewSnapshotService(db *gorm.DB) *SnapshotService {
-	return &SnapshotService{db: db}
+func NewSnapshotService(sw ports.SwitchAdminPort) *SnapshotService {
+	return &SnapshotService{sw: sw}
 }
 
 // ListDID DID 列表。
 func (s *SnapshotService) ListDID(ctx context.Context) ([]DIDDTO, error) {
-	var rows []models.DIDRoute
-	if err := s.db.WithContext(ctx).Order("d_id").Find(&rows).Error; err != nil {
+	rows, err := s.sw.ListDIDConfigs(ctx)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]DIDDTO, 0, len(rows))
 	for _, r := range rows {
-		targetID := ""
-		if r.TargetID != nil {
-			targetID = *r.TargetID
-		}
-		out = append(out, DIDDTO{ID: r.ID, TrunkID: r.TrunkID, DID: r.DID, TargetType: r.TargetType, TargetID: targetID})
+		out = append(out, DIDDTO{ID: r.ID, TrunkID: r.TrunkID, DID: r.DID, TargetType: r.TargetType, TargetID: r.TargetID})
 	}
 	return out, nil
 }
@@ -63,79 +56,53 @@ func (s *SnapshotService) UpsertDID(ctx context.Context, trunkID, did, targetTyp
 		return DIDDTO{}, errs.InvalidRequest("target_id 必填")
 	}
 	if targetType == "queue" {
-		var count int64
-		if err := s.db.WithContext(ctx).Model(&models.Queue{}).Where("id = ?", targetID).Count(&count).Error; err != nil {
-			return DIDDTO{}, err
-		}
-		if count == 0 {
+		if _, err := s.sw.GetQueueConfig(ctx, targetID); err != nil {
 			return DIDDTO{}, errs.InvalidRequest("目标队列不存在")
 		}
 	}
 	if targetType == "ivr" {
-		var count int64
-		if err := s.db.WithContext(ctx).Model(&models.IVRPublishedSnapshot{}).Where("flow_id = ?", targetID).Count(&count).Error; err != nil {
-			return DIDDTO{}, err
-		}
-		if count == 0 {
+		flow, err := s.sw.GetIVRFlow(ctx, targetID)
+		if err != nil || flow.PublishedVersion == 0 {
 			return DIDDTO{}, errs.InvalidRequest("目标 IVR 尚未发布")
 		}
 	}
-	now := time.Now().UTC()
-	var row models.DIDRoute
-	err := s.db.WithContext(ctx).Where("trunk_id = ? AND d_id = ?", trunkID, did).First(&row).Error
-	var target *string
-	if targetID != "" {
-		target = &targetID
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		row = models.DIDRoute{ID: uuid.New().String(), TrunkID: trunkID, DID: did, TargetType: targetType, TargetID: target, CreatedAt: now, UpdatedAt: now}
-		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-			return DIDDTO{}, err
+	existing, _ := s.sw.ListDIDConfigs(ctx)
+	var id string
+	for _, row := range existing {
+		if row.TrunkID == trunkID && row.DID == did {
+			id = row.ID
+			break
 		}
-	} else if err != nil {
+	}
+	if id == "" {
+		id = uuid.NewString()
+	}
+	cfg := ports.SwitchDIDConfig{ID: id, TrunkID: trunkID, DID: did, TargetType: targetType, TargetID: targetID}
+	out, err := s.sw.UpsertDIDConfig(ctx, cfg)
+	if err != nil {
 		return DIDDTO{}, err
-	} else {
-		row.TargetType = targetType
-		row.TargetID = target
-		row.UpdatedAt = now
-		if err := s.db.WithContext(ctx).Save(&row).Error; err != nil {
-			return DIDDTO{}, err
-		}
 	}
-	return DIDDTO{ID: row.ID, TrunkID: row.TrunkID, DID: row.DID, TargetType: row.TargetType, TargetID: targetID}, nil
+	return DIDDTO{ID: out.ID, TrunkID: out.TrunkID, DID: out.DID, TargetType: out.TargetType, TargetID: out.TargetID}, nil
 }
 
 // DeleteDID 删除。
 func (s *SnapshotService) DeleteDID(ctx context.Context, id string) error {
-	res := s.db.WithContext(ctx).Delete(&models.DIDRoute{}, "id = ?", id)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errs.NotFound("DID 不存在")
-	}
-	return nil
+	return s.sw.DeleteDIDConfig(ctx, id)
 }
 
 // BindQueueIVR 队列绑定 IVR。
 func (s *SnapshotService) BindQueueIVR(ctx context.Context, queueID, flowID string) error {
-	var fid *string
+	q, err := s.sw.GetQueueConfig(ctx, queueID)
+	if err != nil {
+		return err
+	}
 	if flowID != "" {
-		var count int64
-		if err := s.db.WithContext(ctx).Model(&models.IVRPublishedSnapshot{}).Where("flow_id = ?", flowID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count == 0 {
+		flow, err := s.sw.GetIVRFlow(ctx, flowID)
+		if err != nil || flow.PublishedVersion == 0 {
 			return errs.InvalidRequest("只能绑定已经发布的 IVR 流程")
 		}
-		fid = &flowID
 	}
-	res := s.db.WithContext(ctx).Model(&models.Queue{}).Where("id = ?", queueID).Updates(map[string]any{"ivr_flow_id": fid, "updated_at": time.Now().UTC()})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errs.NotFound("队列不存在")
-	}
-	return nil
+	q.IVRFlowID = flowID
+	_, err = s.sw.UpdateQueueConfig(ctx, queueID, q)
+	return err
 }

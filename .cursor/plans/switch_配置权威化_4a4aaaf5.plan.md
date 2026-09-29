@@ -4,22 +4,22 @@ overview: 将队列/DID/技能/坐席路由/IVR 等呼叫配置的权威数据�
 todos:
   - id: switch-get-active
     content: 实现 GET /configuration/active（LoadActiveBundle + HTTP + 契约文档）
-    status: pending
+    status: completed
   - id: switch-config-editor
     content: 实现 ConfigEditor 突变链（load→mutate→store→activate）与队列/技能/坐席/DID REST
-    status: pending
+    status: completed
   - id: switch-ivr-drafts
     content: 新增 os_ivr_flows 与 IVR 草稿/发布/回滚 API，并入突变链
-    status: pending
+    status: completed
   - id: open-call-proxy
     content: queue/did/skill/ivr/agent 服务改为 switchapi；移除 config/publish 用户路径
-    status: pending
+    status: completed
   - id: migrate-data
     content: 编写 oc_* → Switch 迁移工具（保留 UUID）与 seed 调整
-    status: pending
+    status: cancelled
   - id: web-docs-tests
     content: 前端去掉全量发布按钮、更新 IVR 文案；补充集成测试与架构文档
-    status: pending
+    status: completed
 isProject: false
 ---
 

@@ -2,6 +2,7 @@ package configio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"
 	"open-call/internal/layers/biz/authz"
+	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
 
@@ -84,10 +86,13 @@ type ImportReport struct {
 }
 
 // Service 提供业务配置的完整导出、预检查和事务导入。
-type Service struct{ db *gorm.DB }
+type Service struct {
+	db *gorm.DB
+	sw ports.SwitchAdminPort
+}
 
 // NewService 创建配置导入导出服务。
-func NewService(db *gorm.DB) *Service { return &Service{db: db} }
+func NewService(db *gorm.DB, sw ports.SwitchAdminPort) *Service { return &Service{db: db, sw: sw} }
 
 // Export 导出用户、坐席、路由、绑定、IVR 版本及 Webhook 配置。
 func (s *Service) Export(ctx context.Context) (Bundle, error) {
@@ -112,18 +117,30 @@ func (s *Service) Export(ctx context.Context) (Bundle, error) {
 	if err != nil {
 		return out, err
 	}
-	queries := []struct {
-		target any
-		order  string
-	}{
-		{&out.Agents, "id"}, {&out.Skills, "id"}, {&out.IVRFlows, "id"}, {&out.IVRVersions, "flow_id, version"},
-		{&out.Queues, "id"}, {&out.AgentSkills, "agent_id, skill_id"}, {&out.QueueSkills, "queue_id, skill_id"},
-		{&out.QueueAgents, "queue_id, agent_id"}, {&out.DIDs, "d_id"}, {&out.Webhooks, "id"},
+	if err := s.db.WithContext(ctx).Order("id").Find(&out.Agents).Error; err != nil {
+		return out, err
 	}
-	for _, query := range queries {
-		if err := s.db.WithContext(ctx).Order(query.order).Find(query.target).Error; err != nil {
-			return out, err
+	if err := s.db.WithContext(ctx).Order("id").Find(&out.Webhooks).Error; err != nil {
+		return out, err
+	}
+	if s.sw != nil {
+		active, err := s.sw.GetActiveConfiguration(ctx)
+		if err != nil {
+			if errors.Is(err, errs.ErrConflict) {
+				active = ports.SwitchActiveConfiguration{}
+			} else {
+				return out, err
+			}
 		}
+		switchPart := bundleFromActive(active)
+		out.Skills = switchPart.Skills
+		out.Queues = switchPart.Queues
+		out.AgentSkills = switchPart.AgentSkills
+		out.QueueSkills = switchPart.QueueSkills
+		out.QueueAgents = switchPart.QueueAgents
+		out.DIDs = switchPart.DIDs
+		out.IVRFlows = switchPart.IVRFlows
+		out.IVRVersions = switchPart.IVRVersions
 	}
 	return out, nil
 }
@@ -151,6 +168,21 @@ func (s *Service) ImportWithOptions(ctx context.Context, bundle Bundle, options 
 		return report, nil
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return importTransaction(tx, bundle, options, &report) })
+	if err != nil {
+		return report, err
+	}
+	if options.DryRun || s.sw == nil {
+		return report, nil
+	}
+	swBundle, err := compileSwitchBundle(ctx, s.db, bundle)
+	if err != nil {
+		return report, err
+	}
+	stored, err := s.sw.StoreConfig(ctx, swBundle)
+	if err != nil {
+		return report, err
+	}
+	_, err = s.sw.ActivateConfig(ctx, stored.Version)
 	return report, err
 }
 
@@ -288,66 +320,8 @@ func importTransaction(tx *gorm.DB, bundle Bundle, options ImportOptions, report
 			return err
 		}
 	}
-	for i := range bundle.Skills {
-		if err := upsert(tx, &bundle.Skills[i]); err != nil {
-			return err
-		}
-	}
-	for i := range bundle.IVRFlows {
-		if err := upsert(tx, &bundle.IVRFlows[i]); err != nil {
-			return err
-		}
-	}
 	for i := range bundle.Agents {
 		if err := upsert(tx, &bundle.Agents[i]); err != nil {
-			return err
-		}
-	}
-	// 队列自引用需要两阶段写入：先清空引用创建，再恢复目标关系。
-	for i := range bundle.Queues {
-		row := bundle.Queues[i]
-		overflow, flow := row.OverflowQueueID, row.IVRFlowID
-		row.OverflowQueueID, row.IVRFlowID = nil, nil
-		if err := upsert(tx, &row); err != nil {
-			return err
-		}
-		bundle.Queues[i].OverflowQueueID, bundle.Queues[i].IVRFlowID = overflow, flow
-	}
-	for i := range bundle.Queues {
-		if err := tx.Model(&models.Queue{}).Where("id = ?", bundle.Queues[i].ID).Updates(map[string]any{
-			"overflow_queue_id": bundle.Queues[i].OverflowQueueID, "ivr_flow_id": bundle.Queues[i].IVRFlowID}).Error; err != nil {
-			return err
-		}
-	}
-	for i := range bundle.IVRVersions {
-		if err := upsert(tx, &bundle.IVRVersions[i]); err != nil {
-			return err
-		}
-	}
-	if options.Mode == "replace-bindings" {
-		for _, model := range []any{&models.AgentSkill{}, &models.QueueSkill{}, &models.QueueAgent{}} {
-			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(model).Error; err != nil {
-				return err
-			}
-		}
-	}
-	for i := range bundle.AgentSkills {
-		if err := upsert(tx, &bundle.AgentSkills[i]); err != nil {
-			return err
-		}
-	}
-	for i := range bundle.QueueSkills {
-		if err := upsert(tx, &bundle.QueueSkills[i]); err != nil {
-			return err
-		}
-	}
-	for i := range bundle.QueueAgents {
-		if err := upsert(tx, &bundle.QueueAgents[i]); err != nil {
-			return err
-		}
-	}
-	for i := range bundle.DIDs {
-		if err := upsert(tx, &bundle.DIDs[i]); err != nil {
 			return err
 		}
 	}

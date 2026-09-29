@@ -31,27 +31,26 @@ import (
 
 // RouterDeps HTTP 路由依赖。
 type RouterDeps struct {
-	Config          config.Config
-	Status          StatusProvider
-	Auth            *auth.Service
-	Authorization   *authz.Service
-	OIDC            *oidcauth.Service
-	Users           *user.Service
-	Agents          *agent.Service
-	Queues          *queue.Service
-	Guests          *guest.Service
-	CDR             *cdr.RecorderService
-	IVR             *ivr.Service
-	Skills          *skill.Service
-	Recordings      *recmeta.Service
-	Reports         *report.Service
-	Webhooks        *webhook.Service
-	Audit           *audit.Service
-	ConfigIO        *configio.Service
-	Snapshots       *configpub.SnapshotService
-	ConfigPublisher *configpub.Publisher
-	AgentRuntime    ports.SwitchAdminPort
-	Hub             interface {
+	Config        config.Config
+	Status        StatusProvider
+	Auth          *auth.Service
+	Authorization *authz.Service
+	OIDC          *oidcauth.Service
+	Users         *user.Service
+	Agents        *agent.Service
+	Queues        *queue.Service
+	Guests        *guest.Service
+	CDR           *cdr.RecorderService
+	IVR           *ivr.Service
+	Skills        *skill.Service
+	Recordings    *recmeta.Service
+	Reports       *report.Service
+	Webhooks      *webhook.Service
+	Audit         *audit.Service
+	ConfigIO      *configio.Service
+	Snapshots     *configpub.SnapshotService
+	AgentRuntime  ports.SwitchAdminPort
+	Hub           interface {
 		ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 	Calls interface {
@@ -162,7 +161,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 				admin.With(middleware.RequirePermission("webhooks.write")).Post("/webhooks/deliveries/{deliveryId}/retry", deps.handleWebhookRetry)
 				admin.With(middleware.RequirePermission("config.read")).Get("/config/export", deps.handleConfigExport)
 				admin.With(middleware.RequirePermission("config.write")).Post("/config/import", deps.handleConfigImport)
-				admin.With(middleware.RequirePermission("config.write")).Post("/config/publish", deps.handleConfigPublish)
 				admin.With(middleware.RequirePermission("audit.read")).Get("/audit/logs", deps.handleAuditList)
 				admin.With(middleware.RequirePermission("recordings.purge")).Post("/admin/recordings/purge-expired", deps.handlePurgeRecordings)
 				admin.With(middleware.RequirePermission("dids.read")).Get("/dids", deps.handleDIDList)

@@ -69,18 +69,18 @@ func Run(configPath string) error {
 	if err := store.Ping(db); err != nil {
 		return fmt.Errorf("数据库 Ping: %w", err)
 	}
+
+	switchClient := switchapi.NewClient(cfg.Integration)
 	if cfg.Bootstrap.Enabled {
 		if err := store.SeedIfEmpty(db, cfg.Bootstrap, log); err != nil {
 			return err
 		}
-		if err := store.SeedDefaultDID(db, log); err != nil {
+		if err := store.SeedSwitchDemoConfig(switchClient, db, log); err != nil {
 			return err
 		}
 	}
-
-	switchClient := switchapi.NewClient(cfg.Integration)
 	wsHub := ws.NewHub(log, cfg.Security.AllowedOrigins...)
-	queueSvc := queue.NewService(db)
+	queueSvc := queue.NewService(switchClient, db)
 	agentSvc := agent.NewService(db)
 	authSvc := auth.NewService(db, cfg.JWT)
 	authSvc.ConfigureOIDC(cfg.OIDC.Enabled, cfg.OIDC.EmergencyAdmin)
@@ -95,18 +95,17 @@ func Run(configPath string) error {
 	if oidcSvc != nil {
 		authSvc.SetOIDCRefresher(oidcSvc.Refresh)
 	}
-	userSvc := user.NewService(db)
-	configSnap := configpub.NewSnapshotService(db)
-	configPublisher := configpub.NewPublisher(db, switchClient)
+	userSvc := user.NewService(db, switchClient)
+	configSnap := configpub.NewSnapshotService(switchClient)
 	cdrRecorder := cdr.NewRecorderService(db)
 	recMeta := recmeta.NewService(db)
 	recMeta.SetFiles(switchClient)
-	ivrSvc := ivr.NewService(db)
-	skillSvc := skill.NewService(db)
+	ivrSvc := ivr.NewService(switchClient)
+	skillSvc := skill.NewService(switchClient)
 	reportSvc := report.NewService(db, switchClient)
 	hookSvc := webhook.NewService(db, cfg.Webhook)
 	auditSvc := audit.NewService(db)
-	cfgIO := configio.NewService(db)
+	cfgIO := configio.NewService(db, switchClient)
 	guestSvc := guest.NewService(db, switchClient, cfg.Public.GuestBaseURL)
 	businessActions := businessaction.NewService(db)
 
@@ -140,13 +139,13 @@ func Run(configPath string) error {
 		Audit:              auditSvc,
 		ConfigIO:           cfgIO,
 		Snapshots:          configSnap,
-		ConfigPublisher:    configPublisher,
 		AgentRuntime:       switchClient,
 		Hub:                wsHub,
 		Calls:              switchClient,
 		Status: apphttp.StatusProvider{
 			DB:            db,
 			Runtime:       switchClient,
+			Config:        switchClient,
 			WSConnections: wsHub.ConnectionCount,
 			Webhooks:      hookSvc,
 			Audit:         auditSvc,

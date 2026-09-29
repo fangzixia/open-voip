@@ -97,10 +97,13 @@ SIP 入呼在 Switch 侧按**已激活 DID 快照**路由到队列或 IVR，无�
 
 ### 配置与坐席（管理面）
 
-业务系统编译不可变配置包并写入 Switch（open-call 使用 `configpub`）：
+呼叫配置（队列、技能、DID、坐席路由、已发布 IVR）的**权威数据源在 Switch**。open-call 管理 API 在每次保存时通过资源级 REST 触发 Switch 内部「加载当前激活 bundle → 变更 → 校验 → 新版本 → 立即激活」；日常无需全量发布按钮。
 
-- `POST /switch/v2/configuration/versions`（别名 `/config-versions`）— 存储快照
-- `POST /switch/v2/configuration/versions/{version}/activate` — 激活
+- `GET /switch/v2/configuration/active` — 当前激活的完整 `ConfigBundle` + 版本元数据（对账、灾备导出）
+- `GET /switch/v2/configuration/active/summary` — 仅版本号、checksum、`activated_at`（就绪探针）
+- `GET/POST/PATCH/DELETE /switch/v2/queues|skills|agents/config|did-routes|ivr/flows` — 资源 CRUD（每次写操作自动激活）
+- `POST /switch/v2/configuration/versions`（别名 `/config-versions`）— 全量快照（`config/import` 灾备、批量恢复）
+- `POST /switch/v2/configuration/versions/{version}/activate` — 手动激活指定版本
 - `GET /switch/v2/configuration/versions/{version}` — 查看版本元数据
 - `POST /switch/v2/calls` — 创建无媒体腿的空 Call（`business_ref` / `metadata`）
 - `GET /switch/v2/routing-sessions/{callId}` — 路由会话与队列项只读快照

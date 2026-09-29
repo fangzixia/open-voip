@@ -63,7 +63,6 @@ export function renderApp(host, operations) {
     onNavigate: actions.navigate,
     breadcrumb: actions.crumb(),
     topbar: html`
-      ${host.me?.permissions?.includes("config.write") ? html`<button ?disabled=${host.publishing} @click=${actions.publishConfig}>${host.publishing?"发布中…":"发布并激活呼叫配置"}</button>` : ""}
       <span class="topbar-meta">${host.clock}</span>
       <span class="topbar-meta">${host.me?.username || "用户"}</span>
       <button @click=${actions.logout}>退出</button>
@@ -83,7 +82,7 @@ export function renderApp(host, operations) {
         ["agents", "hist", "me", "utils"],
         ["force", "navigate", "setForceAgentId"]) : ""}
       ${host.nav === "dids" ? page(renderDids,
-        ["didForm", "dids", "me"], ["publishConfig", "saveDid", "updateDidForm"]) : ""}
+        ["didForm", "dids", "me"], ["saveDid", "updateDidForm"]) : ""}
       ${host.nav === "cdr" ? page(renderCdrPage,
         ["cdrCaller", "cdrResult", "me", "qaCallId", "qaLabel", "wrapUps"],
         ["exportCdr", "filteredCdr", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}

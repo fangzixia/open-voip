@@ -3,7 +3,6 @@ package queue
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"open-call/internal/errs"
+	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
 
@@ -83,10 +83,13 @@ type ListResult struct {
 	Total    int64 `json:"total"`
 }
 
-// Service 只维护队列配置草稿，运行策略在 Switch 执行。
-type Service struct{ db *gorm.DB }
+// Service 通过 Switch 维护队列配置；运行策略在 Switch 执行。
+type Service struct {
+	sw ports.SwitchAdminPort
+	db *gorm.DB
+}
 
-func NewService(db *gorm.DB) *Service { return &Service{db: db} }
+func NewService(sw ports.SwitchAdminPort, db *gorm.DB) *Service { return &Service{sw: sw, db: db} }
 
 // List 分页。
 func (s *Service) List(ctx context.Context, page, pageSize int) (ListResult, error) {
@@ -96,48 +99,46 @@ func (s *Service) List(ctx context.Context, page, pageSize int) (ListResult, err
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	var total int64
-	if err := s.db.WithContext(ctx).Model(&models.Queue{}).Count(&total).Error; err != nil {
+	rows, err := s.sw.ListQueueConfigs(ctx)
+	if err != nil {
 		return ListResult{}, err
 	}
-	var rows []models.Queue
-	if err := s.db.WithContext(ctx).Order("created_at").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
-		return ListResult{}, err
+	total := int64(len(rows))
+	start := (page - 1) * pageSize
+	if start > len(rows) {
+		start = len(rows)
 	}
-	items := make([]DTO, 0, len(rows))
-	for _, r := range rows {
-		d := toDTO(r)
-		d.SkillIDs = queueSkills(s.db.WithContext(ctx), r.ID)
-		items = append(items, d)
+	end := start + pageSize
+	if end > len(rows) {
+		end = len(rows)
+	}
+	items := make([]DTO, 0, end-start)
+	for _, r := range rows[start:end] {
+		items = append(items, switchToDTO(r))
 	}
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
 // ListPublic 演示环境访客可见队列列表。
 func (s *Service) ListPublic(ctx context.Context) ([]DTO, error) {
-	var rows []models.Queue
-	if err := s.db.WithContext(ctx).Order("created_at").Find(&rows).Error; err != nil {
+	rows, err := s.sw.ListQueueConfigs(ctx)
+	if err != nil {
 		return nil, err
 	}
 	items := make([]DTO, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, toDTO(r))
+		items = append(items, switchToDTO(r))
 	}
 	return items, nil
 }
 
 // Get 按 ID。
 func (s *Service) Get(ctx context.Context, id string) (DTO, error) {
-	var row models.Queue
-	if err := s.db.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return DTO{}, errs.NotFound("队列不存在")
-		}
+	row, err := s.sw.GetQueueConfig(ctx, id)
+	if err != nil {
 		return DTO{}, err
 	}
-	d := toDTO(row)
-	d.SkillIDs = queueSkills(s.db.WithContext(ctx), row.ID)
-	return d, nil
+	return switchToDTO(row), nil
 }
 
 // Create 创建队列。
@@ -161,249 +162,169 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	if err := validateQueueValues(in.RecordingPolicy, in.OverflowPolicy, in.AfterHoursAction, in.BusinessHoursJSON); err != nil {
 		return DTO{}, err
 	}
-	now := time.Now().UTC()
-	force := true
-	if in.ForceHangupOnCheckout != nil {
-		force = *in.ForceHangupOnCheckout
+	cfg := createToSwitch(in)
+	cfg.ID = uuid.New().String()
+	if err := s.validateReferences(ctx, cfg.ID, in.OverflowQueueID, in.IVRFlowID, in.SkillIDs); err != nil {
+		return DTO{}, err
 	}
-	row := models.Queue{
-		ID:                    uuid.New().String(),
-		Name:                  in.Name,
-		VideoEnabled:          in.VideoEnabled,
-		MaxWaitSec:            in.MaxWaitSec,
-		DispatchStrategy:      in.Strategy,
-		RecordingPolicy:       in.RecordingPolicy,
-		OverflowAction:        in.OverflowPolicy,
-		WaitPrompt:            in.WaitPrompt,
-		AnnounceRecording:     in.AnnounceRecording,
-		PriorityEnabled:       in.PriorityEnabled,
-		BusinessHoursJSON:     in.BusinessHoursJSON,
-		AfterHoursAction:      in.AfterHoursAction,
-		ForceHangupOnCheckout: force,
-		ListenAnnounce:        in.ListenAnnounce != nil && *in.ListenAnnounce,
-		CreatedAt:             now,
-		UpdatedAt:             now,
-	}
-	if in.OverflowQueueID != "" {
-		row.OverflowQueueID = new(in.OverflowQueueID)
-	}
-	if in.IVRFlowID != "" {
-		row.IVRFlowID = new(in.IVRFlowID)
-	}
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := validateReferences(tx, row.ID, in.OverflowQueueID, in.IVRFlowID, in.SkillIDs); err != nil {
-			return err
-		}
-		if err := tx.Create(&row).Error; err != nil {
-			return err
-		}
-		return replaceQueueSkills(tx, row.ID, in.SkillIDs)
-	})
+	created, err := s.sw.CreateQueueConfig(ctx, cfg)
 	if err != nil {
 		return DTO{}, err
 	}
-	return s.Get(ctx, row.ID)
+	return switchToDTO(created), nil
 }
 
 // Update 部分更新。
 func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, error) {
-	var row models.Queue
-	if err := s.db.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return DTO{}, errs.NotFound("队列不存在")
-		}
+	current, err := s.sw.GetQueueConfig(ctx, id)
+	if err != nil {
 		return DTO{}, err
 	}
-	updates := map[string]any{"updated_at": time.Now().UTC()}
+	merged := current
 	if in.Name != nil {
 		name := strings.TrimSpace(*in.Name)
 		if name == "" {
 			return DTO{}, errs.InvalidRequest("队列名称不能为空")
 		}
-		updates["name"] = name
-	}
-	if in.VideoEnabled != nil {
-		updates["video_enabled"] = *in.VideoEnabled
+		merged.Name = name
 	}
 	if in.MaxWaitSec != nil {
 		if *in.MaxWaitSec <= 0 {
 			return DTO{}, errs.InvalidRequest("max_wait_sec 必须大于 0")
 		}
-		updates["max_wait_sec"] = *in.MaxWaitSec
+		merged.MaxWaitSec = *in.MaxWaitSec
 	}
 	if in.Strategy != nil {
 		if *in.Strategy != "longest_idle" && *in.Strategy != "round_robin" {
 			return DTO{}, errs.InvalidRequest("分配策略无效")
 		}
-		updates["dispatch_strategy"] = *in.Strategy
+		merged.DispatchStrategy = *in.Strategy
+	}
+	if in.Name != nil {
+		merged.Name = strings.TrimSpace(*in.Name)
+	}
+	if in.VideoEnabled != nil {
+		merged.VideoEnabled = *in.VideoEnabled
+	}
+	if in.MaxWaitSec != nil {
+		merged.MaxWaitSec = *in.MaxWaitSec
+	}
+	if in.Strategy != nil {
+		merged.DispatchStrategy = *in.Strategy
 	}
 	if in.OverflowPolicy != nil {
-		updates["overflow_action"] = strings.TrimSpace(*in.OverflowPolicy)
+		merged.OverflowAction = strings.TrimSpace(*in.OverflowPolicy)
 	}
 	if in.RecordingPolicy != nil {
-		updates["recording_policy"] = strings.TrimSpace(*in.RecordingPolicy)
+		merged.RecordingPolicy = strings.TrimSpace(*in.RecordingPolicy)
 	}
 	if in.WaitPrompt != nil {
-		updates["wait_prompt"] = *in.WaitPrompt
+		merged.WaitPrompt = *in.WaitPrompt
 	}
 	if in.AnnounceRecording != nil {
-		updates["announce_recording"] = *in.AnnounceRecording
+		merged.AnnounceRecording = *in.AnnounceRecording
 	}
 	if in.PriorityEnabled != nil {
-		updates["priority_enabled"] = *in.PriorityEnabled
+		merged.PriorityEnabled = *in.PriorityEnabled
 	}
 	if in.BusinessHoursJSON != nil {
-		updates["business_hours_json"] = *in.BusinessHoursJSON
+		merged.BusinessHoursJSON = *in.BusinessHoursJSON
 	}
 	if in.AfterHoursAction != nil {
-		updates["after_hours_action"] = strings.TrimSpace(*in.AfterHoursAction)
+		merged.AfterHoursAction = strings.TrimSpace(*in.AfterHoursAction)
 	}
 	if in.OverflowQueueID != nil {
-		if strings.TrimSpace(*in.OverflowQueueID) == "" {
-			updates["overflow_queue_id"] = nil
-		} else {
-			updates["overflow_queue_id"] = strings.TrimSpace(*in.OverflowQueueID)
-		}
+		merged.OverflowQueueID = strings.TrimSpace(*in.OverflowQueueID)
 	}
 	if in.IVRFlowID != nil {
-		if strings.TrimSpace(*in.IVRFlowID) == "" {
-			updates["ivr_flow_id"] = nil
-		} else {
-			updates["ivr_flow_id"] = strings.TrimSpace(*in.IVRFlowID)
-		}
+		merged.IVRFlowID = strings.TrimSpace(*in.IVRFlowID)
 	}
 	if in.ForceHangupOnCheckout != nil {
-		updates["force_hangup_on_checkout"] = *in.ForceHangupOnCheckout
+		merged.ForceHangupOnCheckout = *in.ForceHangupOnCheckout
 	}
 	if in.ListenAnnounce != nil {
-		updates["listen_announce"] = *in.ListenAnnounce
+		merged.ListenAnnounce = *in.ListenAnnounce
 	}
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		recording, overflow, after, hours := row.RecordingPolicy, row.OverflowAction, row.AfterHoursAction, row.BusinessHoursJSON
-		if in.RecordingPolicy != nil {
-			recording = strings.TrimSpace(*in.RecordingPolicy)
-		}
-		if in.OverflowPolicy != nil {
-			overflow = strings.TrimSpace(*in.OverflowPolicy)
-		}
-		if in.AfterHoursAction != nil {
-			after = strings.TrimSpace(*in.AfterHoursAction)
-		}
-		if in.BusinessHoursJSON != nil {
-			hours = *in.BusinessHoursJSON
-		}
-		if err := validateQueueValues(recording, overflow, after, hours); err != nil {
-			return err
-		}
-		overflowID, ivrID := "", ""
-		if row.OverflowQueueID != nil {
-			overflowID = *row.OverflowQueueID
-		}
-		if row.IVRFlowID != nil {
-			ivrID = *row.IVRFlowID
-		}
-		if in.OverflowQueueID != nil {
-			overflowID = strings.TrimSpace(*in.OverflowQueueID)
-		}
-		if in.IVRFlowID != nil {
-			ivrID = strings.TrimSpace(*in.IVRFlowID)
-		}
-		skills := queueSkills(tx, id)
-		if in.SkillIDs != nil {
-			skills = *in.SkillIDs
-		}
-		if err := validateReferences(tx, id, overflowID, ivrID, skills); err != nil {
-			return err
-		}
-		if err := tx.Model(&row).Updates(updates).Error; err != nil {
-			return err
-		}
-		if in.SkillIDs != nil {
-			return replaceQueueSkills(tx, id, *in.SkillIDs)
-		}
-		return nil
-	})
+	skills := merged.SkillIDs
+	if in.SkillIDs != nil {
+		skills = *in.SkillIDs
+		merged.SkillIDs = skills
+	}
+	if err := validateQueueValues(merged.RecordingPolicy, merged.OverflowAction, merged.AfterHoursAction, merged.BusinessHoursJSON); err != nil {
+		return DTO{}, err
+	}
+	if err := s.validateReferences(ctx, id, merged.OverflowQueueID, merged.IVRFlowID, skills); err != nil {
+		return DTO{}, err
+	}
+	updated, err := s.sw.UpdateQueueConfig(ctx, id, merged)
 	if err != nil {
 		return DTO{}, err
 	}
-	return s.Get(ctx, id)
+	return switchToDTO(updated), nil
 }
 
 // Delete 删除队列。
 func (s *Service) Delete(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var refs int64
-		if err := tx.Model(&models.DIDRoute{}).Where("target_type = ? AND target_id = ?", "queue", id).Count(&refs).Error; err != nil {
-			return err
-		}
-		if refs > 0 {
+	dids, err := s.sw.ListDIDConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, d := range dids {
+		if d.TargetType == "queue" && d.TargetID == id {
 			return errs.Conflict("队列仍被 DID 路由引用", "")
 		}
-		if err := tx.Model(&models.Queue{}).Where("overflow_queue_id = ?", id).Count(&refs).Error; err != nil {
-			return err
-		}
-		if refs > 0 {
+	}
+	queues, err := s.sw.ListQueueConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, q := range queues {
+		if q.OverflowQueueID == id {
 			return errs.Conflict("队列仍被其他队列的溢出策略引用", "")
 		}
-		if err := tx.Model(&models.GuestSession{}).Where("queue_id = ? AND expires_at > ?", id, time.Now().UTC()).Count(&refs).Error; err != nil {
-			return err
-		}
-		if refs > 0 {
-			return errs.Conflict("队列仍有有效访客会话", "")
-		}
-		if err := tx.Model(&models.IVRFlow{}).Where("draft_json LIKE ?", "%"+id+"%").Count(&refs).Error; err != nil {
-			return err
-		}
-		if refs > 0 {
-			return errs.Conflict("队列仍被 IVR 草稿引用", "")
-		}
-		tx.Where("queue_id = ?", id).Delete(&models.QueueAgent{})
-		tx.Where("queue_id = ?", id).Delete(&models.QueueSkill{})
-		res := tx.Delete(&models.Queue{}, "id = ?", id)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return errs.NotFound("队列不存在")
-		}
-		return nil
-	})
+	}
+	var refs int64
+	if err := s.db.WithContext(ctx).Model(&models.GuestSession{}).Where("queue_id = ? AND expires_at > ?", id, time.Now().UTC()).Count(&refs).Error; err != nil {
+		return err
+	}
+	if refs > 0 {
+		return errs.Conflict("队列仍有有效访客会话", "")
+	}
+	return s.sw.DeleteQueueConfig(ctx, id)
 }
 
 // BindAgents 覆盖绑定坐席。
 func (s *Service) BindAgents(ctx context.Context, queueID string, agentIDs []string) error {
-	if _, err := s.Get(ctx, queueID); err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if len(agentIDs) > 0 {
-			var n int64
-			if err := tx.Model(&models.Agent{}).Where("id IN ?", agentIDs).Count(&n).Error; err != nil {
-				return err
-			}
-			if n != int64(len(uniqueStrings(agentIDs))) {
+	ids := uniqueStrings(agentIDs)
+	if len(ids) > 0 {
+		agents, err := s.sw.ListAgentConfigs(ctx)
+		if err != nil {
+			return err
+		}
+		set := map[string]bool{}
+		for _, a := range agents {
+			set[a.ID] = true
+		}
+		for _, id := range ids {
+			if !set[id] {
 				return errs.InvalidRequest("agent_ids 包含不存在的坐席")
 			}
 		}
-		if err := tx.Where("queue_id = ?", queueID).Delete(&models.QueueAgent{}).Error; err != nil {
-			return err
-		}
-		for _, aid := range uniqueStrings(agentIDs) {
-			if err := tx.Create(&models.QueueAgent{QueueID: queueID, AgentID: aid}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	_, err := s.sw.SetQueueAgents(ctx, queueID, ids)
+	return err
 }
 
 // AgentIDs 队列已绑定坐席。
 func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error) {
-	var ids []string
-	if err := s.db.WithContext(ctx).Model(&models.QueueAgent{}).Where("queue_id = ?", queueID).Pluck("agent_id", &ids).Error; err != nil {
+	q, err := s.sw.GetQueueConfig(ctx, queueID)
+	if err != nil {
 		return nil, err
 	}
-	return ids, nil
+	if q.AgentIDs == nil {
+		return []string{}, nil
+	}
+	return q.AgentIDs, nil
 }
 
 func queueSkills(db *gorm.DB, queueID string) []string {
@@ -452,35 +373,33 @@ func validateQueueValues(recording, overflow, after, hours string) error {
 	return nil
 }
 
-func validateReferences(tx *gorm.DB, queueID, overflowID, ivrID string, skills []string) error {
+func (s *Service) validateReferences(ctx context.Context, queueID, overflowID, ivrID string, skills []string) error {
 	if overflowID != "" {
 		if overflowID == queueID {
 			return errs.InvalidRequest("队列不能溢出到自身")
 		}
-		var n int64
-		if err := tx.Model(&models.Queue{}).Where("id = ?", overflowID).Count(&n).Error; err != nil {
-			return err
-		}
-		if n == 0 {
+		if _, err := s.sw.GetQueueConfig(ctx, overflowID); err != nil {
 			return errs.InvalidRequest("overflow_queue_id 不存在")
 		}
 	}
 	if ivrID != "" {
-		var n int64
-		if err := tx.Model(&models.IVRFlow{}).Where("id = ?", ivrID).Count(&n).Error; err != nil {
-			return err
-		}
-		if n == 0 {
+		if _, err := s.sw.GetIVRFlow(ctx, ivrID); err != nil {
 			return errs.InvalidRequest("ivr_flow_id 不存在")
 		}
 	}
 	if len(skills) > 0 {
-		var n int64
-		if err := tx.Model(&models.Skill{}).Where("id IN ?", skills).Count(&n).Error; err != nil {
+		all, err := s.sw.ListSkillConfigs(ctx)
+		if err != nil {
 			return err
 		}
-		if n != int64(len(uniqueStrings(skills))) {
-			return errs.InvalidRequest("skill_ids 包含不存在的技能")
+		set := map[string]bool{}
+		for _, sk := range all {
+			set[sk.ID] = true
+		}
+		for _, id := range uniqueStrings(skills) {
+			if !set[id] {
+				return errs.InvalidRequest("skill_ids 包含不存在的技能")
+			}
 		}
 	}
 	return nil

@@ -54,7 +54,7 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 		if err := svc.SaveRole(ctx, roleID, "报表查看", []string{"reports.read"}); err != nil {
 			return err
 		}
-		created, err := user.NewService(tx).Create(ctx, user.CreateInput{Username: "自定义用户", LoginName: "custom-" + uid[:8], EmployeeNo: "C" + uid[:8], Password: "StrongPassword123!", Roles: []string{roleID}})
+		created, err := user.NewService(tx, nil).Create(ctx, user.CreateInput{Username: "自定义用户", LoginName: "custom-" + uid[:8], EmployeeNo: "C" + uid[:8], Password: "StrongPassword123!", Roles: []string{roleID}})
 		if err != nil {
 			return err
 		}
@@ -62,12 +62,12 @@ func TestRolesAndIdentityIntegration(t *testing.T) {
 			t.Fatalf("custom role creation failed: %+v", created)
 		}
 		extension := "88" + uid[:6]
-		created, err = user.NewService(tx).Update(ctx, created.ID, user.UpdateInput{Extension: &extension})
+		created, err = user.NewService(tx, nil).Update(ctx, created.ID, user.UpdateInput{Extension: &extension})
 		if err != nil || created.AgentID == "" || created.Extension != extension {
 			t.Fatalf("agent profile creation failed: %+v %v", created, err)
 		}
 		adminRole := "admin"
-		created, err = user.NewService(tx).Update(ctx, created.ID, user.UpdateInput{Role: &adminRole})
+		created, err = user.NewService(tx, nil).Update(ctx, created.ID, user.UpdateInput{Role: &adminRole})
 		if err != nil || created.AgentID == "" {
 			t.Fatalf("legacy role change removed agent profile: %+v %v", created, err)
 		}

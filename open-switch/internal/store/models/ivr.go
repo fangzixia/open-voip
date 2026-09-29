@@ -4,6 +4,8 @@ import "time"
 
 // IVRFlow IVR 流程定义（草稿与元数据）。
 type IVRFlow struct {
+	// ApplicationID 租户应用 ID。
+	ApplicationID string `gorm:"primaryKey;size:64;comment:租户应用 ID"`
 	// ID 流程 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:IVR 流程 ID"`
 	// Name 流程名称。

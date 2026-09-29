@@ -2,15 +2,13 @@ package skill
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 
 	"open-call/internal/errs"
-	"open-call/internal/store/models"
+	"open-call/internal/ports"
 )
 
 // DTO 技能组。
@@ -20,23 +18,23 @@ type DTO struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Service 技能 CRUD 与坐席绑定。
+// Service 技能 CRUD（Switch 权威）。
 type Service struct {
-	db *gorm.DB
+	sw ports.SwitchAdminPort
 }
 
 // NewService 创建技能服务。
-func NewService(db *gorm.DB) *Service { return &Service{db: db} }
+func NewService(sw ports.SwitchAdminPort) *Service { return &Service{sw: sw} }
 
 // List 列出技能。
 func (s *Service) List(ctx context.Context) ([]DTO, error) {
-	var rows []models.Skill
-	if err := s.db.WithContext(ctx).Order("name").Find(&rows).Error; err != nil {
+	rows, err := s.sw.ListSkillConfigs(ctx)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]DTO, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, DTO{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt})
+		out = append(out, DTO{ID: r.ID, Name: r.Name})
 	}
 	return out, nil
 }
@@ -47,11 +45,11 @@ func (s *Service) Create(ctx context.Context, name string) (DTO, error) {
 	if name == "" {
 		return DTO{}, errs.InvalidRequest("技能名称必填")
 	}
-	row := models.Skill{ID: uuid.New().String(), Name: name, CreatedAt: time.Now().UTC()}
-	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-		return DTO{}, errs.Conflict("技能名称已存在", "")
+	created, err := s.sw.CreateSkillConfig(ctx, ports.SwitchSkillConfig{ID: uuid.NewString(), Name: name})
+	if err != nil {
+		return DTO{}, err
 	}
-	return DTO{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt}, nil
+	return DTO{ID: created.ID, Name: created.Name}, nil
 }
 
 func (s *Service) Update(ctx context.Context, id, name string) (DTO, error) {
@@ -59,88 +57,78 @@ func (s *Service) Update(ctx context.Context, id, name string) (DTO, error) {
 	if name == "" {
 		return DTO{}, errs.InvalidRequest("技能名称必填")
 	}
-	var row models.Skill
-	if err := s.db.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return DTO{}, errs.NotFound("技能不存在")
-		}
+	updated, err := s.sw.UpdateSkillConfig(ctx, id, name)
+	if err != nil {
 		return DTO{}, err
 	}
-	if err := s.db.WithContext(ctx).Model(&row).Update("name", name).Error; err != nil {
-		return DTO{}, errs.Conflict("技能名称已存在", "")
-	}
-	row.Name = name
-	return DTO{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt}, nil
+	return DTO{ID: updated.ID, Name: updated.Name}, nil
 }
 
 func (s *Service) Delete(ctx context.Context, id string) error {
-	var n int64
-	if err := s.db.WithContext(ctx).Model(&models.AgentSkill{}).Where("skill_id = ?", id).Count(&n).Error; err != nil {
+	return s.sw.DeleteSkillConfig(ctx, id)
+}
+
+func (s *Service) BindAgents(ctx context.Context, skillID string, agentIDs []string) error {
+	agents, err := s.sw.ListAgentConfigs(ctx)
+	if err != nil {
 		return err
 	}
-	if n > 0 {
-		return errs.Conflict("技能仍绑定坐席", "")
-	}
-	if err := s.db.WithContext(ctx).Model(&models.QueueSkill{}).Where("skill_id = ?", id).Count(&n).Error; err != nil {
-		return err
-	}
-	if n > 0 {
-		return errs.Conflict("技能仍被队列引用", "")
-	}
-	res := s.db.WithContext(ctx).Delete(&models.Skill{}, "id = ?", id)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errs.NotFound("技能不存在")
+	for _, ag := range agents {
+		has := false
+		for _, sid := range ag.SkillIDs {
+			if sid == skillID {
+				has = true
+				break
+			}
+		}
+		want := false
+		for _, id := range agentIDs {
+			if id == ag.ID {
+				want = true
+				break
+			}
+		}
+		skills := append([]string(nil), ag.SkillIDs...)
+		if want && !has {
+			skills = append(skills, skillID)
+		}
+		if !want && has {
+			next := skills[:0]
+			for _, sid := range skills {
+				if sid != skillID {
+					next = append(next, sid)
+				}
+			}
+			skills = next
+		}
+		if want != has {
+			if _, err := s.sw.SetAgentSkills(ctx, ag.ID, skills); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-// BindAgent 覆盖坐席技能。
+// BindAgent 覆盖坐席技能绑定（Switch 权威）。
 func (s *Service) BindAgent(ctx context.Context, agentID string, skillIDs []string) error {
-	var ag models.Agent
-	if err := s.db.WithContext(ctx).First(&ag, "id = ?", agentID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errs.NotFound("坐席不存在")
-		}
-		return err
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		unique := map[string]struct{}{}
-		for _, id := range skillIDs {
-			if strings.TrimSpace(id) != "" {
-				unique[id] = struct{}{}
-			}
-		}
-		if len(unique) > 0 {
-			ids := make([]string, 0, len(unique))
-			for id := range unique {
-				ids = append(ids, id)
-			}
-			var count int64
-			if err := tx.Model(&models.Skill{}).Where("id IN ?", ids).Count(&count).Error; err != nil {
-				return err
-			}
-			if count != int64(len(ids)) {
-				return errs.InvalidRequest("skill_ids 包含不存在的技能")
-			}
-		}
-		if err := tx.Where("agent_id = ?", agentID).Delete(&models.AgentSkill{}).Error; err != nil {
-			return err
-		}
-		for id := range unique {
-			if err := tx.Create(&models.AgentSkill{AgentID: agentID, SkillID: id}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	_, err := s.sw.SetAgentSkills(ctx, agentID, skillIDs)
+	return err
 }
 
-// AgentSkills 坐席技能 ID。
+// AgentSkills 读取坐席技能。
 func (s *Service) AgentSkills(ctx context.Context, agentID string) ([]string, error) {
-	var ids []string
-	err := s.db.WithContext(ctx).Model(&models.AgentSkill{}).Where("agent_id = ?", agentID).Pluck("skill_id", &ids).Error
-	return ids, err
+	agents, err := s.sw.ListAgentConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, ag := range agents {
+		if ag.ID == agentID {
+			if ag.SkillIDs == nil {
+				return []string{}, nil
+			}
+			return ag.SkillIDs, nil
+		}
+	}
+	return nil, errs.NotFound("坐席不存在")
 }

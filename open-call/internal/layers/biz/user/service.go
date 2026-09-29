@@ -14,6 +14,7 @@ import (
 	"open-call/internal/errs"
 	"open-call/internal/layers/biz/auth"
 	"open-call/internal/layers/biz/authz"
+	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
 
@@ -73,11 +74,12 @@ type ListResult struct {
 // Service 用户与坐席账号 CRUD。
 type Service struct {
 	db *gorm.DB
+	sw ports.SwitchAdminPort
 }
 
 // NewService 创建用户服务。
-func NewService(db *gorm.DB) *Service {
-	return &Service{db: db}
+func NewService(db *gorm.DB, sw ports.SwitchAdminPort) *Service {
+	return &Service{db: db, sw: sw}
 }
 
 // List 分页列出用户。
@@ -221,6 +223,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 		}
 		return DTO{}, err
 	}
+	var ag models.Agent
+	if err := s.db.WithContext(ctx).Where("user_id = ?", u.ID).First(&ag).Error; err == nil {
+		if syncErr := s.syncAgent(ctx, ag); syncErr != nil {
+			return DTO{}, syncErr
+		}
+	}
 	return s.Get(ctx, u.ID)
 }
 
@@ -348,6 +356,12 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		}
 		return DTO{}, err
 	}
+	var ag models.Agent
+	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&ag).Error; err == nil {
+		if syncErr := s.syncAgent(ctx, ag); syncErr != nil {
+			return DTO{}, syncErr
+		}
+	}
 	return s.Get(ctx, id)
 }
 
@@ -356,7 +370,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var ag models.Agent
 		if err := tx.Where("user_id = ?", id).First(&ag).Error; err == nil {
-			tx.Where("agent_id = ?", ag.ID).Delete(&models.QueueAgent{})
+			if s.sw != nil {
+				_ = s.sw.DeleteAgentConfig(ctx, ag.ID)
+			}
 			tx.Delete(&ag)
 		}
 		res := tx.Delete(&models.User{}, "id = ?", id)
@@ -433,6 +449,25 @@ func isUnique(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique")
+}
+
+func (s *Service) syncAgent(ctx context.Context, ag models.Agent) error {
+	if s.sw == nil {
+		return nil
+	}
+	var u models.User
+	if err := s.db.WithContext(ctx).First(&u, "id = ?", ag.UserID).Error; err != nil {
+		return err
+	}
+	terminal := ag.TerminalType
+	if terminal == "" {
+		terminal = "webrtc"
+	}
+	_, err := s.sw.UpsertAgentConfig(ctx, ports.SwitchAgentConfig{
+		ID: ag.ID, UserRef: ag.UserID, Extension: ag.Extension, DisplayName: u.DisplayName,
+		VideoCapable: ag.VideoCapable, TerminalType: terminal, SIPUsername: ag.SIPUsername, Enabled: !u.Disabled,
+	})
+	return err
 }
 
 func validateTerminal(kind, username, extension string, video bool) error {

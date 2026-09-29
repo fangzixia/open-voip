@@ -4,7 +4,7 @@ import { identityActions, newIdentityUserDraft } from "./controllers/identity.js
 import { bindApiFeedback } from "../shared/http-client.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, publishSwitchConfig, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
+import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
 import "../shared/components/ivr/ivr-editor.js";
@@ -14,7 +14,6 @@ export class AdminApp extends LitElement {
   static properties = {
     error: { type: String },
  notice: { type: String },
- publishing: {type:Boolean},
     username: { type: String },
     password: { type: String },
     authed: { type: Boolean },
@@ -58,7 +57,7 @@ export class AdminApp extends LitElement {
 
   constructor() {
     super();
-    this.error = ""; this.notice=""; this.publishing=false;
+    this.error = ""; this.notice="";
     this.username = "";
     this.password = "";
     this.authed = !!getAccessToken();
@@ -254,17 +253,6 @@ export class AdminApp extends LitElement {
     }
   }
 
-  async #publishConfig() {
-    if (this.publishing) return;
-    this.publishing=true; this.error=""; this.notice="";
-    try {
-      const result = await publishSwitchConfig();
-      this.notice = `呼叫配置版本 ${result.version} 已激活，正在进行的通话保持原版本`;
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    } finally {this.publishing=false;}
-  }
-
   async #qa(ev) {
     ev.preventDefault();
     try {
@@ -393,7 +381,6 @@ export class AdminApp extends LitElement {
       ...identityActions(this, () => this.#load()),
       logout: (...args) => this.#logout(...args),
       playRec: (...args) => this.#playRec(...args),
-	  publishConfig: (...args) => this.#publishConfig(...args),
       qa: (...args) => this.#qa(...args),
       saveDid: (...args) => this.#saveDid(...args),
       toggleVip: (...args) => this.#toggleVip(...args),

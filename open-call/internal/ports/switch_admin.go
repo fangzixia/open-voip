@@ -78,9 +78,64 @@ type SwitchAgentSession struct {
 	QueueIDs      []string `json:"queue_ids"`
 }
 
+type SwitchActiveConfiguration struct {
+	Version SwitchConfigVersion `json:"version"`
+	Bundle  SwitchConfigBundle  `json:"bundle"`
+}
+
+type SwitchIVRFlowView struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	DraftJSON        string    `json:"draft_json"`
+	PublishedVersion int       `json:"published_version,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type SwitchIVRVersionView struct {
+	FlowID      string    `json:"flow_id"`
+	Version     int       `json:"version"`
+	PayloadJSON string    `json:"payload_json"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
 type SwitchAdminPort interface {
 	StoreConfig(context.Context, SwitchConfigBundle) (SwitchConfigVersion, error)
 	ActivateConfig(context.Context, int64) (SwitchConfigVersion, error)
+	GetActiveConfiguration(context.Context) (SwitchActiveConfiguration, error)
+	GetActiveConfigurationSummary(context.Context) (SwitchConfigVersion, error)
+
+	ListQueueConfigs(context.Context) ([]SwitchQueueConfig, error)
+	CreateQueueConfig(context.Context, SwitchQueueConfig) (SwitchQueueConfig, error)
+	GetQueueConfig(context.Context, string) (SwitchQueueConfig, error)
+	UpdateQueueConfig(context.Context, string, SwitchQueueConfig) (SwitchQueueConfig, error)
+	DeleteQueueConfig(context.Context, string) error
+	SetQueueAgents(context.Context, string, []string) (SwitchQueueConfig, error)
+	SetQueueSkills(context.Context, string, []string) (SwitchQueueConfig, error)
+
+	ListSkillConfigs(context.Context) ([]SwitchSkillConfig, error)
+	CreateSkillConfig(context.Context, SwitchSkillConfig) (SwitchSkillConfig, error)
+	UpdateSkillConfig(context.Context, string, string) (SwitchSkillConfig, error)
+	DeleteSkillConfig(context.Context, string) error
+
+	ListAgentConfigs(context.Context) ([]SwitchAgentConfig, error)
+	UpsertAgentConfig(context.Context, SwitchAgentConfig) (SwitchAgentConfig, error)
+	DeleteAgentConfig(context.Context, string) error
+	SetAgentSkills(context.Context, string, []string) (SwitchAgentConfig, error)
+
+	ListDIDConfigs(context.Context) ([]SwitchDIDConfig, error)
+	UpsertDIDConfig(context.Context, SwitchDIDConfig) (SwitchDIDConfig, error)
+	DeleteDIDConfig(context.Context, string) error
+
+	ListIVRFlows(context.Context) ([]SwitchIVRFlowView, error)
+	CreateIVRFlow(context.Context, string, string) (SwitchIVRFlowView, error)
+	GetIVRFlow(context.Context, string) (SwitchIVRFlowView, error)
+	UpdateIVRFlow(context.Context, string, string, string) (SwitchIVRFlowView, error)
+	DeleteIVRFlow(context.Context, string) error
+	PublishIVRFlow(context.Context, string) (SwitchIVRVersionView, error)
+	ListIVRVersions(context.Context, string) ([]SwitchIVRVersionView, error)
+	RollbackIVRFlow(context.Context, string, int) (SwitchIVRVersionView, error)
+
 	CheckIn(context.Context, string, []string) (SwitchAgentSession, error)
 	CheckOut(context.Context, string) error
 	SetPresence(context.Context, string, string, string) (SwitchAgentSession, error)

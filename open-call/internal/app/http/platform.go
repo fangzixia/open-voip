@@ -18,6 +18,9 @@ type StatusProvider struct {
 	Runtime interface {
 		ListCalls(context.Context) ([]ports.CallView, error)
 	}
+	Config interface {
+		GetActiveConfigurationSummary(context.Context) (ports.SwitchConfigVersion, error)
+	}
 	WSConnections func() int
 	Webhooks      interface {
 		Stats(context.Context) (webhook.Stats, error)
@@ -54,12 +57,22 @@ func (s StatusProvider) snapshot(ctx context.Context) statusResponse {
 			out.DBOK = sqlDB.PingContext(c) == nil
 		}
 	}
+	if s.Config != nil {
+		c, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, err := s.Config.GetActiveConfigurationSummary(c)
+		cancel()
+		out.SwitchOK = err == nil
+	} else if s.Runtime != nil {
+		c, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, err := s.Runtime.ListCalls(c)
+		cancel()
+		out.SwitchOK = err == nil
+	}
 	if s.Runtime != nil {
 		c, cancel := context.WithTimeout(ctx, 3*time.Second)
 		calls, err := s.Runtime.ListCalls(c)
 		cancel()
 		if err == nil {
-			out.SwitchOK = true
 			for _, call := range calls {
 				if call.State != "ended" {
 					out.ActiveCalls++

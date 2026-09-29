@@ -76,6 +76,30 @@ type ConfigVersionView struct {
 	ActivatedAt   *time.Time `json:"activated_at,omitempty"`
 }
 
+// ActiveConfigurationView 当前激活的完整配置快照。
+type ActiveConfigurationView struct {
+	Version ConfigVersionView `json:"version"`
+	Bundle  ConfigBundle      `json:"bundle"`
+}
+
+// IVRFlowView IVR 草稿视图。
+type IVRFlowView struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	DraftJSON        string    `json:"draft_json"`
+	PublishedVersion int       `json:"published_version,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// IVRVersionView 已发布 IVR 版本。
+type IVRVersionView struct {
+	FlowID      string    `json:"flow_id"`
+	Version     int       `json:"version"`
+	PayloadJSON string    `json:"payload_json"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
 type AgentSessionView struct {
 	AgentID       string   `json:"agent_id"`
 	State         string   `json:"state"`
@@ -97,6 +121,40 @@ type CallCenterAdminPort interface {
 	StoreConfig(context.Context, ConfigBundle) (ConfigVersionView, error)
 	ActivateConfig(context.Context, int64) (ConfigVersionView, error)
 	GetConfigVersion(context.Context, int64) (ConfigVersionView, error)
+	GetActiveConfiguration(context.Context) (ActiveConfigurationView, error)
+	GetActiveConfigurationSummary(context.Context) (ConfigVersionView, error)
+
+	ListQueueConfigs(context.Context) ([]QueueConfig, error)
+	CreateQueueConfig(context.Context, QueueConfig) (QueueConfig, error)
+	GetQueueConfig(context.Context, string) (QueueConfig, error)
+	UpdateQueueConfig(context.Context, string, QueueConfig) (QueueConfig, error)
+	DeleteQueueConfig(context.Context, string) error
+	SetQueueAgents(context.Context, string, []string) (QueueConfig, error)
+	SetQueueSkills(context.Context, string, []string) (QueueConfig, error)
+
+	ListSkillConfigs(context.Context) ([]SkillConfig, error)
+	CreateSkillConfig(context.Context, SkillConfig) (SkillConfig, error)
+	UpdateSkillConfig(context.Context, string, string) (SkillConfig, error)
+	DeleteSkillConfig(context.Context, string) error
+
+	ListAgentConfigs(context.Context) ([]AgentConfig, error)
+	UpsertAgentConfig(context.Context, AgentConfig) (AgentConfig, error)
+	DeleteAgentConfig(context.Context, string) error
+	SetAgentSkills(context.Context, string, []string) (AgentConfig, error)
+
+	ListDIDConfigs(context.Context) ([]DIDConfig, error)
+	UpsertDIDConfig(context.Context, DIDConfig) (DIDConfig, error)
+	DeleteDIDConfig(context.Context, string) error
+
+	ListIVRFlows(context.Context) ([]IVRFlowView, error)
+	CreateIVRFlow(context.Context, string, string) (IVRFlowView, error)
+	GetIVRFlow(context.Context, string) (IVRFlowView, error)
+	UpdateIVRFlow(context.Context, string, string, string) (IVRFlowView, error)
+	DeleteIVRFlow(context.Context, string) error
+	PublishIVRFlow(context.Context, string) (IVRVersionView, error)
+	ListIVRVersions(context.Context, string) ([]IVRVersionView, error)
+	RollbackIVRFlow(context.Context, string, int) (IVRVersionView, error)
+
 	CheckIn(context.Context, string, []string) (AgentSessionView, error)
 	CheckOut(context.Context, string) error
 	SetPresence(context.Context, string, string, string) (AgentSessionView, error)

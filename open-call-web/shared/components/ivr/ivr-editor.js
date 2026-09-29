@@ -159,7 +159,7 @@ export class IVRFlowEditor extends LitElement {
     if (issues.length) { this.problem=issues.join("；"); return; }
     if (this.dirty && !await this.save()) return;
     this.busy=true;
-    try { const version=await this.service.publishIvr(this.selectedId); this.flows=this.flows.map(f=>f.id===this.selectedId?{...f,published_version:version.version}:f); this.notice=`版本 v${version.version} 已生成快照；发布并激活呼叫配置后，新呼入才会使用`; this.problem=""; await this.loadVersions(); this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); }
+    try { const version=await this.service.publishIvr(this.selectedId); this.flows=this.flows.map(f=>f.id===this.selectedId?{...f,published_version:version.version}:f); this.notice=`版本 v${version.version} 已同步至 Switch，新呼入立即生效`; this.problem=""; await this.loadVersions(); this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); }
     catch(e) { this.problem=e.message; }
     finally { this.busy=false; }
   }
@@ -167,7 +167,7 @@ export class IVRFlowEditor extends LitElement {
     if (this.dirty) { this.problem="请先保存草稿"; return; }
     if (!window.confirm(`将版本 v${version} 复制并发布为新版本？`)) return;
     this.busy=true;
-    try { const result=await this.service.rollbackIvrFlow(this.selectedId,version); const flow=await this.service.getIvrFlow(this.selectedId); this.flows=this.flows.map(f=>f.id===flow.id?flow:f); this.draft=copy(flow.draft); this.selectedNode=this.draft.start; this.dirty=false; this.notice=`已生成回滚快照 v${result.version}，请发布并激活呼叫配置`; this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); await this.loadVersions(); }
+    try { const result=await this.service.rollbackIvrFlow(this.selectedId,version); const flow=await this.service.getIvrFlow(this.selectedId); this.flows=this.flows.map(f=>f.id===flow.id?flow:f); this.draft=copy(flow.draft); this.selectedNode=this.draft.start; this.dirty=false; this.notice=`回滚版本 v${result.version} 已同步至 Switch，新呼入立即生效`; this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); await this.loadVersions(); }
     catch(e) { this.problem=e.message; }
     finally { this.busy=false; }
   }
