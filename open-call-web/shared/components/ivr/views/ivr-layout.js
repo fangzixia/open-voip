@@ -18,7 +18,28 @@ export function renderIvrLayout(host) {
         <div class="pane inspector"><h3>节点属性</h3>${renderNodeEditor(host)}</div>
       </div>
       <div class="details">
-        <div class="pane"><h3>语音素材</h3><label>上传语音文件<input type="file" accept=".wav,audio/wav" @change=${e=>host.upload(e)} ?disabled=${host.busy} /></label><p class="muted">已上传 ${host.assets.length} 个 WAV 素材。选择播放或菜单节点可关联录音。</p></div>
+        <div class="pane"><h3>语音素材</h3><label>上传语音文件<input type="file" accept=".wav,audio/wav" @change=${e=>host.upload(e)} ?disabled=${host.busy} /></label>
+          ${host.ttsOptions?.enabled ? html`
+            <div class="divider"></div>
+            <p class="muted">文本生成（${host.ttsOptions.provider_label||host.ttsOptions.provider}，${host.ttsOptions.sample_rate||16000} Hz）</p>
+            <label>素材名称<input .value=${host.ttsAssetName||""} @input=${e=>{host.ttsAssetName=e.target.value}} placeholder="例如：欢迎语" ?disabled=${host.busy} /></label>
+            <label>合成文本<textarea rows="4" .value=${host.ttsText||""} @input=${e=>{host.ttsText=e.target.value}} placeholder="输入来电播放的文案" ?disabled=${host.busy}></textarea></label>
+            <label>音色（可选）<input .value=${host.ttsVoice||""} @input=${e=>{host.ttsVoice=e.target.value}} placeholder=${host.ttsOptions.default_voice||"默认音色"} ?disabled=${host.busy} /></label>
+            <div class="row">
+              <button @click=${()=>host.synthesize()} ?disabled=${host.busy}>生成并保存</button>
+            </div>
+          ` : html`<p class="muted">文本转语音未启用（需在 open-call 配置 tts.enabled）。</p>`}
+          <p class="muted">共 ${host.assets.length} 个 WAV 素材。选择播放或菜单节点可关联录音。</p>
+          ${host.assets.length ? html`
+            <div class="asset-list" role="list">${host.assets.map(a=>html`
+              <div class="asset-row" role="listitem">
+                <span class="asset-name" title=${a.name}>${a.name}</span>
+                <button type="button" class="ghost" @click=${()=>host.preview(`${a.id}.wav`, true)} ?disabled=${host.previewBusy||host.busy}>试听</button>
+              </div>`)}
+            </div>
+          ` : nothing}
+          ${host.previewUrl ? html`<audio class="ivr-preview" controls src=${host.previewUrl}></audio>` : nothing}
+        </div>
         <div class="pane"><h3>路径模拟</h3><div class="two"><label>模拟按键<input .value=${host.testDigits} @input=${e=>host.testDigits=e.target.value} placeholder="如 1 或 2；留空模拟超时" /></label><label>工作时间<select .value=${host.testOpen?"open":"closed"} @change=${e=>host.testOpen=e.target.value==="open"}><option value="open">营业</option><option value="closed">非营业</option></select></label></div><button @click=${()=>host.runSimulation()}>运行模拟</button>${host.simulation?html`<div class="simulation">${host.simulation.path.map(x=>html`<span class="badge">${NODE_TYPES[x.type]} ${x.event}</span> → `)}<strong>${host.simulation.result}</strong></div>`:nothing}</div>
         <div class="pane"><h3>绑定与版本</h3><label>绑定到呼入队列<select .value=${host.bindingQueueId} @change=${e=>host.bindingQueueId=e.target.value}><option value="">选择队列</option>${host.queues.map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><div class="row"><button @click=${()=>host.bindQueue()} ?disabled=${host.busy||!host.selectedId}>保存队列绑定</button><button class="danger" @click=${()=>host.removeFlow()} ?disabled=${host.busy||!host.selectedId}>删除流程</button></div><div class="divider"></div>${host.versions.map(v=>html`<div class="version"><span>v${v.version}　${formatDateTime(v.published_at)}</span><button class="ghost" @click=${()=>host.rollback(v.version)}>回滚</button></div>`)}</div>
       </div>

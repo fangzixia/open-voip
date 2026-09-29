@@ -24,6 +24,48 @@ type Config struct {
 	Bootstrap   BootstrapConfig   `yaml:"bootstrap"`
 	Integration IntegrationConfig `yaml:"integration"`
 	Security    SecurityConfig    `yaml:"security"`
+	// FFmpegPath FFmpeg 可执行文件；为空时启动时在 PATH 中查找 ffmpeg。
+	FFmpegPath string    `yaml:"ffmpeg_path"`
+	TTS        TTSConfig `yaml:"tts"`
+}
+
+// TTSConfig 控制 IVR 素材文本转语音（业务侧合成后上传至 Switch）。
+type TTSConfig struct {
+	Enabled      bool                      `yaml:"enabled"`
+	Provider     string                    `yaml:"provider"`
+	SampleRate   int                       `yaml:"sample_rate"`
+	MaxTextChars int                       `yaml:"max_text_chars"`
+	Aliyun       TTSAliyunConfig           `yaml:"aliyun"`
+	Xunfei       TTSXunfeiConfig           `yaml:"xunfei"`
+	OpenAI       TTSOpenAICompatibleConfig `yaml:"openai_compatible"`
+}
+
+type TTSAliyunConfig struct {
+	AccessKeyID     string `yaml:"access_key_id"`
+	AccessKeySecret string `yaml:"access_key_secret"`
+	AppKey          string `yaml:"app_key"`
+	Voice           string `yaml:"voice"`
+	Format          string `yaml:"format"`
+	GatewayURL      string `yaml:"gateway_url"`
+	MetaURL         string `yaml:"meta_url"`
+}
+
+type TTSXunfeiConfig struct {
+	AppID     string `yaml:"app_id"`
+	APIKey    string `yaml:"api_key"`
+	APISecret string `yaml:"api_secret"`
+	Voice     string `yaml:"voice"`
+	Aue       string `yaml:"aue"`
+	Host      string `yaml:"host"`
+}
+
+type TTSOpenAICompatibleConfig struct {
+	BaseURL        string            `yaml:"base_url"`
+	APIKey         string            `yaml:"api_key"`
+	Model          string            `yaml:"model"`
+	Voice          string            `yaml:"voice"`
+	ResponseFormat string            `yaml:"response_format"`
+	ExtraHeaders   map[string]string `yaml:"extra_headers"`
 }
 
 type IntegrationConfig struct {
@@ -198,6 +240,32 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if c.TTS.Enabled {
+		provider := strings.ToLower(strings.TrimSpace(c.TTS.Provider))
+		switch provider {
+		case "aliyun":
+			if strings.TrimSpace(c.TTS.Aliyun.AccessKeyID) == "" || strings.TrimSpace(c.TTS.Aliyun.AccessKeySecret) == "" || strings.TrimSpace(c.TTS.Aliyun.AppKey) == "" {
+				problems = append(problems, "tts.enabled 且 provider=aliyun 时必须配置 aliyun.access_key_id、access_key_secret、app_key")
+			}
+		case "xunfei":
+			if strings.TrimSpace(c.TTS.Xunfei.AppID) == "" || strings.TrimSpace(c.TTS.Xunfei.APIKey) == "" || strings.TrimSpace(c.TTS.Xunfei.APISecret) == "" {
+				problems = append(problems, "tts.enabled 且 provider=xunfei 时必须配置 xunfei.app_id、api_key、api_secret")
+			}
+		case "openai_compatible":
+			if strings.TrimSpace(c.TTS.OpenAI.BaseURL) == "" || strings.TrimSpace(c.TTS.OpenAI.APIKey) == "" || strings.TrimSpace(c.TTS.OpenAI.Model) == "" {
+				problems = append(problems, "tts.enabled 且 provider=openai_compatible 时必须配置 openai_compatible.base_url、api_key、model")
+			}
+		default:
+			problems = append(problems, "tts.provider 必须为 aliyun、xunfei 或 openai_compatible")
+		}
+		if c.TTS.SampleRate != 8000 && c.TTS.SampleRate != 16000 {
+			problems = append(problems, "tts.sample_rate 必须为 8000 或 16000")
+		}
+		if c.TTS.MaxTextChars <= 0 {
+			problems = append(problems, "tts.max_text_chars 必须大于 0")
+		}
+	}
+
 	if len(problems) > 0 {
 		return fmt.Errorf("配置校验失败:\n- %s", strings.Join(problems, "\n- "))
 	}
@@ -246,5 +314,35 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Integration.MaxConcurrentCalls <= 0 {
 		c.Integration.MaxConcurrentCalls = 100
+	}
+	if c.TTS.SampleRate == 0 {
+		c.TTS.SampleRate = 16000
+	}
+	if c.TTS.MaxTextChars == 0 {
+		c.TTS.MaxTextChars = 2000
+	}
+	if strings.TrimSpace(c.TTS.Aliyun.Format) == "" {
+		c.TTS.Aliyun.Format = "wav"
+	}
+	if strings.TrimSpace(c.TTS.Aliyun.Voice) == "" {
+		c.TTS.Aliyun.Voice = "xiaoyun"
+	}
+	if strings.TrimSpace(c.TTS.Aliyun.GatewayURL) == "" {
+		c.TTS.Aliyun.GatewayURL = "https://nls-gateway-cn-shanghai.aliyuncs.com"
+	}
+	if strings.TrimSpace(c.TTS.Aliyun.MetaURL) == "" {
+		c.TTS.Aliyun.MetaURL = "https://nls-meta.cn-shanghai.aliyuncs.com"
+	}
+	if strings.TrimSpace(c.TTS.Xunfei.Aue) == "" {
+		c.TTS.Xunfei.Aue = "lame"
+	}
+	if strings.TrimSpace(c.TTS.Xunfei.Voice) == "" {
+		c.TTS.Xunfei.Voice = "xiaoyan"
+	}
+	if strings.TrimSpace(c.TTS.Xunfei.Host) == "" {
+		c.TTS.Xunfei.Host = "tts-api.xfyun.cn"
+	}
+	if strings.TrimSpace(c.TTS.OpenAI.ResponseFormat) == "" {
+		c.TTS.OpenAI.ResponseFormat = "mp3"
 	}
 }

@@ -105,6 +105,9 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 }
 
 func isIVRAssetPath(path string) bool {
+	if path == "/api/v1/ivr-assets/tts-options" || path == "/api/v1/ivr-assets/synthesize" {
+		return false
+	}
 	return path == "/api/v1/ivr-assets" || strings.HasPrefix(path, "/api/v1/ivr-assets/")
 }
 

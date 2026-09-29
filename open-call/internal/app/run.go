@@ -18,6 +18,7 @@ import (
 	apphttp "open-call/internal/app/http"
 	"open-call/internal/app/ws"
 	"open-call/internal/config"
+	"open-call/internal/ffmpeg"
 	"open-call/internal/integration/switchapi"
 	"open-call/internal/layers/biz/agent"
 	"open-call/internal/layers/biz/audit"
@@ -38,6 +39,7 @@ import (
 	"open-call/internal/layers/biz/webhook"
 	"open-call/internal/store"
 	"open-call/internal/store/migrate"
+	"open-call/internal/tts"
 )
 
 // Run 启动 open-call。
@@ -120,8 +122,21 @@ func Run(configPath string) error {
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
+	ffmpegBin, err := ffmpeg.Resolve(cfg.FFmpegPath)
+	if err != nil {
+		return err
+	}
+
+	ttsEngine, err := tts.NewEngine(cfg.TTS, ffmpegBin)
+	if err != nil {
+		return fmt.Errorf("TTS: %w", err)
+	}
+
 	apiRouter := apphttp.NewRouter(apphttp.RouterDeps{
 		Config:             *cfg,
+		FFmpeg:             ffmpegBin,
+		TTS:                ttsEngine,
+		Switch:             switchClient,
 		SwitchEventHandler: SwitchEventHTTP(db, cfg.Integration, wsHub, businessActions, switchClient),
 		Auth:               authSvc,
 		Authorization:      authzSvc,

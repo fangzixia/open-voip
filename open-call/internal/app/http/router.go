@@ -10,6 +10,7 @@ import (
 
 	"open-call/internal/app/http/middleware"
 	"open-call/internal/config"
+	"open-call/internal/integration/switchapi"
 	"open-call/internal/layers/biz/agent"
 	"open-call/internal/layers/biz/audit"
 	"open-call/internal/layers/biz/auth"
@@ -27,6 +28,7 @@ import (
 	"open-call/internal/layers/biz/user"
 	"open-call/internal/layers/biz/webhook"
 	"open-call/internal/ports"
+	"open-call/internal/tts"
 )
 
 // RouterDeps HTTP 路由依赖。
@@ -57,6 +59,10 @@ type RouterDeps struct {
 		GetCall(context.Context, string) (ports.CallView, error)
 	}
 	SwitchEventHandler http.HandlerFunc
+	// FFmpeg 启动时解析的 ffmpeg 可执行路径，供 TTS 等需要转码的功能使用。
+	FFmpeg string
+	TTS    *tts.Engine
+	Switch *switchapi.Client
 }
 
 // NewRouter 构建 chi 路由。
@@ -152,6 +158,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 				admin.With(middleware.RequirePermission("ivr.read")).Get("/ivr/flows/{flowId}/versions", deps.handleIVRVersions)
 				admin.With(middleware.RequirePermission("ivr.write")).Post("/ivr/flows/{flowId}/rollback", deps.handleIVRRollback)
 				admin.With(middleware.RequirePermission("ivr.write")).Post("/ivr/flows/{flowId}/publish", deps.handleIVRPublish)
+				admin.With(middleware.RequirePermission("ivr.read")).Get("/ivr-assets/tts-options", deps.handleIVRAssetTTSOptions)
+				admin.With(middleware.RequirePermission("ivr.write")).Post("/ivr-assets/synthesize", deps.handleIVRAssetSynthesize)
 				admin.With(middleware.RequirePermission("cdr.export")).Get("/cdr/export.csv", deps.handleCDRExport)
 				admin.With(middleware.RequirePermission("webhooks.read")).Get("/webhooks/subscriptions", deps.handleWebhookList)
 				admin.With(middleware.RequirePermission("webhooks.write")).Post("/webhooks/subscriptions", deps.handleWebhookCreate)

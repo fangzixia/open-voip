@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1349,7 +1350,11 @@ func (u *sipUA) sendOptions(ctx context.Context, tr config.SIPTrunkConfig) {
 		return
 	}
 	defer tx.Terminate()
-	res, _ := waitFinal(ctx, tx)
+	res, err := waitFinal(ctx, tx)
+	if err != nil {
+		slog.Debug("SIP OPTIONS 无响应", "trunk", tr.ID, "err", err)
+		return
+	}
 	logSIP("receive", res, "")
 }
 
@@ -1609,8 +1614,16 @@ func (u *sipUA) dialogByReq(req *sip.Request) *sipSession {
 	return u.dialogBySIP(headerCallID(req))
 }
 
-func headerCallID(msg sip.Message) string {
+func sipMessageAbsent(msg sip.Message) bool {
 	if msg == nil {
+		return true
+	}
+	v := reflect.ValueOf(msg)
+	return v.Kind() == reflect.Ptr && v.IsNil()
+}
+
+func headerCallID(msg sip.Message) string {
+	if sipMessageAbsent(msg) {
 		return ""
 	}
 	if h := msg.CallID(); h != nil {
@@ -1622,7 +1635,7 @@ func headerCallID(msg sip.Message) string {
 func callIDFromMessage(msg sip.Message) string { return headerCallID(msg) }
 
 func logSIP(direction string, msg sip.Message, callID string) {
-	if msg == nil {
+	if sipMessageAbsent(msg) {
 		return
 	}
 	if callID == "" {

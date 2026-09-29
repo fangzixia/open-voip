@@ -20,10 +20,38 @@ database:
   # 业务库：用户/坐席/队列/CDR 元数据等；勿与 open-switch 话务库混用。
   dsn: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_call port=5432 sslmode=disable"
 
+# 启动时校验必须可用；为空则从 PATH 查找 ffmpeg。IVR TTS 等转码均使用此路径。
+ffmpeg_path: ""
+
 recordings:
   # 录音元数据与策略；文件实体在 open-switch 的 recordings.dir。
   retain_days: 90
   notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
+
+# IVR 素材文本转语音（业务侧）。合成后由 open-call 上传 WAV 至 Switch，Switch 只存文件。
+tts:
+  enabled: false
+  provider: aliyun
+  sample_rate: 16000
+  max_text_chars: 2000
+  aliyun:
+    access_key_id: ""
+    access_key_secret: ""
+    app_key: ""
+    voice: xiaoyun
+    format: wav
+  xunfei:
+    app_id: ""
+    api_key: ""
+    api_secret: ""
+    voice: xiaoyan
+    aue: lame
+  openai_compatible:
+    base_url: "https://api.openai.com"
+    api_key: ""
+    model: gpt-4o-mini-tts
+    voice: alloy
+    response_format: mp3
 
 jwt:
   access_ttl_sec: 3600

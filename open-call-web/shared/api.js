@@ -358,6 +358,20 @@ export function fetchIvrAsset(id) {
   return apiFetch(`/api/v1/ivr-assets/${encodeURIComponent(id)}`, { responseType: "blob", timeoutMs: 120000 });
 }
 
+export function listIvrTtsOptions() {
+  return apiFetch("/api/v1/ivr-assets/tts-options");
+}
+
+export function synthesizeIvrAsset({ name, text, voice }) {
+  const body = { name, text };
+  if (voice) body.voice = voice;
+  return apiFetch("/api/v1/ivr-assets/synthesize", {
+    method: "POST",
+    body: JSON.stringify(body),
+    timeoutMs: 120000,
+  });
+}
+
 export function createWebhook(url, eventTypes) {
   return apiFetch("/api/v1/webhooks/subscriptions", {
     method: "POST",

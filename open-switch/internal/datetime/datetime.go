@@ -16,6 +16,9 @@ const DateLayout = "2006-01-02"
 
 func Format(t time.Time) string { return t.UTC().Format(Layout) }
 
+// FormatLog 用于 slog 等人读日志，使用进程本地时区（API/库表仍用 UTC 的 Format）。
+func FormatLog(t time.Time) string { return t.Local().Format(Layout) }
+
 // FormatDate 保留日期自身的年月日，不因时区转换而换日。
 func FormatDate(t time.Time) string { return t.Format(DateLayout) }
 

@@ -12,8 +12,12 @@ export class IVRFlowEditor extends LitElement {
     flows: { type: Array }, queues: { type: Array }, assets: { type: Array }, versions: { type: Array },
     selectedId: { type: String }, selectedNode: { type: String }, flowName: { type: String }, draft: { type: Object },
     dirty: { type: Boolean }, creating: { type: Boolean }, busy: { type: Boolean }, notice: { type: String }, problem: { type: String },
-    testDigits: { type: String }, testOpen: { type: Boolean }, simulation: { type: Object }, previewUrl: { type: String }, bindingQueueId: { type: String },
+    testDigits: { type: String }, testOpen: { type: Boolean }, simulation: { type: Object }, previewUrl: { type: String }, previewBusy: { type: Boolean }, bindingQueueId: { type: String },
     linkDraft: { type: Object },
+    ttsOptions: { type: Object },
+    ttsAssetName: { type: String },
+    ttsText: { type: String },
+    ttsVoice: { type: String },
     service: { attribute: false },
   };
   static styles = ivrEditorStyles;
@@ -21,15 +25,26 @@ export class IVRFlowEditor extends LitElement {
   constructor() {
     super(); this.flows=[]; this.queues=[]; this.assets=[]; this.versions=[]; this.selectedId=""; this.selectedNode="";
     this.flowName=""; this.draft=blank(); this.dirty=false; this.creating=false; this.busy=false; this.notice=""; this.problem="";
-    this.testDigits="1"; this.testOpen=true; this.simulation=null; this.previewUrl=""; this.bindingQueueId="";
+    this.testDigits="1"; this.testOpen=true; this.simulation=null; this.previewUrl=""; this.previewBusy=false; this.bindingQueueId="";
     this.linkDraft=null; this.pointerDrag=null; this.dragPoint=null; this.service=null;
+    this.ttsOptions=null; this.ttsAssetName=""; this.ttsText=""; this.ttsVoice="";
   }
   disconnectedCallback() { super.disconnectedCallback(); if (this.previewUrl) URL.revokeObjectURL(this.previewUrl); this.stopPointer(); }
   willUpdate(changed) {
     if ((changed.has("flows") || changed.has("service")) && this.service && !this.selectedId && !this.creating && this.flows?.length) this.chooseFlow(this.flows[0].id);
   }
-  updated(changed) { if (changed.has("service") && this.service) void this.loadAssets(); }
+  updated(changed) {
+    if (changed.has("service") && this.service) {
+      void this.loadAssets();
+      void this.loadTtsOptions();
+    }
+  }
   async loadAssets() { try { this.assets=(await this.service.listIvrAssets()).items||[]; } catch(e) { this.problem=e.message; } }
+  async loadTtsOptions() {
+    if (!this.service?.listIvrTtsOptions) return;
+    try { this.ttsOptions=await this.service.listIvrTtsOptions(); }
+    catch { this.ttsOptions={ enabled:false }; }
+  }
   async loadVersions() { if (!this.selectedId) { this.versions=[]; return; } try { this.versions=(await this.service.listIvrVersions(this.selectedId)).items||[]; } catch(e) { this.problem=e.message; } }
   chooseFlow(id) {
     if (this.dirty) { this.problem="请先保存草稿，再切换流程"; return; }
@@ -194,10 +209,40 @@ export class IVRFlowEditor extends LitElement {
     catch(e) { this.problem=e.message; }
     finally { this.busy=false; event.target.value=""; }
   }
-  async preview(file) {
-    if (!file) return;
-    try { const blob=await this.service.fetchIvrAsset(file.replace(/\.wav$/i,"")); if (this.previewUrl) URL.revokeObjectURL(this.previewUrl); this.previewUrl=URL.createObjectURL(blob); this.problem=""; }
-    catch(e) { this.problem=e.message; }
+  async synthesize() {
+    const name=(this.ttsAssetName||"").trim();
+    const text=(this.ttsText||"").trim();
+    if (!name) { this.problem="请填写素材名称"; return; }
+    if (!text) { this.problem="请填写要合成的文本"; return; }
+    if (!this.service?.synthesizeIvrAsset) { this.problem="当前环境不支持文本合成"; return; }
+    this.busy=true;
+    try {
+      const voice=(this.ttsVoice||"").trim();
+      const asset=await this.service.synthesizeIvrAsset({ name, text, voice: voice || undefined });
+      await this.loadAssets();
+      if (this.selectedNode && ["play","menu"].includes(this.draft.nodes[this.selectedNode]?.type)) this.updateNode("file",`${asset.id}.wav`);
+      this.notice=`已生成并保存 ${asset.name}`;
+      this.problem="";
+      await this.preview(`${asset.id}.wav`, true);
+    } catch(e) { this.problem=e.message; }
+    finally { this.busy=false; }
+  }
+  async preview(file, autoplay = false) {
+    const id=String(file||"").replace(/\.wav$/i,"").trim();
+    if (!id || !this.service?.fetchIvrAsset) return;
+    this.previewBusy=true;
+    try {
+      const blob=await this.service.fetchIvrAsset(id);
+      if (this.previewUrl) URL.revokeObjectURL(this.previewUrl);
+      this.previewUrl=URL.createObjectURL(blob);
+      this.problem="";
+      if (autoplay) {
+        await this.updateComplete;
+        const audio=this.renderRoot.querySelector("audio.ivr-preview");
+        if (audio) { audio.load(); await audio.play().catch(()=>{}); }
+      }
+    } catch(e) { this.problem=e.message; }
+    finally { this.previewBusy=false; }
   }
   runSimulation() {
     const issues=validateIVR(this.draft,this.queues,this.assets);

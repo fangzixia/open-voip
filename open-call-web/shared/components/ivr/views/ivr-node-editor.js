@@ -16,8 +16,8 @@ export function renderNodeEditor(host) {
       ${["play","menu"].includes(n.type) ? html`
         <label>提示文字（用于管理与事件展示）<input .value=${n.prompt||""} @input=${e=>host.updateNode("prompt",e.target.value)} placeholder="例如：按 1 语音，按 2 视频" /></label>
         <label>来电实际播放的 WAV 素材<select .value=${n.file||""} @change=${e=>host.updateNode("file",e.target.value)}><option value="">请选择素材</option>${host.assets.map(a=>html`<option value=${`${a.id}.wav`}>${a.name}</option>`)}</select></label>
-        <div class="row"><button @click=${()=>host.preview(n.file)} ?disabled=${!n.file}>试听</button><span class="muted">PCM 16 位、单声道、8/16 kHz</span></div>
-        ${host.previewUrl ? html`<audio controls src=${host.previewUrl}></audio>` : nothing}
+        <div class="row"><button @click=${()=>host.preview(n.file, true)} ?disabled=${!n.file||host.previewBusy}>试听</button><span class="muted">PCM 16 位、单声道、8/16 kHz</span></div>
+        ${host.previewUrl ? html`<audio class="ivr-preview" controls src=${host.previewUrl}></audio>` : nothing}
         <label>${n.type==="menu"?"等待按键秒数":"播后跳转秒数"}<input type="number" min="1" max="120" .value=${String(n.timeout_sec||"")} @input=${e=>host.updateNode("timeout_sec",Number(e.target.value))} /></label>
       ` : nothing}
       ${n.type==="play" ? html`<label>下一节点${renderTargetSelect(host, n.next,v=>host.updateNode("next",v),id)}</label>` : nothing}

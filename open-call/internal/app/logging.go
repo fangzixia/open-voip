@@ -197,7 +197,7 @@ func newLogger(cfg config.LogConfig) (*slog.Logger, io.Closer, error) {
 
 	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
 		if attr.Value.Kind() == slog.KindTime {
-			return slog.String(attr.Key, datetime.Format(attr.Value.Time()))
+			return slog.String(attr.Key, datetime.FormatLog(attr.Value.Time()))
 		}
 		cleaned := observability.SanitizeMap(map[string]any{attr.Key: attr.Value.Any()})[attr.Key]
 		if err, ok := cleaned.(error); ok {

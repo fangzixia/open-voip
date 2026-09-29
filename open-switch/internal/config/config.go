@@ -293,8 +293,8 @@ func (c *Config) Validate() error {
 				errs = append(errs, "SIP 设备用户名无效或重复")
 			}
 			seen[d.Username] = true
-			if len(d.Password) < 12 {
-				errs = append(errs, "SIP 设备密码至少 12 字符")
+			if strings.TrimSpace(d.Password) == "" {
+				errs = append(errs, "SIP 设备必须配置 password")
 			}
 			if len(d.AllowedCIDRs) == 0 {
 				errs = append(errs, "SIP 设备必须配置 allowed_cidrs")

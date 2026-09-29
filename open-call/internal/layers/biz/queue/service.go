@@ -367,7 +367,7 @@ func validateQueueValues(recording, overflow, after, hours string) error {
 	if after != "" && after != "hangup" && after != "voicemail" {
 		return errs.InvalidRequest("after_hours_action 无效")
 	}
-	if strings.TrimSpace(hours) != "" && !json.Valid([]byte(hours)) {
+	if strings.TrimSpace(hours) != "" && hours != "always" && !json.Valid([]byte(hours)) {
 		return errs.InvalidRequest("business_hours_json 不是有效 JSON")
 	}
 	return nil

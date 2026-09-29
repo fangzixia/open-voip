@@ -38,7 +38,7 @@ func newLogger(cfg config.LogConfig) (*slog.Logger, func() error, error) {
 	var console slog.Handler
 	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
 		if attr.Value.Kind() == slog.KindTime {
-			return slog.String(attr.Key, datetime.Format(attr.Value.Time()))
+			return slog.String(attr.Key, datetime.FormatLog(attr.Value.Time()))
 		}
 		return attr
 	}}
