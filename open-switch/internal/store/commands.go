@@ -29,7 +29,10 @@ type commandRow struct {
 func (commandRow) TableName() string { return "os_commands" }
 
 // Commands 实现 ports.CommandStore。
-type Commands struct{ DB *gorm.DB }
+type Commands struct {
+	DB     *gorm.DB
+	Events CallEvents
+}
 
 func (s Commands) Accept(ctx context.Context, callID, idempotencyKey, requestHash, typ string, result map[string]any) (ports.CommandView, bool, error) {
 	if idempotencyKey == "" {
@@ -62,7 +65,7 @@ func (s Commands) Accept(ctx context.Context, callID, idempotencyKey, requestHas
 			return err
 		}
 		ev := ports.CallEvent{CallID: callID, CommandID: id, Type: "command.accepted", Payload: map[string]any{"command_id": id, "type": typ, "call_id": callID}}
-		return (CallEvents{DB: tx}).PublishCallEvent(ctx, ev)
+		return s.Events.WithDB(tx).PublishCallEvent(ctx, ev)
 	})
 	if err != nil {
 		return ports.CommandView{}, false, err
@@ -113,7 +116,7 @@ func (s Commands) Complete(ctx context.Context, id, status, errCode string, resu
 	for k, v := range result {
 		payload[k] = v
 	}
-	return (CallEvents{DB: s.DB}).PublishCallEvent(ctx, ports.CallEvent{
+	return s.Events.PublishCallEvent(ctx, ports.CallEvent{
 		CallID: callID, CommandID: id, Type: kind, Payload: payload,
 	})
 }

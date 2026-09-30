@@ -81,6 +81,7 @@ func (f *fakeACD) RequestAgent(_ context.Context, _ dto.DispatchRequest) (dto.Di
 
 type fakeCfg struct{}
 
+func (fakeCfg) ActiveVersion(context.Context) (int64, error) { return 1, nil }
 func (fakeCfg) GetQueue(_ context.Context, id string) (ports.QueueSnapshot, error) {
 	return ports.QueueSnapshot{ConfigVersion: 1, ID: id, Name: "语音服务", MaxWaitSec: 300}, nil
 }

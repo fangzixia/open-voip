@@ -31,7 +31,7 @@ type SwitchRouterDeps struct {
 	RouterDeps
 }
 
-// NewSwitchRouter 构建 /switch/v2 路由（无鉴权，依赖内网隔离）。
+// NewSwitchRouter 构建 /switch/v1 路由（无鉴权，依赖内网隔离）。
 func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 	r := chi.NewRouter()
 	r.NotFound(httpapi.NotFound)
@@ -43,122 +43,126 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 
 	r.Get("/health", handleHealth)
 
-	r.Route("/switch/v2", func(sw chi.Router) {
+	r.Route("/switch/v1", func(sw chi.Router) {
 		sw.Group(func(api chi.Router) {
 			api.Use(deps.authorizeCallResource)
-			api.Post("/configuration/versions", deps.handleConfigStore)
-			api.Get("/configuration/versions/{version}", deps.handleConfigGet)
-			api.Post("/configuration/versions/{version}/activate", deps.handleConfigActivate)
-			api.Get("/configuration/active", deps.handleConfigActive)
-			api.Get("/configuration/active/summary", deps.handleConfigActiveSummary)
-			api.Post("/config-versions", deps.handleConfigStore)
-			api.Get("/config-versions/{version}", deps.handleConfigGet)
-			api.Post("/config-versions/{version}/activate", deps.handleConfigActivate)
-			api.Get("/config-versions/active", deps.handleConfigActive)
-			api.Get("/config-versions/active/summary", deps.handleConfigActiveSummary)
-
-			api.Get("/queues", deps.handleQueueConfigList)
-			api.Post("/queues", deps.handleQueueConfigCreate)
-			api.Get("/queues/{queueId}/config", deps.handleQueueConfigGet)
-			api.Patch("/queues/{queueId}/config", deps.handleQueueConfigPatch)
-			api.Delete("/queues/{queueId}/config", deps.handleQueueConfigDelete)
-			api.Put("/queues/{queueId}/agents", deps.handleQueueConfigAgents)
-			api.Put("/queues/{queueId}/skills", deps.handleQueueConfigSkills)
-
-			api.Get("/skills", deps.handleSkillConfigList)
-			api.Post("/skills", deps.handleSkillConfigCreate)
-			api.Patch("/skills/{skillId}", deps.handleSkillConfigPatch)
-			api.Delete("/skills/{skillId}", deps.handleSkillConfigDelete)
-
-			api.Get("/agents/config", deps.handleAgentConfigList)
-			api.Put("/agents/{agentId}/config", deps.handleAgentConfigUpsert)
-			api.Delete("/agents/{agentId}/config", deps.handleAgentConfigDelete)
-			api.Put("/agents/{agentId}/skills", deps.handleAgentConfigSkills)
-
-			api.Get("/did-routes", deps.handleDIDConfigList)
-			api.Post("/did-routes", deps.handleDIDConfigUpsert)
-			api.Patch("/did-routes/{didId}", deps.handleDIDConfigPatch)
-			api.Delete("/did-routes/{didId}", deps.handleDIDConfigDelete)
-
-			api.Get("/ivr/flows", deps.handleIVRFlowList)
-			api.Get("/ivr/flows/{flowId}", deps.handleIVRFlowGet)
-			api.Put("/ivr/flows/{flowId}", deps.handleIVRFlowUpsert)
-			api.Post("/ivr/flows", deps.handleIVRFlowCreate)
-			api.Delete("/ivr/flows/{flowId}", deps.handleIVRFlowDelete)
-			api.Post("/agents/{agentId}/check-in", deps.handleAgentCheckIn)
-			api.Post("/agents/{agentId}/check-out", deps.handleAgentCheckOut)
-			api.Put("/agents/{agentId}/presence", deps.handleAgentPresence)
-			api.Get("/agents/{agentId}/session", deps.handleAgentSession)
-			api.Get("/queues/{queueId}/status", deps.handleQueueStatus)
-			api.Get("/internal/calls/{callId}", deps.handleInternalCall)
-			if deps.Events != nil {
-				api.Get("/events", deps.handleEvents)
-			}
-			if deps.Commands != nil {
-				api.Get("/commands/{commandId}", deps.handleCommandGet)
-			}
-			if deps.Routing != nil {
-				api.Get("/routing-sessions/{callId}", deps.handleRoutingSession)
-			}
-			api.Get("/ivr-assets", deps.handleIVRAssets)
-			api.Post("/ivr-assets", deps.handleIVRAssetUpload)
-			api.Get("/ivr-assets/{assetId}", deps.handleIVRAssetFile)
-			api.Get("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
-			api.Delete("/internal/recordings/{callId}/{recordingId}", deps.handleRecordingFile)
-			if deps.Runtime != nil {
-				api.Get("/internal/calls", deps.handleInternalCalls)
-			}
-
-			api.Post("/calls", deps.handleStubCall)
-			api.Post("/calls/direct", deps.handleDirectCreate)
-			api.Post("/calls/{callId}/legs", deps.handleDirectLeg)
-			api.Post("/calls/{callId}/legs/webrtc", deps.handleDirectLeg)
-			api.Post("/calls/{callId}/legs/sip", deps.handleDirectSIP)
-			api.Delete("/calls/{callId}/legs/{legId}", deps.handleDirectLeave)
-			api.Post("/calls/{callId}/bridge", deps.handleDirectBridge)
-			api.Post("/calls/{callId}/bridges", deps.handleDirectBridgeAliases)
-			api.Put("/calls/{callId}/bridges/{bridgeId}", deps.handlePutBridge)
-			api.Delete("/calls/{callId}/bridges/{bridgeId}", deps.handleDeleteBridge)
-			api.Post("/calls/{callId}/legs/{legId}/hold", deps.handleLegHold)
-			api.Post("/calls/{callId}/legs/{legId}/reject", deps.handleLegReject)
-			api.Post("/calls/{callId}/legs/{legId}/playbacks", deps.handleLegPlaybackStart)
-			api.Delete("/calls/{callId}/legs/{legId}/playbacks/{playbackId}", deps.handleLegPlaybackStop)
-			api.Post("/calls/{callId}/recording/start", deps.handleDirectRecordingStart)
-			api.Post("/calls/{callId}/recording/stop", deps.handleDirectRecordingStop)
-			api.Post("/calls/{callId}/recordings", deps.handleDirectRecordingStart)
-			api.Post("/calls/{callId}/recordings/{recordingId}/stop", deps.handleDirectRecordingStop)
-			api.Post("/calls/{callId}/business-actions/{actionId}/complete", deps.handleBusinessActionComplete)
-			api.Post("/routing-sessions/{callId}/business-actions/{actionId}/complete", deps.handleBusinessActionComplete)
-			if deps.Runtime != nil {
-				api.Get("/calls", deps.handleListOpenCalls)
-			}
-			api.Get("/calls/{callId}", deps.handleCallGet)
-			api.Post("/calls/{callId}/hangup", deps.handleCallHangup)
-			api.Post("/calls/inbound", deps.handleSwitchInbound)
-			api.Post("/calls/outbound", deps.handleOutbound)
-			api.Post("/calls/{callId}/answer", deps.handleCallAnswer)
-			api.Post("/calls/{callId}/decline", deps.handleDecline)
-			api.Post("/calls/{callId}/hold", deps.handleHold)
-			api.Post("/calls/{callId}/transfer", deps.handleTransfer)
-			api.Post("/calls/{callId}/transfer/complete", deps.handleCompleteTransfer)
-			api.Post("/calls/{callId}/conference", deps.handleConference)
-			api.Post("/supervisor/calls/{callId}/listen", deps.handleListen)
-			api.Post("/supervisor/agents/{agentId}/force-check-out", deps.handleForceCheckout)
-			api.Post("/calls/{callId}/video/request", deps.handleVideoRequest)
-			api.Post("/calls/{callId}/video/respond", deps.handleVideoRespond)
-			api.Post("/calls/{callId}/video/downgrade", deps.handleVideoDowngrade)
-			api.Post("/calls/{callId}/screen-share", deps.handleScreenShare)
-			api.Post("/calls/{callId}/dtmf", deps.handleDTMF)
-
-			api.Post("/calls/{callId}/legs/{legId}/offer", deps.handleOffer)
-			api.Post("/calls/{callId}/legs/{legId}/answer", deps.handleAnswerSDP)
-			api.Post("/calls/{callId}/legs/{legId}/ice", deps.handleICE)
-			api.Post("/calls/{callId}/legs/{legId}/mute", deps.handleMute)
-			api.Get("/calls/{callId}/turn-credentials", deps.handleTURN)
+			deps.registerSwitchAPI(api)
 		})
 	})
 
 	return r
+}
+
+func (d SwitchRouterDeps) registerSwitchAPI(api chi.Router) {
+	api.Post("/configuration/versions", d.handleConfigStore)
+	api.Get("/configuration/versions/{version}", d.handleConfigGet)
+	api.Post("/configuration/versions/{version}/activate", d.handleConfigActivate)
+	api.Get("/configuration/active", d.handleConfigActive)
+	api.Get("/configuration/active/summary", d.handleConfigActiveSummary)
+	api.Post("/config-versions", d.handleConfigStore)
+	api.Get("/config-versions/{version}", d.handleConfigGet)
+	api.Post("/config-versions/{version}/activate", d.handleConfigActivate)
+	api.Get("/config-versions/active", d.handleConfigActive)
+	api.Get("/config-versions/active/summary", d.handleConfigActiveSummary)
+
+	api.Get("/queues", d.handleQueueConfigList)
+	api.Post("/queues", d.handleQueueConfigCreate)
+	api.Get("/queues/{queueId}/config", d.handleQueueConfigGet)
+	api.Patch("/queues/{queueId}/config", d.handleQueueConfigPatch)
+	api.Delete("/queues/{queueId}/config", d.handleQueueConfigDelete)
+	api.Put("/queues/{queueId}/agents", d.handleQueueConfigAgents)
+	api.Put("/queues/{queueId}/skills", d.handleQueueConfigSkills)
+
+	api.Get("/skills", d.handleSkillConfigList)
+	api.Post("/skills", d.handleSkillConfigCreate)
+	api.Patch("/skills/{skillId}", d.handleSkillConfigPatch)
+	api.Delete("/skills/{skillId}", d.handleSkillConfigDelete)
+
+	api.Get("/agents/config", d.handleAgentConfigList)
+	api.Put("/agents/{agentId}/config", d.handleAgentConfigUpsert)
+	api.Delete("/agents/{agentId}/config", d.handleAgentConfigDelete)
+	api.Put("/agents/{agentId}/skills", d.handleAgentConfigSkills)
+
+	api.Get("/did-routes", d.handleDIDConfigList)
+	api.Post("/did-routes", d.handleDIDConfigUpsert)
+	api.Patch("/did-routes/{didId}", d.handleDIDConfigPatch)
+	api.Delete("/did-routes/{didId}", d.handleDIDConfigDelete)
+
+	api.Get("/ivr/flows", d.handleIVRFlowList)
+	api.Get("/ivr/flows/{flowId}", d.handleIVRFlowGet)
+	api.Put("/ivr/flows/{flowId}", d.handleIVRFlowUpsert)
+	api.Post("/ivr/flows", d.handleIVRFlowCreate)
+	api.Delete("/ivr/flows/{flowId}", d.handleIVRFlowDelete)
+	api.Post("/agents/{agentId}/check-in", d.handleAgentCheckIn)
+	api.Post("/agents/{agentId}/check-out", d.handleAgentCheckOut)
+	api.Put("/agents/{agentId}/presence", d.handleAgentPresence)
+	api.Get("/agents/{agentId}/session", d.handleAgentSession)
+	api.Get("/queues/{queueId}/status", d.handleQueueStatus)
+	api.Get("/internal/calls/{callId}", d.handleInternalCall)
+	if d.Events != nil {
+		api.Get("/events", d.handleEvents)
+	}
+	if d.Commands != nil {
+		api.Get("/commands/{commandId}", d.handleCommandGet)
+	}
+	if d.Routing != nil {
+		api.Get("/routing-sessions/{callId}", d.handleRoutingSession)
+	}
+	api.Get("/ivr-assets", d.handleIVRAssets)
+	api.Post("/ivr-assets", d.handleIVRAssetUpload)
+	api.Get("/ivr-assets/{assetId}", d.handleIVRAssetFile)
+	api.Get("/internal/recordings/{callId}/{recordingId}", d.handleRecordingFile)
+	api.Delete("/internal/recordings/{callId}/{recordingId}", d.handleRecordingFile)
+	if d.Runtime != nil {
+		api.Get("/internal/calls", d.handleInternalCalls)
+	}
+
+	api.Post("/calls", d.handleStubCall)
+	api.Post("/calls/direct", d.handleDirectCreate)
+	api.Post("/calls/{callId}/legs", d.handleDirectLeg)
+	api.Post("/calls/{callId}/legs/webrtc", d.handleDirectLeg)
+	api.Post("/calls/{callId}/legs/sip", d.handleDirectSIP)
+	api.Delete("/calls/{callId}/legs/{legId}", d.handleDirectLeave)
+	api.Post("/calls/{callId}/bridge", d.handleDirectBridge)
+	api.Post("/calls/{callId}/bridges", d.handleDirectBridgeAliases)
+	api.Put("/calls/{callId}/bridges/{bridgeId}", d.handlePutBridge)
+	api.Delete("/calls/{callId}/bridges/{bridgeId}", d.handleDeleteBridge)
+	api.Post("/calls/{callId}/legs/{legId}/hold", d.handleLegHold)
+	api.Post("/calls/{callId}/legs/{legId}/reject", d.handleLegReject)
+	api.Post("/calls/{callId}/legs/{legId}/playbacks", d.handleLegPlaybackStart)
+	api.Delete("/calls/{callId}/legs/{legId}/playbacks/{playbackId}", d.handleLegPlaybackStop)
+	api.Post("/calls/{callId}/recording/start", d.handleDirectRecordingStart)
+	api.Post("/calls/{callId}/recording/stop", d.handleDirectRecordingStop)
+	api.Post("/calls/{callId}/recordings", d.handleDirectRecordingStart)
+	api.Post("/calls/{callId}/recordings/{recordingId}/stop", d.handleDirectRecordingStop)
+	api.Post("/calls/{callId}/business-actions/{actionId}/complete", d.handleBusinessActionComplete)
+	api.Post("/routing-sessions/{callId}/business-actions/{actionId}/complete", d.handleBusinessActionComplete)
+	if d.Runtime != nil {
+		api.Get("/calls", d.handleListOpenCalls)
+	}
+	api.Get("/calls/{callId}", d.handleCallGet)
+	api.Post("/calls/{callId}/hangup", d.handleCallHangup)
+	api.Post("/calls/inbound", d.handleSwitchInbound)
+	api.Post("/calls/outbound", d.handleOutbound)
+	api.Post("/calls/{callId}/answer", d.handleCallAnswer)
+	api.Post("/calls/{callId}/decline", d.handleDecline)
+	api.Post("/calls/{callId}/hold", d.handleHold)
+	api.Post("/calls/{callId}/transfer", d.handleTransfer)
+	api.Post("/calls/{callId}/transfer/complete", d.handleCompleteTransfer)
+	api.Post("/calls/{callId}/conference", d.handleConference)
+	api.Post("/supervisor/calls/{callId}/listen", d.handleListen)
+	api.Post("/supervisor/agents/{agentId}/force-check-out", d.handleForceCheckout)
+	api.Post("/calls/{callId}/video/request", d.handleVideoRequest)
+	api.Post("/calls/{callId}/video/respond", d.handleVideoRespond)
+	api.Post("/calls/{callId}/video/downgrade", d.handleVideoDowngrade)
+	api.Post("/calls/{callId}/screen-share", d.handleScreenShare)
+	api.Post("/calls/{callId}/dtmf", d.handleDTMF)
+
+	api.Post("/calls/{callId}/legs/{legId}/offer", d.handleOffer)
+	api.Post("/calls/{callId}/legs/{legId}/answer", d.handleAnswerSDP)
+	api.Post("/calls/{callId}/legs/{legId}/ice", d.handleICE)
+	api.Post("/calls/{callId}/legs/{legId}/mute", d.handleMute)
+	api.Get("/calls/{callId}/turn-credentials", d.handleTURN)
 }
 
 func (d SwitchRouterDeps) handleSwitchInbound(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +171,8 @@ func (d SwitchRouterDeps) handleSwitchInbound(w http.ResponseWriter, r *http.Req
 		writeErr(w, err)
 		return
 	}
+	// config_version / 作用域由 Switch 从激活配置或队列解析，拒绝客户端伪造。
+	req.ConfigVersion = 0
 	id, err := d.CallControl.StartInbound(r.Context(), req)
 	if err != nil {
 		writeErr(w, err)
@@ -180,16 +186,20 @@ func (d SwitchRouterDeps) handleSwitchInbound(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, view)
 }
 
-// authorizeCallResource 在变更活跃通话前校验资源属于当前应用。
+// authorizeCallResource 在变更活跃通话前校验资源存在（无鉴权设计下仅作存在性检查）。
 func (d SwitchRouterDeps) authorizeCallResource(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, prefix := range []string{"/switch/v2/calls/", "/switch/v2/routing-sessions/", "/switch/v2/internal/calls/", "/switch/v2/internal/recordings/", "/switch/v2/supervisor/calls/"} {
-			if !strings.HasPrefix(r.URL.Path, prefix) {
+		const base = "/switch/v1"
+		path := r.URL.Path
+		for _, suffix := range []string{"/calls/", "/routing-sessions/", "/internal/calls/", "/internal/recordings/", "/supervisor/calls/"} {
+			prefix := base + suffix
+			if !strings.HasPrefix(path, prefix) {
 				continue
 			}
-			id := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")[0]
-			if prefix == "/switch/v2/calls/" && (id == "direct" || id == "inbound" || id == "outbound" || r.Method == http.MethodPost && strings.TrimSuffix(r.URL.Path, "/") == "/switch/v2/calls") {
-				break
+			id := strings.Split(strings.TrimPrefix(path, prefix), "/")[0]
+			if suffix == "/calls/" && (id == "direct" || id == "inbound" || id == "outbound" || (r.Method == http.MethodPost && strings.TrimSuffix(path, "/") == base+"/calls")) {
+				next.ServeHTTP(w, r)
+				return
 			}
 			if _, err := d.CallControl.GetCall(r.Context(), id); err != nil {
 				writeErr(w, err)

@@ -6,8 +6,16 @@ import (
 	"open-switch/internal/ports"
 )
 
+// configMutationLockID 覆盖 load→store→activate 整段，与 Store/Activate 同锁，避免并发 CRUD 丢更新。
+const configMutationLockID int64 = 67104232
+
 // ApplyConfigMutation 读取当前激活配置（或空配置）、应用变更、校验并激活新版本。
 func (s *Service) ApplyConfigMutation(ctx context.Context, mutate func(*ports.ConfigBundle) error) (ports.ConfigVersionView, error) {
+	if err := s.db.WithContext(ctx).Exec("SELECT pg_advisory_lock(?)", configMutationLockID).Error; err != nil {
+		return ports.ConfigVersionView{}, err
+	}
+	defer func() { _ = s.db.WithContext(ctx).Exec("SELECT pg_advisory_unlock(?)", configMutationLockID).Error }()
+
 	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
 	if err != nil {
 		return ports.ConfigVersionView{}, err

@@ -33,6 +33,11 @@ type CallEvents struct {
 	AfterAppend func(ctx context.Context, row CallEventRow)
 }
 
+// WithDB 在事务内发布时复用 AfterAppend，避免裸构造 CallEvents{DB: tx} 丢掉投递钩子。
+func (s CallEvents) WithDB(db *gorm.DB) CallEvents {
+	return CallEvents{DB: db, AfterAppend: s.AfterAppend}
+}
+
 // PublishCallEvent 实现 ports.CallEventPublisher：事件先落库，再通过游标对外暴露。
 func (s CallEvents) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 	return s.Append(ctx, &ev)

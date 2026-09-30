@@ -87,7 +87,12 @@ func (d RouterDeps) handleCompleteTransfer(w http.ResponseWriter, r *http.Reques
 		writeErr(w, err)
 		return
 	}
-	if err := d.CallControl.CompleteTransfer(r.Context(), chi.URLParam(r, "callId")); err != nil {
+	var body struct {
+		ExpectedVersion int64 `json:"expected_version"`
+	}
+	_ = decodeJSON(r, &body)
+	ctx := callMutationContext(r, body.ExpectedVersion)
+	if err := d.CallControl.CompleteTransfer(ctx, chi.URLParam(r, "callId")); err != nil {
 		writeErr(w, err)
 		return
 	}

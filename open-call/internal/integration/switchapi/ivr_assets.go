@@ -33,26 +33,26 @@ func (c *Client) UploadIVRAsset(ctx context.Context, filename string, wav []byte
 	if err := w.Close(); err != nil {
 		return IVRAsset{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/switch/v2/ivr-assets", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/switch/v1/ivr-assets", &buf)
 	if err != nil {
 		return IVRAsset{}, err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	setTraceHeaders(req, ctx)
-	observability.Emit(ctx, "switch.request.started", map[string]any{"method": http.MethodPost, "path": "/switch/v2/ivr-assets"})
+	observability.Emit(ctx, "switch.request.started", map[string]any{"method": http.MethodPost, "path": "/switch/v1/ivr-assets"})
 	client := &http.Client{Timeout: 120 * time.Second}
 	if c.http != nil && c.http.Transport != nil {
 		client.Transport = c.http.Transport
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		observability.Emit(ctx, "switch.request.failed", map[string]any{"method": http.MethodPost, "path": "/switch/v2/ivr-assets", "error": err.Error()})
+		observability.Emit(ctx, "switch.request.failed", map[string]any{"method": http.MethodPost, "path": "/switch/v1/ivr-assets", "error": err.Error()})
 		return IVRAsset{}, err
 	}
 	defer func() { _ = res.Body.Close() }()
 	var out IVRAsset
 	err = httpapi.Decode(res, &out)
-	fields := map[string]any{"method": http.MethodPost, "path": "/switch/v2/ivr-assets", "status": res.StatusCode}
+	fields := map[string]any{"method": http.MethodPost, "path": "/switch/v1/ivr-assets", "status": res.StatusCode}
 	if err != nil {
 		fields["error"] = err.Error()
 		observability.Emit(ctx, "switch.request.failed", fields)

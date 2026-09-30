@@ -13,7 +13,6 @@ import (
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 	"open-switch/internal/scope"
-	"open-switch/internal/store"
 	"open-switch/internal/store/models"
 )
 
@@ -21,6 +20,11 @@ func (s *Service) versionFor(ctx context.Context, appID string) (int64, error) {
 	if version := scope.ConfigVersion(ctx); version > 0 {
 		return version, nil
 	}
+	return activeVersion(s.db.WithContext(ctx), "")
+}
+
+// ActiveVersion 实现 ports.ConfigSnapshotPort。
+func (s *Service) ActiveVersion(ctx context.Context) (int64, error) {
 	return activeVersion(s.db.WithContext(ctx), "")
 }
 
@@ -113,7 +117,7 @@ func (s *Service) ResolveDID(ctx context.Context, trunkID, did string) (ports.DI
 		TargetID      *string
 	}
 	var found row
-	q := s.db.WithContext(ctx).Raw(`SELECT d.d.config_version, d.id, d.trunk_id,
+	q := s.db.WithContext(ctx).Raw(`SELECT d.config_version, d.id, d.trunk_id,
  d.normalized_did AS did, d.target_type, d.target_id
 FROM os_did_routes d
 JOIN os_active_config a ON a.version = d.config_version
@@ -157,14 +161,14 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 		}
 		videoClause := ""
 		order := "s.updated_at, s.agent_id"
-		args := []any{version, "", req.QueueID, "", version, req.QueueID}
+		args := []any{version, req.QueueID, version, req.QueueID}
 		extra := ""
 		for _, skillID := range req.SkillIDs {
 			extra += " AND EXISTS (SELECT 1 FROM os_agent_skills ask WHERE ask.config_version = ? AND ask.agent_id = s.agent_id AND ask.skill_id = ?)"
 			args = append(args, version, skillID)
 		}
 		if queue.DispatchStrategy == "round_robin" {
-			if err := tx.Exec("INSERT INTO os_queue_dispatch_cursor (queue_id,last_agent_id) VALUES (?,?,'') ON CONFLICT DO NOTHING", req.QueueID).Error; err != nil {
+			if err := tx.Exec("INSERT INTO os_queue_dispatch_cursor (queue_id, last_agent_id) VALUES (?, '') ON CONFLICT DO NOTHING", req.QueueID).Error; err != nil {
 				return err
 			}
 			var last string
@@ -181,11 +185,11 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 FROM os_agent_sessions s
 JOIN os_agents a ON a.config_version = ? AND a.id = s.agent_id
 JOIN os_agent_session_queues sq ON sq.agent_id = s.agent_id
-WHERE s.sq.queue_id = ? AND s.state = 'idle' AND s.pending_checkout = FALSE AND a.enabled = TRUE` + videoClause + `
+WHERE sq.queue_id = ? AND s.state = 'idle' AND s.pending_checkout = FALSE AND a.enabled = TRUE` + videoClause + `
 AND EXISTS (SELECT 1 FROM os_queue_agents qa WHERE qa.config_version = a.config_version AND qa.queue_id = sq.queue_id AND qa.agent_id = s.agent_id)
 AND NOT EXISTS (
  SELECT 1 FROM os_queue_skills qs
- WHERE qs.qs.config_version = ? AND qs.queue_id = ?
+ WHERE qs.config_version = ? AND qs.queue_id = ?
  AND NOT EXISTS (SELECT 1 FROM os_agent_skills ags WHERE ags.config_version = qs.config_version AND ags.agent_id = s.agent_id AND ags.skill_id = qs.skill_id)
 )
 ` + extra + " ORDER BY " + order + " LIMIT 1 FOR UPDATE OF s SKIP LOCKED"
@@ -209,19 +213,19 @@ AND NOT EXISTS (
 			return err
 		}
 		if queue.DispatchStrategy == "round_robin" {
-			if err := tx.Exec("UPDATE os_queue_dispatch_cursor SET last_agent_id = ? WHERE queue_id = ?", picked, "", req.QueueID).Error; err != nil {
+			if err := tx.Exec("UPDATE os_queue_dispatch_cursor SET last_agent_id = ? WHERE queue_id = ?", picked, req.QueueID).Error; err != nil {
 				return err
 			}
 		}
-		if err := tx.Exec(`INSERT INTO os_acd_attempts (id,call_id,queue_id,agent_id,attempt,state,started_at)
- SELECT ?,?,?,?,?,COALESCE(MAX(attempt),0)+1,'offering',? FROM os_acd_attempts WHERE call_id=?`,
-			uuid.New().String(), "", req.CallID, req.QueueID, picked, now, req.CallID).Error; err != nil {
+		if err := tx.Exec(`INSERT INTO os_acd_attempts (id, call_id, queue_id, agent_id, attempt, state, started_at)
+ SELECT ?, ?, ?, ?, COALESCE(MAX(attempt), 0) + 1, 'offering', ? FROM os_acd_attempts WHERE call_id = ?`,
+			uuid.New().String(), req.CallID, req.QueueID, picked, now, req.CallID).Error; err != nil {
 			return err
 		}
-		if err := publishAgentTx(ctx, tx, req.CallID, picked, "ringing", "acd"); err != nil {
+		if err := s.publishAgentTx(ctx, tx, req.CallID, picked, "ringing", "acd"); err != nil {
 			return err
 		}
-		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{
+		return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{
 			CallID: req.CallID, AgentID: picked, Type: "acd.agent_reserved",
 			Payload: map[string]any{"call_id": req.CallID, "queue_id": req.QueueID, "agent_id": picked},
 		})
@@ -326,7 +330,7 @@ func (s *Service) setState(ctx context.Context, callID, agentID, fromState, toSt
 				return err
 			}
 		}
-		return publishAgentTx(ctx, tx, callID, agentID, toState, reason)
+		return s.publishAgentTx(ctx, tx, callID, agentID, toState, reason)
 	})
 	return err
 }
@@ -393,7 +397,7 @@ func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string
 		if err := tx.Create(&models.AgentStateLog{ID: uuid.New().String(), AgentID: agentID, FromState: "offline", ToState: "idle", Reason: "check-in", CreatedAt: now}).Error; err != nil {
 			return err
 		}
-		return publishAgentTx(ctx, tx, "", agentID, "idle", "check-in")
+		return s.publishAgentTx(ctx, tx, "", agentID, "idle", "check-in")
 	})
 	if err != nil {
 		return ports.AgentSessionView{}, err
@@ -490,8 +494,8 @@ func (s *Service) ForQueue(ctx context.Context, queueID string) (dto.RecordingPo
 	return out, nil
 }
 
-func publishAgentTx(ctx context.Context, tx *gorm.DB, callID, agentID, state, reason string) error {
-	return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: callID, AgentID: agentID, TargetOnly: true, Type: "agent.routing_state_changed", Payload: map[string]any{"agent_id": agentID, "state": state, "busy_reason": reason, "reason": reason, "call_id": callID}})
+func (s *Service) publishAgentTx(ctx context.Context, tx *gorm.DB, callID, agentID, state, reason string) error {
+	return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{CallID: callID, AgentID: agentID, TargetOnly: true, Type: "agent.routing_state_changed", Payload: map[string]any{"agent_id": agentID, "state": state, "busy_reason": reason, "reason": reason, "call_id": callID}})
 }
 
 func nullableUUID(value string) any {

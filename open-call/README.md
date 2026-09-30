@@ -2,7 +2,7 @@
 
 呼叫中心服务：坐席/队列等业务主数据、CDR 与录音元数据、对浏览器 **REST/WS**，并通过 BFF 经 `switchapi` 调用 open-switch 通话信令（IVR 资源上传仍走受限代理）。
 
-open-call 在 BFF 校验终端权限后调用 Switch；配置发布到 `/switch/v2/configuration/...`；Switch 通过其配置的 **HTTP callback**（`events_callback_url`）推送事件到 CC 并投影话单/录音。CC↔Switch **无鉴权**（内网部署）；见 [runbook](../docs/switch-standalone-runbook.md)。
+open-call 在 BFF 校验终端权限后调用 Switch；配置发布到 `/switch/v1/configuration/...`；Switch 通过其配置的 **HTTP callback**（`events_callback_url`）推送事件到 CC 并投影话单/录音。CC↔Switch **无鉴权**（内网部署）；见 [runbook](../docs/switch-standalone-runbook.md)。
 
 - 对接说明：[../docs/open-switch对接说明.md](../docs/open-switch对接说明.md)
 - 浏览器 API 契约：[../docs/api/openapi.yaml](../docs/api/openapi.yaml)

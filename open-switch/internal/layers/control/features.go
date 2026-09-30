@@ -109,6 +109,9 @@ func (s *Service) RespondVideo(ctx context.Context, callID string, accept bool) 
 func (s *Service) DowngradeVideo(ctx context.Context, callID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	rt := s.calls[callID]
 	if rt != nil {
@@ -118,7 +121,10 @@ func (s *Service) DowngradeVideo(ctx context.Context, callID string) error {
 	if rt == nil {
 		return errs.NotFound("通话不存在")
 	}
-	_ = s.deps.Calls.UpdateCall(ctx, rt.rec)
+	if err := s.deps.Calls.UpdateCall(ctx, rt.rec); err != nil {
+		return err
+	}
+	rt.rec.Version++
 	_ = s.deps.Media.RequestRenegotiation(ctx, callID, "", false)
 	_ = s.cdrUpsert(ctx, callID, "answered")
 	return s.publishCall(ctx, callID, "video.downgraded", "", map[string]any{"call_id": callID, "session_type": "audio"})

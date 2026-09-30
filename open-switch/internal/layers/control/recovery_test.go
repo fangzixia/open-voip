@@ -86,6 +86,7 @@ type recoveryIVRCfg struct {
 	payload string
 }
 
+func (recoveryIVRCfg) ActiveVersion(context.Context) (int64, error) { return 1, nil }
 func (c recoveryIVRCfg) GetQueue(_ context.Context, id string) (ports.QueueSnapshot, error) {
 	return ports.QueueSnapshot{ConfigVersion: 1, ID: id, MaxWaitSec: 300}, nil
 }

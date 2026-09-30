@@ -69,7 +69,7 @@ func TestConfigurationIsolationAndConcurrentDispatch(t *testing.T) {
 	errors := make(chan error, 8)
 	callID := uuid.New().String()
 	now := time.Now().UTC()
-	if err := store.NewCallStore(db).InsertCall(ctx, ports.CallRecord{ID: callID, ConfigVersion: &v.Version, Direction: "inbound", State: "queued", QueueID: &q, SessionType: dto.SessionTypeAudio, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := store.NewCallStore(db, events).InsertCall(ctx, ports.CallRecord{ID: callID, ConfigVersion: &v.Version, Direction: "inbound", State: "queued", QueueID: &q, SessionType: dto.SessionTypeAudio, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 8; i++ {

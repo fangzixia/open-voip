@@ -3,7 +3,7 @@
 面向**第三方业务系统**开发人员：说明如何与 softswitch（open-switch）对接。  
 业务系统扮演呼叫中心业务面角色；Switch 负责媒体、呼叫状态机、ACD/IVR/录音。
 
-基路径：`{switch_base_url}/switch/v2`  
+基路径：`{switch_base_url}/switch/v1`  
 字段与路径以当前实现为准；冲突时以 Switch 代码为准。
 
 ---
@@ -11,7 +11,7 @@
 ## 1. 交互模型
 
 ```
-业务系统  ──HTTP──►  open-switch /switch/v2     （命令、配置、信令）
+业务系统  ──HTTP──►  open-switch /switch/v1     （命令、配置、信令）
 open-switch ──HTTP POST──► 业务系统 callback URL （事件推送）
 ```
 
@@ -169,7 +169,7 @@ integration:
 ### 2.8 IVR 业务动作回填
 
 ```http
-POST /switch/v2/calls/{callId}/business-actions/{actionId}/complete
+POST /switch/v1/calls/{callId}/business-actions/{actionId}/complete
 ```
 
 | 字段 | 类型 | 说明 |
@@ -330,7 +330,7 @@ PATCH 合并：字符串/数值非空才覆盖；`skill_ids`/`agent_ids` 非 nul
 | `payload` | object | 类型相关载荷 |
 | `created_at` | time | UTC |
 
-对账：`GET /switch/v2/events?after_id=&limit=` → `{ items: Event[] }`。
+对账：`GET /switch/v1/events?after_id=&limit=` → `{ items: Event[] }`。
 
 ### 4.3 主要事件类型
 
@@ -437,8 +437,10 @@ open-call 的 `oc_queues` / `oc_did_routes` 等为遗留镜像，访客签发与
 3. Switch **先落库再推送**；Ack 失败会重试，业务侧须幂等  
 4. 同 `call_id` 命令串行；配合 `expected_version` 与 `Idempotency-Key`  
 5. 仅当前 offered 坐席可 Answer  
-6. 录音通常在接通后开始；挂断先停录再 CDR / `call.ended`  
+6. 录音通常在接通后开始；无队列通话默认不录音（`off`），须显式策略才录  
 7. `business_action` 须在 deadline（及推送超时）内回填  
+8. **单实例部署**：控制面 FSM / 媒体 / SIP registrar 不跨进程；勿多活共享库  
+9. 呼入 `config_version` 由 Switch 从激活配置或 DID/队列注入，客户端不可伪造  
 
 联调检查：
 

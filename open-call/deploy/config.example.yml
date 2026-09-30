@@ -1,4 +1,4 @@
-# open-call 配置示例（呼叫中心：/api/v1 + BFF → open-switch /switch/v2）
+# open-call 配置示例（呼叫中心：/api/v1 + BFF → open-switch /switch/v1）
 # CC↔Switch 无鉴权；事件 callback URL 由 Switch 侧配置。
 
 server:

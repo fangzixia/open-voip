@@ -54,7 +54,7 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 			httpapi.Error(w, errs.Forbidden("无权限"))
 			return
 		}
-		if p.IsGuest() && (strings.Contains(r.URL.Path, "/supervisor/") || strings.HasSuffix(r.URL.Path, "/outbound") || strings.HasPrefix(r.URL.Path, "/switch/v2/ivr-assets")) {
+		if p.IsGuest() && (strings.Contains(r.URL.Path, "/supervisor/") || strings.HasSuffix(r.URL.Path, "/outbound") || strings.HasPrefix(r.URL.Path, "/switch/v1/ivr-assets")) {
 			httpapi.Error(w, errs.Forbidden("无权限"))
 			return
 		}
@@ -81,7 +81,7 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 			return
 		}
 		r = r.Clone(r.Context())
-		r.URL.Path = strings.Replace(r.URL.Path, "/api/v1/ivr-assets", "/switch/v2/ivr-assets", 1)
+		r.URL.Path = strings.Replace(r.URL.Path, "/api/v1/ivr-assets", "/switch/v1/ivr-assets", 1)
 		ivrProxy.ServeHTTP(w, r)
 	}))
 
@@ -112,7 +112,7 @@ func isIVRAssetPath(path string) bool {
 }
 
 func switchPermission(method, path string) string {
-	if strings.HasPrefix(path, "/switch/v2/ivr-assets") {
+	if strings.HasPrefix(path, "/switch/v1/ivr-assets") {
 		if method == http.MethodGet {
 			return "ivr.read"
 		}
@@ -131,7 +131,7 @@ func switchPermission(method, path string) string {
 }
 
 func switchCallID(path string) string {
-	for _, prefix := range []string{"/switch/v2/calls/", "/switch/v2/supervisor/calls/"} {
+	for _, prefix := range []string{"/switch/v1/calls/", "/switch/v1/supervisor/calls/"} {
 		if strings.HasPrefix(path, prefix) {
 			id := strings.Split(strings.TrimPrefix(path, prefix), "/")[0]
 			return observability.NormalizeID(id)
@@ -143,15 +143,15 @@ func switchCallID(path string) string {
 func mapSwitchPath(path string) string {
 	switch {
 	case path == "/api/v1/calls/outbound":
-		return "/switch/v2/calls/outbound"
+		return "/switch/v1/calls/outbound"
 	case path == "/api/v1/calls":
-		return "/switch/v2/calls"
+		return "/switch/v1/calls"
 	case strings.HasPrefix(path, "/api/v1/calls/"):
-		return strings.Replace(path, "/api/v1/calls/", "/switch/v2/calls/", 1)
+		return strings.Replace(path, "/api/v1/calls/", "/switch/v1/calls/", 1)
 	case strings.HasPrefix(path, "/api/v1/supervisor/calls/"):
-		return strings.Replace(path, "/api/v1/supervisor/calls/", "/switch/v2/supervisor/calls/", 1)
+		return strings.Replace(path, "/api/v1/supervisor/calls/", "/switch/v1/supervisor/calls/", 1)
 	case strings.HasPrefix(path, "/api/v1/supervisor/agents/"):
-		return strings.Replace(path, "/api/v1/supervisor/agents/", "/switch/v2/supervisor/agents/", 1)
+		return strings.Replace(path, "/api/v1/supervisor/agents/", "/switch/v1/supervisor/agents/", 1)
 	default:
 		return path
 	}

@@ -15,12 +15,13 @@ import (
 
 // CallStore 实现 CallPersistencePort。
 type CallStore struct {
-	db *gorm.DB
+	db     *gorm.DB
+	events CallEvents
 }
 
 // NewCallStore 创建通话持久化适配器。
-func NewCallStore(db *gorm.DB) *CallStore {
-	return &CallStore{db: db}
+func NewCallStore(db *gorm.DB, events CallEvents) *CallStore {
+	return &CallStore{db: db, events: events}
 }
 
 var _ ports.CallPersistencePort = (*CallStore)(nil)
@@ -53,14 +54,14 @@ func (s *CallStore) InsertCall(ctx context.Context, rec ports.CallRecord) error 
 				return err
 			}
 		}
-		return (CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: rec.ID, Version: 1, Type: "call.created", Payload: map[string]any{"call_id": rec.ID, "direction": rec.Direction}})
+		return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{CallID: rec.ID, Version: 1, Type: "call.created", Payload: map[string]any{"call_id": rec.ID, "direction": rec.Direction}})
 	})
 }
 
 // InsertCallWithLeg 在同一事务中创建通话及其第一条腿。
 func (s *CallStore) InsertCallWithLeg(ctx context.Context, rec ports.CallRecord, leg ports.CallLegRecord) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		store := &CallStore{db: tx}
+		store := &CallStore{db: tx, events: s.events}
 		if err := store.InsertCall(ctx, rec); err != nil {
 			return err
 		}
@@ -116,7 +117,7 @@ func (s *CallStore) UpdateCall(ctx context.Context, rec ports.CallRecord) error 
 		} else if err := tx.Exec("UPDATE os_queue_entries SET state=? WHERE call_id=?", rec.State, rec.ID).Error; err != nil {
 			return err
 		}
-		return (CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: rec.ID, Version: current.Version, Type: "call.state_changed", Payload: map[string]any{"call_id": rec.ID, "state": rec.State, "queue_id": rec.QueueID, "version": current.Version}})
+		return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{CallID: rec.ID, Version: current.Version, Type: "call.state_changed", Payload: map[string]any{"call_id": rec.ID, "state": rec.State, "queue_id": rec.QueueID, "version": current.Version}})
 	})
 }
 

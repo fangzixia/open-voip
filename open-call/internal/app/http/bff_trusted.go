@@ -16,16 +16,16 @@ import (
 // Switch 信任服务命令；最终用户的通话及媒体腿权限由 BFF 在转发前检查。
 func prepareSwitchRequest(r *http.Request, p auth.Principal, client *switchapi.Client) error {
 	path := r.URL.Path
-	if path == "/switch/v2/calls/outbound" {
+	if path == "/switch/v1/calls/outbound" {
 		if p.AgentID == "" || p.IsGuest() {
 			return errs.Forbidden("仅坐席可外呼")
 		}
 		return setCommandFields(r, map[string]string{"agent_id": p.AgentID})
 	}
-	if strings.HasPrefix(path, "/switch/v2/ivr-assets") || strings.HasPrefix(path, "/switch/v2/supervisor/agents/") {
+	if strings.HasPrefix(path, "/switch/v1/ivr-assets") || strings.HasPrefix(path, "/switch/v1/supervisor/agents/") {
 		return nil
 	}
-	if strings.HasPrefix(path, "/switch/v2/supervisor/calls/") {
+	if strings.HasPrefix(path, "/switch/v1/supervisor/calls/") {
 		if p.AgentID == "" {
 			return errs.Forbidden("班长需要坐席资料")
 		}
@@ -43,7 +43,7 @@ func prepareSwitchRequest(r *http.Request, p auth.Principal, client *switchapi.C
 		return errs.Forbidden("不能操作该通话")
 	}
 	if strings.Contains(path, "/legs/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/switch/v2/calls/"), "/")
+		parts := strings.Split(strings.TrimPrefix(path, "/switch/v1/calls/"), "/")
 		if len(parts) >= 3 && !ownsLeg(p, parts[2], view) {
 			return errs.Forbidden("不能操作他人的媒体腿")
 		}
@@ -100,10 +100,10 @@ func isSwitchWrite(path string) bool {
 	if strings.HasSuffix(path, "/turn-credentials") {
 		return false
 	}
-	if path == "/switch/v2/calls/outbound" || strings.HasPrefix(path, "/switch/v2/supervisor/") {
+	if path == "/switch/v1/calls/outbound" || strings.HasPrefix(path, "/switch/v1/supervisor/") {
 		return true
 	}
-	if !strings.HasPrefix(path, "/switch/v2/calls/") {
+	if !strings.HasPrefix(path, "/switch/v1/calls/") {
 		return false
 	}
 	if strings.Contains(path, "/bridges/") || strings.HasSuffix(path, "/bridges") || strings.HasSuffix(path, "/bridge") {

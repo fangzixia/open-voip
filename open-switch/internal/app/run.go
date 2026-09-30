@@ -73,10 +73,10 @@ func Run(configPath string) error {
 		DB: db, CallbackURL: cfg.Integration.EventsCallbackURL, Log: log,
 	}
 	eventStore := store.CallEvents{DB: db, AfterAppend: integratorDispatch.Enqueue}
-	commandStore := store.Commands{DB: db}
+	commandStore := store.Commands{DB: db, Events: eventStore}
 	routingStore := store.RoutingSessions{DB: db}
 	ccCore := cccore.New(db, eventStore, cccore.Options{
-		RecordingMode: "audio",
+		RecordingMode: "off",
 		NotifyMessage: cfg.Recordings.NotifyMessage,
 		RetainDays:    cfg.Recordings.RetainDays,
 	})
@@ -87,7 +87,7 @@ func Run(configPath string) error {
 		Bridges: store.Bridges{DB: db}, IVRSessions: store.IVRSessions{DB: db},
 		Routing: routingStore,
 	}
-	callStore := store.NewCallStore(db)
+	callStore := store.NewCallStore(db, eventStore)
 	controlDeps.Calls = callStore
 	callControl := control.NewService(controlDeps)
 
@@ -161,6 +161,8 @@ func Run(configPath string) error {
 		}
 		return callControl.SIPSource(ctx, callID, from, destination)
 	})
+
+	log.Info("open-switch 以单实例模式启动（控制面/媒体不可双活共享库）", "listen", cfg.Server.Listen)
 
 	deps := apphttp.RouterDeps{
 		Config:      *cfg,

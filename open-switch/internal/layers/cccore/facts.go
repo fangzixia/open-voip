@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"gorm.io/gorm"
 	"open-switch/internal/datetime"
-	"open-switch/internal/store"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,7 +39,7 @@ func (s *Service) Upsert(ctx context.Context, req ports.CDRWriteRequest) error {
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return err
 		}
-		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: req.CallID, Type: "cdr.updated", Payload: payload})
+		return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{CallID: req.CallID, Type: "cdr.updated", Payload: payload})
 	})
 }
 
@@ -59,6 +58,6 @@ func (s *Service) Save(ctx context.Context, rec ports.RecordingMeta) error {
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return err
 		}
-		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: rec.CallID, Type: "recording.saved", Payload: payload})
+		return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{CallID: rec.CallID, Type: "recording.saved", Payload: payload})
 	})
 }

@@ -35,7 +35,7 @@ func TestLocalCCLifecycleIntegration(t *testing.T) {
 	svc.deps.Config = core
 	svc.deps.ACD = core
 	svc.deps.Agents = core
-	svc.deps.Calls = store.NewCallStore(db)
+	svc.deps.Calls = store.NewCallStore(db, events)
 	svc.deps.CDR = core
 	svc.deps.Recordings = core
 	svc.deps.CallEvents = events

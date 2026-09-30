@@ -29,16 +29,16 @@ func (bffAuth) Authenticate(_ context.Context, token string) (auth.Principal, er
 
 func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/switch/v2/calls/outbound" {
+		if r.URL.Path == "/switch/v1/calls/outbound" {
 			httpapi.Write(w, http.StatusOK, ports.CallView{ID: "new-call"})
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/switch/v2/calls/") && strings.HasSuffix(r.URL.Path, "/offer") {
+		if strings.HasPrefix(r.URL.Path, "/switch/v1/calls/") && strings.HasSuffix(r.URL.Path, "/offer") {
 			httpapi.Write(w, http.StatusOK, map[string]string{"sdp": "v=0", "type": "offer"})
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/switch/v2/internal/calls/") {
-			id := strings.TrimPrefix(r.URL.Path, "/switch/v2/internal/calls/")
+		if strings.HasPrefix(r.URL.Path, "/switch/v1/internal/calls/") {
+			id := strings.TrimPrefix(r.URL.Path, "/switch/v1/internal/calls/")
 			view := ports.CallView{ID: id, AgentID: "other", Legs: []ports.LegView{
 				{ID: "own-leg", Role: dto.LegRoleAgent, AgentID: "seat"},
 				{ID: "foreign-leg", Role: dto.LegRoleAgent, AgentID: "other"},
@@ -82,12 +82,12 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 		if r.Header.Get("X-Principal") != "" {
 			t.Error("end-user principal must not reach switch")
 		}
-		if r.URL.Path == "/switch/v2/internal/calls/call" || r.URL.Path == "/switch/v2/internal/calls/new-call" {
-			id := strings.TrimPrefix(r.URL.Path, "/switch/v2/internal/calls/")
+		if r.URL.Path == "/switch/v1/internal/calls/call" || r.URL.Path == "/switch/v1/internal/calls/new-call" {
+			id := strings.TrimPrefix(r.URL.Path, "/switch/v1/internal/calls/")
 			httpapi.Write(w, http.StatusOK, ports.CallView{ID: id, AgentID: "seat"})
 			return
 		}
-		if r.URL.Path == "/switch/v2/calls/call/hangup" {
+		if r.URL.Path == "/switch/v1/calls/call/hangup" {
 			requests++
 			httpapi.Write(w, http.StatusOK, nil)
 			return

@@ -10,7 +10,6 @@ import (
 	"gorm.io/gorm/clause"
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
-	"open-switch/internal/store"
 )
 
 // businessActionRow 映射 os_business_actions 表行。
@@ -41,7 +40,7 @@ func (s *Service) BeginBusinessAction(ctx context.Context, a ports.BusinessActio
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
-		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: a.CallID, Type: "business_action.requested", Payload: map[string]any{
+		return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{CallID: a.CallID, Type: "business_action.requested", Payload: map[string]any{
 			"call_id": a.CallID, "action_id": a.ID, "node_id": a.NodeID, "action": a.Action, "deadline": a.Deadline, "outcomes": a.Outcomes,
 		}})
 	})
@@ -110,6 +109,6 @@ func (s *Service) updateBusinessAction(ctx context.Context, id, outcome string, 
 		if err := tx.Model(&row).Updates(map[string]any{"status": status, "outcome": outcome, "updated_at": time.Now().UTC()}).Error; err != nil {
 			return err
 		}
-		return (store.CallEvents{DB: tx}).PublishCallEvent(ctx, ports.CallEvent{CallID: row.CallID, Type: kind, Payload: map[string]any{"call_id": row.CallID, "action_id": id, "outcome": outcome}})
+		return s.events.WithDB(tx).PublishCallEvent(ctx, ports.CallEvent{CallID: row.CallID, Type: kind, Payload: map[string]any{"call_id": row.CallID, "action_id": id, "outcome": outcome}})
 	})
 }

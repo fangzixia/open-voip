@@ -70,7 +70,14 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 		return ports.CallView{}, err
 	}
 	now := time.Now().UTC()
-	rec := ports.CallRecord{Version: 1, ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
+	var cfgVer *int64
+	if s.deps.Config != nil {
+		if v, err := s.deps.Config.ActiveVersion(ctx); err == nil && v > 0 {
+			cfgVer = &v
+			ctx = scope.WithConfigVersion(ctx, v)
+		}
+	}
+	rec := ports.CallRecord{Version: 1, ConfigVersion: cfgVer, ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
 	leg := ports.CallLegRecord{ID: uuid.New().String(), CallID: req.CallID, Role: req.InitialLegRole, CreatedAt: now}
 	if req.AgentID != "" {
 		leg.AgentID = &req.AgentID
@@ -111,8 +118,15 @@ func (s *Service) CreateStubCall(ctx context.Context, req dto.StubCallRequest) (
 		meta = string(raw)
 	}
 	now := time.Now().UTC()
+	var cfgVer *int64
+	if s.deps.Config != nil {
+		if v, err := s.deps.Config.ActiveVersion(ctx); err == nil && v > 0 {
+			cfgVer = &v
+			ctx = scope.WithConfigVersion(ctx, v)
+		}
+	}
 	rec := ports.CallRecord{
-		Version: 1, ID: req.CallID, BusinessRef: req.BusinessRef, Metadata: meta,
+		Version: 1, ConfigVersion: cfgVer, ID: req.CallID, BusinessRef: req.BusinessRef, Metadata: meta,
 		Direction: "internal", SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {

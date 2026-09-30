@@ -131,6 +131,16 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		if !q.PriorityEnabled {
 			req.Priority = 0
 		}
+	} else {
+		// 纯 IVR 入局：忽略客户端 config_version，钉死当前激活配置。
+		ver, err := s.deps.Config.ActiveVersion(ctx)
+		if err != nil {
+			return "", err
+		}
+		req.ConfigVersion = ver
+		if _, err := s.deps.Config.GetLatestIVR(ctx, req.IVRFlowID); err != nil {
+			return "", err
+		}
 	}
 	if req.ConfigVersion < 1 {
 		return "", errs.Forbidden("缺少已激活的配置作用域")
@@ -574,6 +584,9 @@ func (s *Service) Transfer(ctx context.Context, callID string, req dto.TransferR
 func (s *Service) CompleteTransfer(ctx context.Context, callID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
+	if err := s.guardExpectedVersion(ctx, callID); err != nil {
+		return err
+	}
 	return s.completeConsult(ctx, callID)
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
+	"open-switch/internal/store"
 	"open-switch/internal/store/models"
 )
 
@@ -30,13 +31,13 @@ type Options struct {
 // Service 是单个 Switch 数据库上的呼叫中心权威运行时。
 type Service struct {
 	db      *gorm.DB
-	events  ports.CallEventPublisher
+	events  store.CallEvents
 	options Options
 }
 
-func New(db *gorm.DB, events ports.CallEventPublisher, options Options) *Service {
+func New(db *gorm.DB, events store.CallEvents, options Options) *Service {
 	if options.RecordingMode == "" {
-		options.RecordingMode = "audio"
+		options.RecordingMode = "off"
 	}
 	if options.RetainDays <= 0 {
 		options.RetainDays = 90
@@ -74,7 +75,7 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 
 	var result models.ConfigVersion
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "config").Error; err != nil {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", configMutationLockID).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("checksum = ?", checksum).First(&result).Error; err == nil {
@@ -117,7 +118,7 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 func (s *Service) ActivateConfig(ctx context.Context, version int64) (ports.ConfigVersionView, error) {
 	var result models.ConfigVersion
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(67104232)").Error; err != nil {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", configMutationLockID).Error; err != nil {
 			return err
 		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("version = ?", version).First(&result).Error; err != nil {

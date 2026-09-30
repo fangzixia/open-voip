@@ -81,6 +81,8 @@ type BusinessHours struct {
 
 // ConfigSnapshotPort 由 L4 configpub 实现，L3 IVR/路由只读已发布配置。
 type ConfigSnapshotPort interface {
+	// ActiveVersion 当前激活配置版本；尚未激活时返回错误。
+	ActiveVersion(ctx context.Context) (int64, error)
 	// GetQueue 读取队列快照；不存在时返回错误。
 	GetQueue(ctx context.Context, queueID string) (QueueSnapshot, error)
 	// GetLatestIVR 读取流程最新已发布快照。

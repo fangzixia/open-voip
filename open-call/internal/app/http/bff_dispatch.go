@@ -19,21 +19,21 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 	callID := switchCallID(path)
 
 	switch {
-	case path == "/switch/v2/calls":
+	case path == "/switch/v1/calls":
 		items, err := client.ListOpenCalls(r.Context())
 		if err != nil {
 			return err
 		}
 		httpapi.Write(w, http.StatusOK, map[string]any{"items": items})
 		return nil
-	case callID != "" && path == "/switch/v2/calls/"+callID:
+	case callID != "" && path == "/switch/v1/calls/"+callID:
 		view, err := client.GetCall(r.Context(), callID)
 		if err != nil {
 			return err
 		}
 		httpapi.Write(w, http.StatusOK, view)
 		return nil
-	case callID != "" && (path == "/switch/v2/calls/"+callID+"/bridges" || path == "/switch/v2/calls/"+callID+"/bridge"):
+	case callID != "" && (path == "/switch/v1/calls/"+callID+"/bridges" || path == "/switch/v1/calls/"+callID+"/bridge"):
 		var body struct {
 			LegIDs []string `json:"leg_ids"`
 			LegA   string   `json:"leg_a"`
@@ -51,7 +51,7 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 		}
 		httpapi.Write(w, http.StatusOK, nil)
 		return nil
-	case path == "/switch/v2/calls/outbound":
+	case path == "/switch/v1/calls/outbound":
 		var req dto.OutboundRequest
 		if err := decodeBFFBody(r, &req); err != nil {
 			return err
@@ -213,7 +213,7 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 	}
 
 	if callID != "" && strings.Contains(path, "/legs/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/switch/v2/calls/"), "/")
+		parts := strings.Split(strings.TrimPrefix(path, "/switch/v1/calls/"), "/")
 		if len(parts) >= 3 && parts[1] == "legs" {
 			legID := parts[2]
 			switch parts[3] {
@@ -308,7 +308,7 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 	}
 
 	if callID != "" && strings.Contains(path, "/bridges/") && r.Method == http.MethodPut {
-		bridgeID := strings.Split(strings.TrimPrefix(path, "/switch/v2/calls/"+callID+"/bridges/"), "/")[0]
+		bridgeID := strings.Split(strings.TrimPrefix(path, "/switch/v1/calls/"+callID+"/bridges/"), "/")[0]
 		var body struct {
 			LegIDs []string `json:"leg_ids"`
 			LegA   string   `json:"leg_a"`
@@ -328,7 +328,7 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 		return nil
 	}
 	if callID != "" && strings.Contains(path, "/bridges/") && r.Method == http.MethodDelete {
-		bridgeID := strings.Split(strings.TrimPrefix(path, "/switch/v2/calls/"+callID+"/bridges/"), "/")[0]
+		bridgeID := strings.Split(strings.TrimPrefix(path, "/switch/v1/calls/"+callID+"/bridges/"), "/")[0]
 		if err := client.EndBridge(r.Context(), callID, bridgeID); err != nil {
 			return err
 		}
@@ -336,7 +336,7 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 		return nil
 	}
 
-	if strings.HasPrefix(path, "/switch/v2/supervisor/calls/") && strings.HasSuffix(path, "/listen") {
+	if strings.HasPrefix(path, "/switch/v1/supervisor/calls/") && strings.HasSuffix(path, "/listen") {
 		var body struct {
 			AgentID string `json:"agent_id"`
 		}
@@ -350,8 +350,8 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 		httpapi.Write(w, http.StatusOK, map[string]string{"leg_id": legID})
 		return nil
 	}
-	if strings.HasPrefix(path, "/switch/v2/supervisor/agents/") && strings.HasSuffix(path, "/force-check-out") {
-		agentID := strings.TrimSuffix(strings.TrimPrefix(path, "/switch/v2/supervisor/agents/"), "/force-check-out")
+	if strings.HasPrefix(path, "/switch/v1/supervisor/agents/") && strings.HasSuffix(path, "/force-check-out") {
+		agentID := strings.TrimSuffix(strings.TrimPrefix(path, "/switch/v1/supervisor/agents/"), "/force-check-out")
 		var body struct {
 			Policy string `json:"policy"`
 		}
