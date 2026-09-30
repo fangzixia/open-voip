@@ -63,12 +63,11 @@ type SwitchIVRConfig struct {
 	Version     int    `json:"version"`
 }
 type SwitchConfigVersion struct {
-	ApplicationID string     `json:"application_id"`
-	Version       int64      `json:"version"`
-	Status        string     `json:"status"`
-	Checksum      string     `json:"checksum"`
-	CreatedAt     time.Time  `json:"created_at"`
-	ActivatedAt   *time.Time `json:"activated_at,omitempty"`
+	Version     int64      `json:"version"`
+	Status      string     `json:"status"`
+	Checksum    string     `json:"checksum"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ActivatedAt *time.Time `json:"activated_at,omitempty"`
 }
 type SwitchAgentSession struct {
 	AgentID       string   `json:"agent_id"`
@@ -83,21 +82,14 @@ type SwitchActiveConfiguration struct {
 	Bundle  SwitchConfigBundle  `json:"bundle"`
 }
 
-type SwitchIVRFlowView struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	DraftJSON        string    `json:"draft_json"`
-	PublishedVersion int       `json:"published_version,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+type SwitchIVRPublishedView struct {
+	FlowID      string `json:"flow_id"`
+	Version     int    `json:"version"`
+	PayloadJSON string `json:"payload_json"`
 }
 
-type SwitchIVRVersionView struct {
-	FlowID      string    `json:"flow_id"`
-	Version     int       `json:"version"`
-	PayloadJSON string    `json:"payload_json"`
-	PublishedAt time.Time `json:"published_at"`
-}
+// SwitchIVRVersionView 与已发布视图同形（兼容旧命名）。
+type SwitchIVRVersionView = SwitchIVRPublishedView
 
 type SwitchAdminPort interface {
 	StoreConfig(context.Context, SwitchConfigBundle) (SwitchConfigVersion, error)
@@ -127,14 +119,10 @@ type SwitchAdminPort interface {
 	UpsertDIDConfig(context.Context, SwitchDIDConfig) (SwitchDIDConfig, error)
 	DeleteDIDConfig(context.Context, string) error
 
-	ListIVRFlows(context.Context) ([]SwitchIVRFlowView, error)
-	CreateIVRFlow(context.Context, string, string) (SwitchIVRFlowView, error)
-	GetIVRFlow(context.Context, string) (SwitchIVRFlowView, error)
-	UpdateIVRFlow(context.Context, string, string, string) (SwitchIVRFlowView, error)
+	ListIVRFlows(context.Context) ([]SwitchIVRPublishedView, error)
+	GetIVRFlow(context.Context, string) (SwitchIVRPublishedView, error)
+	UpsertIVRFlow(context.Context, string, string) (SwitchIVRPublishedView, error)
 	DeleteIVRFlow(context.Context, string) error
-	PublishIVRFlow(context.Context, string) (SwitchIVRVersionView, error)
-	ListIVRVersions(context.Context, string) ([]SwitchIVRVersionView, error)
-	RollbackIVRFlow(context.Context, string, int) (SwitchIVRVersionView, error)
 
 	CheckIn(context.Context, string, []string) (SwitchAgentSession, error)
 	CheckOut(context.Context, string) error

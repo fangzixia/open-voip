@@ -82,8 +82,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	r.Route("/api/v1", func(api chi.Router) {
 		if deps.SwitchEventHandler != nil {
-			api.With(middleware.IntegrationAuth(deps.Config.Integration.Secret)).
-				Post("/integration/switch/events", deps.SwitchEventHandler)
+			api.Post("/integration/switch/events", deps.SwitchEventHandler)
 		}
 
 		api.With(middleware.RateLimit(deps.Config.Security.LoginRequestsPerMin)).Post("/auth/login", deps.handleLogin)

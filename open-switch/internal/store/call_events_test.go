@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
 	"open-switch/internal/ports"
 	"open-switch/internal/store/migrate"
-	"uuid"
 )
 
 func TestCallEventsConcurrentCursorIntegration(t *testing.T) {

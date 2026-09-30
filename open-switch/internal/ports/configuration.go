@@ -68,12 +68,11 @@ type IVRConfig struct {
 }
 
 type ConfigVersionView struct {
-	ApplicationID string     `json:"application_id"`
-	Version       int64      `json:"version"`
-	Status        string     `json:"status"`
-	Checksum      string     `json:"checksum"`
-	CreatedAt     time.Time  `json:"created_at"`
-	ActivatedAt   *time.Time `json:"activated_at,omitempty"`
+	Version     int64      `json:"version"`
+	Status      string     `json:"status"`
+	Checksum    string     `json:"checksum"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ActivatedAt *time.Time `json:"activated_at,omitempty"`
 }
 
 // ActiveConfigurationView 当前激活的完整配置快照。
@@ -82,23 +81,15 @@ type ActiveConfigurationView struct {
 	Bundle  ConfigBundle      `json:"bundle"`
 }
 
-// IVRFlowView IVR 草稿视图。
-type IVRFlowView struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	DraftJSON        string    `json:"draft_json"`
-	PublishedVersion int       `json:"published_version,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+// IVRPublishedView 激活配置中的已发布 IVR。
+type IVRPublishedView struct {
+	FlowID      string `json:"flow_id"`
+	Version     int    `json:"version"`
+	PayloadJSON string `json:"payload_json"`
 }
 
-// IVRVersionView 已发布 IVR 版本。
-type IVRVersionView struct {
-	FlowID      string    `json:"flow_id"`
-	Version     int       `json:"version"`
-	PayloadJSON string    `json:"payload_json"`
-	PublishedAt time.Time `json:"published_at"`
-}
+// IVRVersionView 兼容别名（与已发布视图同形）。
+type IVRVersionView = IVRPublishedView
 
 type AgentSessionView struct {
 	AgentID       string   `json:"agent_id"`
@@ -146,14 +137,10 @@ type CallCenterAdminPort interface {
 	UpsertDIDConfig(context.Context, DIDConfig) (DIDConfig, error)
 	DeleteDIDConfig(context.Context, string) error
 
-	ListIVRFlows(context.Context) ([]IVRFlowView, error)
-	CreateIVRFlow(context.Context, string, string) (IVRFlowView, error)
-	GetIVRFlow(context.Context, string) (IVRFlowView, error)
-	UpdateIVRFlow(context.Context, string, string, string) (IVRFlowView, error)
+	ListIVRFlows(context.Context) ([]IVRPublishedView, error)
+	GetIVRFlow(context.Context, string) (IVRPublishedView, error)
+	UpsertIVRFlow(context.Context, string, string) (IVRPublishedView, error)
 	DeleteIVRFlow(context.Context, string) error
-	PublishIVRFlow(context.Context, string) (IVRVersionView, error)
-	ListIVRVersions(context.Context, string) ([]IVRVersionView, error)
-	RollbackIVRFlow(context.Context, string, int) (IVRVersionView, error)
 
 	CheckIn(context.Context, string, []string) (AgentSessionView, error)
 	CheckOut(context.Context, string) error

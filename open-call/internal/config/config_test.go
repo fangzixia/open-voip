@@ -52,10 +52,7 @@ func validBase() *Config {
 		JWT: JWTConfig{AccessTTLSec: 3600, RefreshTTLSec: 86400, SigningKey: "0123456789abcdef0123456789abcdef"},
 		Log: LogConfig{Level: "info", Format: "json"},
 		Integration: IntegrationConfig{
-			Secret:            "0123456789abcdef0123456789abcdef",
-			SwitchBaseURL:     "http://127.0.0.1:8082",
-			ApplicationID:     "cc-test",
-			EventsCallbackURL: "http://127.0.0.1:8080/api/v1/integration/switch/events",
+			SwitchBaseURL: "http://127.0.0.1:8082",
 		},
 	}
 }

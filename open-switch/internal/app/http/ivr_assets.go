@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"open-switch/internal/errs"
-	"uuid"
 )
 
 const maxIVRAssetBytes = 16 << 20
@@ -26,7 +26,7 @@ type ivrAsset struct {
 }
 
 func (d SwitchRouterDeps) ivrAssetDir(r *http.Request) string {
-	return filepath.Join(d.Config.Recordings.Dir, "prompts", scope.AssetNamespace(r.Context()))
+	return filepath.Join(d.Config.Recordings.Dir, "prompts", scope.AssetNamespace())
 }
 
 func (d SwitchRouterDeps) handleIVRAssets(w http.ResponseWriter, r *http.Request) {

@@ -7,8 +7,7 @@ import (
 
 // QueueSnapshot 队列只读快照，供 L3 路由与 IVR 使用。
 type QueueSnapshot struct {
-	ApplicationID string `json:"application_id"`
-	ConfigVersion int64  `json:"config_version"`
+	ConfigVersion int64 `json:"config_version"`
 	// ID 队列 UUID。
 	ID string `json:"id"`
 	// Name 队列名。
@@ -49,8 +48,7 @@ type IVRNodeSnapshot struct {
 
 // IVRSnapshot 已发布 IVR 快照。
 type IVRSnapshot struct {
-	ApplicationID string `json:"application_id"`
-	ConfigVersion int64  `json:"config_version"`
+	ConfigVersion int64 `json:"config_version"`
 	// SnapshotID 快照 UUID。
 	SnapshotID string `json:"snapshot_id"`
 	// FlowID 流程 ID。
@@ -65,7 +63,6 @@ type IVRSnapshot struct {
 
 // DIDRouteSnapshot 权威的呼入号码路由匹配结果。
 type DIDRouteSnapshot struct {
-	ApplicationID string `json:"application_id"`
 	ConfigVersion int64  `json:"config_version"`
 	RouteID       string `json:"route_id"`
 	TrunkID       string `json:"trunk_id"`

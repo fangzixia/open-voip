@@ -4,7 +4,6 @@ import "time"
 
 // Queue 呼入队列配置。
 type Queue struct {
-	ApplicationID string `gorm:"primaryKey;size:64"`
 	// ID 队列 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`
 	// Name 队列名称。
@@ -46,8 +45,7 @@ type Queue struct {
 
 // QueueSkill 队列所需技能。
 type QueueSkill struct {
-	ApplicationID string `gorm:"primaryKey;size:64"`
-	ConfigVersion int64  `gorm:"primaryKey;not null"`
+	ConfigVersion int64 `gorm:"primaryKey;not null"`
 	// QueueID 队列 ID。
 	QueueID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`
 	// SkillID 技能 ID。
@@ -62,8 +60,7 @@ func (Queue) TableName() string { return "os_queues" }
 
 // QueueAgent 队列与可签入坐席的绑定关系。
 type QueueAgent struct {
-	ApplicationID string `gorm:"primaryKey;size:64"`
-	ConfigVersion int64  `gorm:"primaryKey;not null"`
+	ConfigVersion int64 `gorm:"primaryKey;not null"`
 	// QueueID 队列 ID。
 	QueueID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`
 	// AgentID 坐席 ID。

@@ -105,7 +105,7 @@ func VersionConflict(view any, msg string) *APIError {
 	return &APIError{Kind: "conflict", Code: "VERSION_MISMATCH", Message: msg, HTTP: http.StatusConflict, Data: view}
 }
 
-// CursorExpired 事件游标早于保留窗口（HTTP 410）。
+// CursorExpired 事件游标早于最早可用事件（HTTP 410）。
 func CursorExpired(msg string) *APIError {
 	return &APIError{Kind: "cursor_expired", Code: "CURSOR_EXPIRED", Message: msg, HTTP: http.StatusGone}
 }

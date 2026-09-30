@@ -69,11 +69,9 @@ func Run(configPath string) error {
 		return fmt.Errorf("媒体层: %w", err)
 	}
 
-	appRegistry := store.NewApplicationRegistry(db)
-	if err := appRegistry.Reload(context.Background()); err != nil {
-		return fmt.Errorf("加载 integrator 登记: %w", err)
+	integratorDispatch := &integration.Dispatcher{
+		DB: db, CallbackURL: cfg.Integration.EventsCallbackURL, Log: log,
 	}
-	integratorDispatch := &integration.Dispatcher{DB: db, Registry: appRegistry, Log: log}
 	eventStore := store.CallEvents{DB: db, AfterAppend: integratorDispatch.Enqueue}
 	commandStore := store.Commands{DB: db}
 	routingStore := store.RoutingSessions{DB: db}
@@ -90,11 +88,6 @@ func Run(configPath string) error {
 		Routing: routingStore,
 	}
 	callStore := store.NewCallStore(db)
-	limits := map[string]int{}
-	for _, application := range appRegistry.List() {
-		limits[application.ID] = application.MaxConcurrentCalls
-	}
-	callStore.SetApplicationLimits(limits)
 	controlDeps.Calls = callStore
 	callControl := control.NewService(controlDeps)
 
@@ -115,11 +108,10 @@ func Run(configPath string) error {
 		if err != nil {
 			return "", "", err
 		}
-		ctx = scope.WithApplication(ctx, route.ApplicationID)
 		ctx = scope.WithConfigVersion(ctx, route.ConfigVersion)
 		req := dto.InboundRequest{
-			ApplicationID: route.ApplicationID, ConfigVersion: route.ConfigVersion,
-			CallID: callID, Caller: from, SessionType: dto.SessionTypeAudio,
+			ConfigVersion: route.ConfigVersion,
+			CallID:        callID, Caller: from, SessionType: dto.SessionTypeAudio,
 		}
 		switch route.TargetType {
 		case "queue":
@@ -130,8 +122,8 @@ func Run(configPath string) error {
 			return "", "", fmt.Errorf("DID 路由目标类型无效: %s", route.TargetType)
 		}
 		id, err := callControl.StartInbound(ctx, dto.InboundRequest{
-			ApplicationID: req.ApplicationID, ConfigVersion: req.ConfigVersion,
-			CallID: req.CallID, QueueID: req.QueueID, IVRFlowID: req.IVRFlowID,
+			ConfigVersion: req.ConfigVersion,
+			CallID:        req.CallID, QueueID: req.QueueID, IVRFlowID: req.IVRFlowID,
 			Caller: req.Caller, SessionType: req.SessionType,
 		})
 		if err != nil {
@@ -150,20 +142,16 @@ func Run(configPath string) error {
 	}
 	mediaSvc.SetInboundHandler(startInbound)
 	mediaSvc.SetDeviceHandler(func(ctx context.Context, _ string, destination, from, callID string) (string, string, error) {
-		appID := ""
+		known := false
 		for _, device := range cfg.SIP.Devices {
 			if device.Username == from {
-				appID = device.ApplicationID
+				known = true
 				break
 			}
 		}
-		if appID == "" {
-			return "", "", errs.Forbidden("设备缺少应用绑定")
+		if !known {
+			return "", "", fmt.Errorf("未知 SIP 设备用户")
 		}
-		if !appRegistry.Exists(appID) {
-			return "", "", errs.Forbidden("application 未登记")
-		}
-		ctx = scope.WithApplication(ctx, appID)
 		_, routeErr := ccCore.ResolveDID(ctx, "*", destination)
 		if routeErr == nil {
 			return startInbound(ctx, "*", destination, from, callID)
@@ -180,7 +168,7 @@ func Run(configPath string) error {
 		Signaling:   callControl,
 	}
 	switchDeps := apphttp.SwitchRouterDeps{
-		Config: *cfg, Applications: appRegistry, RouterDeps: deps, Runtime: callControl, Events: &eventStore,
+		Config: *cfg, RouterDeps: deps, Runtime: callControl, Events: &eventStore,
 		Commands: &commandStore, Routing: &routingStore,
 		Direct: callControl, Admin: ccCore, BusinessActions: callControl,
 	}
@@ -196,7 +184,6 @@ func Run(configPath string) error {
 	defer cancel()
 	go monitorLogDisk(ctx, log, cfg.Log.Dir)
 	integratorDispatch.Start(ctx)
-	go runEventRetention(ctx, eventStore, appRegistry, log)
 	go callControl.Run(ctx)
 	go func() {
 		if err := mediaSvc.ServeSIP(ctx); err != nil {

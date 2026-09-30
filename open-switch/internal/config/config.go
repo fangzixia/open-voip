@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -29,16 +30,14 @@ type Config struct {
 	TURN TURNConfig `yaml:"turn"`
 	// SIP 可选 PSTN 中继；未启用则不监听 5060。
 	SIP SIPConfig `yaml:"sip"`
-	// Integration 保护 integrator 登记接口；租户由业务方 register API 登记。
+	// Integration 与唯一业务 CC 的回调对接（无鉴权，依赖内网隔离）。
 	Integration IntegrationConfig `yaml:"integration"`
 }
 
-// IntegrationConfig 控制 /integrations/register 等登记入口。
+// IntegrationConfig 配置向 CC 推送事件的回调地址。
 type IntegrationConfig struct {
-	// RegisterToken 登记与轮换 secret 时要求的 X-Register-Token；生产环境应配置。
-	RegisterToken string `yaml:"register_token"`
-	// AllowOpenRegister 为 true 且库内尚无租户时，允许无 token 登记（仅演示）。
-	AllowOpenRegister bool `yaml:"allow_open_register"`
+	// EventsCallbackURL CC 接收事件的完整 HTTP(S) URL。
+	EventsCallbackURL string `yaml:"events_callback_url"`
 }
 
 // ServerConfig 定义 HTTP(S) 监听地址。
@@ -101,10 +100,9 @@ type SIPConfig struct {
 }
 
 type SIPDeviceConfig struct {
-	ApplicationID string   `yaml:"application_id"`
-	Username      string   `yaml:"username"`
-	Password      string   `yaml:"password"`
-	AllowedCIDRs  []string `yaml:"allowed_cidrs"`
+	Username     string   `yaml:"username"`
+	Password     string   `yaml:"password"`
+	AllowedCIDRs []string `yaml:"allowed_cidrs"`
 }
 
 // SIPTrunkConfig 单条中继。
@@ -212,6 +210,12 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Database.DSN) == "" {
 		errs = append(errs, "database.dsn 不能为空")
 	}
+	cb := strings.TrimSpace(c.Integration.EventsCallbackURL)
+	if cb == "" {
+		errs = append(errs, "integration.events_callback_url 不能为空")
+	} else if u, err := url.Parse(cb); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		errs = append(errs, "integration.events_callback_url 必须为绝对 http(s) URL")
+	}
 	if strings.TrimSpace(c.Recordings.Dir) == "" {
 		errs = append(errs, "recordings.dir 不能为空")
 	}
@@ -285,10 +289,6 @@ func (c *Config) Validate() error {
 		}
 		seen := map[string]bool{}
 		for _, d := range c.SIP.Devices {
-			aid := strings.TrimSpace(d.ApplicationID)
-			if aid == "" || strings.ContainsAny(aid, " /\\:@\r\n\t") {
-				errs = append(errs, "SIP 设备必须配置有效 application_id")
-			}
 			if d.Username == "" || seen[d.Username] || strings.ContainsAny(d.Username, " @:;\r\n") {
 				errs = append(errs, "SIP 设备用户名无效或重复")
 			}

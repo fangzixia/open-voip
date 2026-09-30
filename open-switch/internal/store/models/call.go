@@ -4,7 +4,6 @@ import "time"
 
 // Call 表示一通呼叫中心会话，媒体 Room ID 与此 ID 一致。
 type Call struct {
-	ApplicationID string `gorm:"size:64;not null;index"`
 	BusinessRef   string `gorm:"not null;default:''"`
 	Metadata      string `gorm:"type:text;not null;default:'{}'"`
 	Version       int64  `gorm:"not null;default:1"`
@@ -41,7 +40,6 @@ func (Call) TableName() string { return "os_calls" }
 
 // CallLeg 表示通话中的一条媒体腿（客户、坐席、IVR 等）。
 type CallLeg struct {
-	ApplicationID string `gorm:"size:64;not null;index"`
 	// ID 通话腿 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:通话腿 ID"`
 	// CallID 所属通话。

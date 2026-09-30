@@ -76,11 +76,12 @@ func TestSIPRejectsUnknownCodecAndTLSWithoutCert(t *testing.T) {
 
 func validBase() *Config {
 	return &Config{
-		Server:     ServerConfig{Listen: ":8080"},
-		Database:   DatabaseConfig{DSN: "host=localhost"},
-		Recordings: RecordingsConfig{Dir: "./data"},
-		Log:        LogConfig{Level: "info", Format: "json"},
-		ICE:        ICEConfig{UDPPortMin: 10000, UDPPortMax: 20000},
+		Server:      ServerConfig{Listen: ":8080"},
+		Database:    DatabaseConfig{DSN: "host=localhost"},
+		Recordings:  RecordingsConfig{Dir: "./data"},
+		Log:         LogConfig{Level: "info", Format: "json"},
+		ICE:         ICEConfig{UDPPortMin: 10000, UDPPortMax: 20000},
+		Integration: IntegrationConfig{EventsCallbackURL: "http://127.0.0.1:8080/internal/switch/events"},
 	}
 }
 

@@ -3,12 +3,16 @@ package ivr
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+	"uuid"
+
 	"open-call/internal/errs"
 	"open-call/internal/ports"
+	"open-call/internal/store/models"
 )
 
 type Node struct {
@@ -54,14 +58,17 @@ type SnapshotDTO struct {
 }
 
 type Service struct {
+	db *gorm.DB
 	sw ports.SwitchAdminPort
 }
 
-func NewService(sw ports.SwitchAdminPort) *Service { return &Service{sw: sw} }
+func NewService(db *gorm.DB, sw ports.SwitchAdminPort) *Service {
+	return &Service{db: db, sw: sw}
+}
 
 func (s *Service) List(ctx context.Context) ([]FlowDTO, error) {
-	rows, err := s.sw.ListIVRFlows(ctx)
-	if err != nil {
+	var rows []models.IVRFlow
+	if err := s.db.WithContext(ctx).Order("created_at").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]FlowDTO, 0, len(rows))
@@ -83,45 +90,66 @@ func (s *Service) Create(ctx context.Context, name string, draft Doc) (FlowDTO, 
 	if len(draft.Nodes) > 100 {
 		return FlowDTO{}, errs.InvalidRequest("IVR 节点不能超过 100 个")
 	}
-	raw, _ := json.Marshal(draft)
-	created, err := s.sw.CreateIVRFlow(ctx, name, string(raw))
+	if len(draft.Nodes) == 0 {
+		draft = Doc{Start: "end", Nodes: map[string]Node{"end": {Type: "hangup"}}}
+	}
+	raw, err := json.Marshal(draft)
 	if err != nil {
 		return FlowDTO{}, err
 	}
-	return s.flowDTO(ctx, created)
+	now := time.Now().UTC()
+	row := models.IVRFlow{ID: uuid.New().String(), Name: name, DraftJSON: string(raw), CreatedAt: now, UpdatedAt: now}
+	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return FlowDTO{}, err
+	}
+	return s.flowDTO(ctx, row)
 }
 
 func (s *Service) Update(ctx context.Context, id, name string, draft *Doc) (FlowDTO, error) {
-	var draftJSON, flowName string
+	var row models.IVRFlow
+	if err := s.db.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return FlowDTO{}, errs.NotFound("IVR 流程不存在")
+		}
+		return FlowDTO{}, err
+	}
+	updates := map[string]any{"updated_at": time.Now().UTC()}
 	if strings.TrimSpace(name) != "" {
-		flowName = strings.TrimSpace(name)
+		updates["name"] = strings.TrimSpace(name)
 	}
 	if draft != nil {
 		if len(draft.Nodes) > 100 {
 			return FlowDTO{}, errs.InvalidRequest("IVR 节点不能超过 100 个")
 		}
-		raw, _ := json.Marshal(draft)
-		draftJSON = string(raw)
+		raw, err := json.Marshal(draft)
+		if err != nil {
+			return FlowDTO{}, err
+		}
+		updates["draft_json"] = string(raw)
 	}
-	updated, err := s.sw.UpdateIVRFlow(ctx, id, flowName, draftJSON)
-	if err != nil {
+	if err := s.db.WithContext(ctx).Model(&row).Updates(updates).Error; err != nil {
 		return FlowDTO{}, err
 	}
-	return s.flowDTO(ctx, updated)
+	return s.Get(ctx, id)
 }
 
 func (s *Service) Get(ctx context.Context, id string) (FlowDTO, error) {
-	row, err := s.sw.GetIVRFlow(ctx, id)
-	if err != nil {
+	var row models.IVRFlow
+	if err := s.db.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return FlowDTO{}, errs.NotFound("IVR 流程不存在")
+		}
 		return FlowDTO{}, err
 	}
 	return s.flowDTO(ctx, row)
 }
 
 func (s *Service) Publish(ctx context.Context, id string) (SnapshotDTO, error) {
-	var row ports.SwitchIVRFlowView
-	row, err := s.sw.GetIVRFlow(ctx, id)
-	if err != nil {
+	var row models.IVRFlow
+	if err := s.db.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return SnapshotDTO{}, errs.NotFound("IVR 流程不存在")
+		}
 		return SnapshotDTO{}, err
 	}
 	var doc Doc
@@ -131,11 +159,25 @@ func (s *Service) Publish(ctx context.Context, id string) (SnapshotDTO, error) {
 	if err := s.validateDoc(ctx, doc); err != nil {
 		return SnapshotDTO{}, err
 	}
-	ver, err := s.sw.PublishIVRFlow(ctx, id)
-	if err != nil {
+	payload := strings.TrimSpace(row.DraftJSON)
+	var next int
+	if err := s.db.WithContext(ctx).Raw(
+		`SELECT COALESCE(MAX(version), 0) + 1 FROM oc_ivr_published_snapshots WHERE flow_id = ?`, id,
+	).Scan(&next).Error; err != nil {
 		return SnapshotDTO{}, err
 	}
-	return snapshotDTO(ver), nil
+	now := time.Now().UTC()
+	snap := models.IVRPublishedSnapshot{
+		ID: uuid.New().String(), FlowID: id, Version: next, PayloadJSON: payload, PublishedAt: now,
+	}
+	if err := s.db.WithContext(ctx).Create(&snap).Error; err != nil {
+		return SnapshotDTO{}, err
+	}
+	if _, err := s.sw.UpsertIVRFlow(ctx, id, payload); err != nil {
+		_ = s.db.WithContext(ctx).Delete(&models.IVRPublishedSnapshot{}, "id = ?", snap.ID)
+		return SnapshotDTO{}, err
+	}
+	return snapshotDTO(snap), nil
 }
 
 func (s *Service) Delete(ctx context.Context, id string) error {
@@ -148,12 +190,27 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 			return errs.Conflict("IVR 仍被队列引用", "")
 		}
 	}
-	return s.sw.DeleteIVRFlow(ctx, id)
+	if err := s.sw.DeleteIVRFlow(ctx, id); err != nil {
+		if api := errs.AsAPIError(err); api == nil || api.HTTP != 404 {
+			return err
+		}
+	}
+	res := s.db.WithContext(ctx).Delete(&models.IVRFlow{}, "id = ?", id)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errs.NotFound("IVR 流程不存在")
+	}
+	return nil
 }
 
 func (s *Service) ListVersions(ctx context.Context, id string) ([]SnapshotDTO, error) {
-	rows, err := s.sw.ListIVRVersions(ctx, id)
-	if err != nil {
+	if _, err := s.Get(ctx, id); err != nil {
+		return nil, err
+	}
+	var rows []models.IVRPublishedSnapshot
+	if err := s.db.WithContext(ctx).Where("flow_id = ?", id).Order("version desc").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]SnapshotDTO, 0, len(rows))
@@ -168,44 +225,55 @@ func (s *Service) ListSnapshots(ctx context.Context, id string) ([]SnapshotDTO, 
 }
 
 func (s *Service) Rollback(ctx context.Context, id string, version int) (SnapshotDTO, error) {
-	ver, err := s.sw.RollbackIVRFlow(ctx, id, version)
-	if err != nil {
+	var snap models.IVRPublishedSnapshot
+	if err := s.db.WithContext(ctx).Where("flow_id = ? AND version = ?", id, version).First(&snap).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return SnapshotDTO{}, errs.NotFound("IVR 版本不存在")
+		}
 		return SnapshotDTO{}, err
 	}
-	return snapshotDTO(ver), nil
+	if err := s.db.WithContext(ctx).Model(&models.IVRFlow{}).Where("id = ?", id).
+		Updates(map[string]any{"draft_json": snap.PayloadJSON, "updated_at": time.Now().UTC()}).Error; err != nil {
+		return SnapshotDTO{}, err
+	}
+	return s.Publish(ctx, id)
 }
 
-func (s *Service) flowDTO(ctx context.Context, row ports.SwitchIVRFlowView) (FlowDTO, error) {
+func (s *Service) flowDTO(ctx context.Context, row models.IVRFlow) (FlowDTO, error) {
 	out := FlowDTO{
 		ID: row.ID, Name: row.Name,
 		CreatedAt: row.CreatedAt.UTC(),
 		UpdatedAt: row.UpdatedAt.UTC(),
 	}
 	_ = json.Unmarshal([]byte(row.DraftJSON), &out.Draft)
-	out.PublishedVer = row.PublishedVersion
-	if row.PublishedVersion > 0 {
-		vers, err := s.sw.ListIVRVersions(ctx, row.ID)
-		if err != nil {
-			return FlowDTO{}, err
-		}
-		for _, v := range vers {
-			if v.Version == row.PublishedVersion {
-				out.PublishedJSON = v.PayloadJSON
-				break
-			}
-		}
+	var latest models.IVRPublishedSnapshot
+	err := s.db.WithContext(ctx).Where("flow_id = ?", row.ID).Order("version desc").First(&latest).Error
+	if err == nil {
+		out.PublishedVer = latest.Version
+		out.PublishedJSON = latest.PayloadJSON
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return FlowDTO{}, err
 	}
 	return out, nil
 }
 
-func snapshotDTO(x ports.SwitchIVRVersionView) SnapshotDTO {
+func snapshotDTO(x models.IVRPublishedSnapshot) SnapshotDTO {
 	return SnapshotDTO{
-		ID:          fmt.Sprintf("%s-v%d", x.FlowID, x.Version),
+		ID:          x.ID,
 		FlowID:      x.FlowID,
 		Version:     x.Version,
 		PayloadJSON: x.PayloadJSON,
 		PublishedAt: x.PublishedAt.UTC(),
 	}
+}
+
+func (s *Service) LatestPublished(ctx context.Context, flowID string) (models.IVRPublishedSnapshot, error) {
+	var latest models.IVRPublishedSnapshot
+	err := s.db.WithContext(ctx).Where("flow_id = ?", flowID).Order("version desc").First(&latest).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return models.IVRPublishedSnapshot{}, errs.NotFound("IVR 尚未发布")
+	}
+	return latest, err
 }
 
 func (s *Service) validateDoc(ctx context.Context, d Doc) error {

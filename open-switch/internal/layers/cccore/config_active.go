@@ -14,11 +14,7 @@ import (
 
 // GetActiveConfiguration 返回当前激活的配置包；尚未激活时返回 Conflict。
 func (s *Service) GetActiveConfiguration(ctx context.Context) (ports.ActiveConfigurationView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.ActiveConfigurationView{}, err
-	}
-	bundle, view, err := s.loadActiveBundle(ctx, appID)
+	bundle, view, err := s.loadActiveBundle(ctx, "")
 	if err != nil {
 		return ports.ActiveConfigurationView{}, err
 	}
@@ -27,11 +23,7 @@ func (s *Service) GetActiveConfiguration(ctx context.Context) (ports.ActiveConfi
 
 // GetActiveConfigurationSummary 仅返回激活版本元数据。
 func (s *Service) GetActiveConfigurationSummary(ctx context.Context) (ports.ConfigVersionView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.ConfigVersionView{}, err
-	}
-	version, err := activeVersion(s.db.WithContext(ctx), appID)
+	version, err := activeVersion(s.db.WithContext(ctx), "")
 	if err != nil {
 		return ports.ConfigVersionView{}, err
 	}
@@ -39,12 +31,12 @@ func (s *Service) GetActiveConfigurationSummary(ctx context.Context) (ports.Conf
 }
 
 func (s *Service) loadActiveBundle(ctx context.Context, appID string) (ports.ConfigBundle, ports.ConfigVersionView, error) {
-	version, err := activeVersion(s.db.WithContext(ctx), appID)
+	version, err := activeVersion(s.db.WithContext(ctx), "")
 	if err != nil {
 		return ports.ConfigBundle{}, ports.ConfigVersionView{}, err
 	}
 	var row models.ConfigVersion
-	if err := s.db.WithContext(ctx).Where("application_id = ? AND version = ?", appID, version).First(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("version = ?", version).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ports.ConfigBundle{}, ports.ConfigVersionView{}, errs.NotFound("配置版本不存在")
 		}
@@ -60,7 +52,7 @@ func (s *Service) loadActiveBundle(ctx context.Context, appID string) (ports.Con
 
 // loadActiveBundleOrEmpty 无激活配置时返回空 bundle（用于首次写入）。
 func (s *Service) loadActiveBundleOrEmpty(ctx context.Context, appID string) (ports.ConfigBundle, error) {
-	bundle, _, err := s.loadActiveBundle(ctx, appID)
+	bundle, _, err := s.loadActiveBundle(ctx, "")
 	if err != nil {
 		if errors.Is(err, errs.ErrConflict) {
 			return ports.ConfigBundle{

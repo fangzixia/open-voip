@@ -1,5 +1,5 @@
 # open-call 配置示例（呼叫中心：/api/v1 + BFF → open-switch /switch/v2）
-# integration.secret 须先通过 Switch register API 获取后填入。
+# CC↔Switch 无鉴权；事件 callback URL 由 Switch 侧配置。
 
 server:
   # 对浏览器/坐席客户端暴露的 API（含 WebSocket）。
@@ -7,14 +7,6 @@ server:
 
 integration:
   switch_base_url: "http://127.0.0.1:8082"
-  application_id: "cc-prod"
-  # Switch POST /integrations/register 返回的 secret（永不过期，勿提交到版本库）。
-  secret: "deploy-replace-with-switch-register-secret-value"
-  # Switch 内网推送事件地址（须与 register 时 events_callback_url 一致）。
-  events_callback_url: "http://127.0.0.1:8080/api/v1/integration/switch/events"
-  register_token: "replace_with_random_register_token_32+"
-  event_retention_days: 14
-  max_concurrent_calls: 100
 
 database:
   # 业务库：用户/坐席/队列/CDR 元数据等；勿与 open-switch 话务库混用。

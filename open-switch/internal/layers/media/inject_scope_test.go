@@ -2,27 +2,27 @@ package media
 
 import (
 	"context"
-	"open-switch/internal/scope"
 	"path/filepath"
 	"testing"
-	"uuid"
+
+	"github.com/google/uuid"
 )
 
-// TestPromptApplicationIsolation 确认提示音路径按应用命名空间隔离。
-func TestPromptApplicationIsolation(t *testing.T) {
+// TestPromptPathValidation 确认仅接受 UUID.wav，并拒绝路径穿越。
+func TestPromptPathValidation(t *testing.T) {
 	s := &Service{recDir: t.TempDir()}
-	a := scope.WithApplication(context.Background(), "a")
-	b := scope.WithApplication(context.Background(), "b")
+	ctx := context.Background()
 	asset := uuid.New().String() + ".wav"
-	if s.resolvePrompt(a, asset) == s.resolvePrompt(b, asset) {
-		t.Fatal("shared prompt path")
+	got := s.resolvePrompt(ctx, asset)
+	if got == "" {
+		t.Fatal("expected resolved prompt path")
+	}
+	if filepath.Base(got) != asset {
+		t.Fatalf("unexpected path %q", got)
 	}
 	for _, path := range []string{"../" + asset, filepath.Join(s.recDir, asset), "private.wav"} {
-		if s.resolvePrompt(a, path) != "" {
+		if s.resolvePrompt(ctx, path) != "" {
 			t.Fatalf("accepted unsafe prompt %q", path)
 		}
-	}
-	if s.resolvePrompt(context.Background(), asset) != "" {
-		t.Fatal("unscoped prompt access")
 	}
 }

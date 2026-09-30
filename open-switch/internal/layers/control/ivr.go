@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"uuid"
+	"github.com/google/uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -303,7 +303,7 @@ func (s *Service) syncIVRSession(ctx context.Context, callID string) {
 		d := rt.ivr.entered.Add(rt.ivr.timeout)
 		deadline = &d
 	}
-	_ = s.deps.IVRSessions.UpsertIVRSession(ctx, rt.rec.ApplicationID, callID, rt.ivr.flowID, rt.ivr.flowVersion, rt.ivr.node, string(stateJSON), deadline)
+	_ = s.deps.IVRSessions.UpsertIVRSession(ctx, callID, rt.ivr.flowID, rt.ivr.flowVersion, rt.ivr.node, string(stateJSON), deadline)
 }
 
 // enterQueue 清理 IVR 状态，播放等候音并开始派单。
@@ -354,7 +354,7 @@ func (s *Service) publishPosition(ctx context.Context, callID string) {
 	if rt != nil {
 		for _, o := range s.calls {
 			if o.rec.State == stateQueued && o.rec.QueueID != nil && rt.rec.QueueID != nil &&
-				o.rec.ApplicationID == rt.rec.ApplicationID && *o.rec.QueueID == *rt.rec.QueueID && (o.rec.Priority > rt.rec.Priority || (o.rec.Priority == rt.rec.Priority && o.queuedAt.Before(rt.queuedAt))) {
+				*o.rec.QueueID == *rt.rec.QueueID && (o.rec.Priority > rt.rec.Priority || (o.rec.Priority == rt.rec.Priority && o.queuedAt.Before(rt.queuedAt))) {
 				pos++
 			}
 		}

@@ -12,7 +12,7 @@ go build -o bin/open-switch ./cmd/open-switch
 go run ./cmd/open-switch -config deploy/config.example.yml
 ```
 
-默认监听 `127.0.0.1:8082`（内网）。业务系统通过 `POST /switch/v2/integrations/register` 登记租户并获取 Switch 签发的 `secret`（Switch YAML **不**配置 `applications[]`）。事件落库后 POST 到业务方登记的 `events_callback_url`。完整流程见[对接说明](../docs/open-switch对接说明.md)与 [runbook](../docs/switch-standalone-runbook.md)。
+默认监听 `127.0.0.1:8082`（内网）。在 YAML 配置 `integration.events_callback_url`（指向 CC 事件入口，如 `http://127.0.0.1:8080/api/v1/integration/switch/events`）；事件落库后 POST 到该 URL。CC↔Switch **无鉴权**，依赖私有网络。完整流程见[对接说明](../docs/open-switch对接说明.md)与 [runbook](../docs/switch-standalone-runbook.md)。
 
 视频录像需要 FFmpeg。设置 `recordings.ffmpeg_path` 为可执行文件路径，或将 FFmpeg 加入 `PATH`；
 `recordings.video_format` 可选 `webm`（VP8/Opus）或 `mp4`（H.264/AAC）。每通视频呼叫保存一份同时含画面和声音的文件。

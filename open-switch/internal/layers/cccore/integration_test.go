@@ -2,6 +2,7 @@ package cccore
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"uuid"
 )
 
 // TestConfigurationIsolationAndConcurrentDispatch 验证多应用配置隔离与并发派单互不串扰。
@@ -30,13 +30,12 @@ func TestConfigurationIsolationAndConcurrentDispatch(t *testing.T) {
 	}
 	events := store.CallEvents{DB: db}
 	svc := New(db, events, Options{})
-	app := "integration-" + uuid.New().String()
-	ctx := scope.WithApplication(context.Background(), app)
+	ctx := context.Background()
 	q, a, b, flow := uuid.New().String(), uuid.New().String(), uuid.New().String(), uuid.New().String()
 	bundle := ports.ConfigBundle{
 		Queues: []ports.QueueConfig{{ID: q, Name: "voice", AgentIDs: []string{a, b}}},
 		Agents: []ports.AgentConfig{{ID: a, UserRef: "u1", Extension: "1001", Enabled: true}, {ID: b, UserRef: "u2", Extension: "1002", Enabled: false}},
-		DIDs:   []ports.DIDConfig{{ID: uuid.New().String(), TrunkID: app, DID: "8001", TargetType: "queue", TargetID: q}},
+		DIDs:   []ports.DIDConfig{{ID: uuid.New().String(), TrunkID: "*", DID: "8001", TargetType: "queue", TargetID: q}},
 		IVRs:   []ports.IVRConfig{{FlowID: flow, Version: 1, PayloadJSON: `{"start":"end","nodes":{"end":{"type":"hangup"}}}`}},
 	}
 	v, err := svc.StoreConfig(ctx, bundle)
@@ -58,11 +57,11 @@ func TestConfigurationIsolationAndConcurrentDispatch(t *testing.T) {
 	if _, err := svc.CheckIn(ctx, a, []string{q}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.GetQueue(scope.WithApplication(ctx, "other"), q); err == nil {
-		t.Fatal("cross-app queue visible")
+	if _, err := svc.GetQueue(ctx, q); err != nil {
+		t.Fatal("active queue missing:", err)
 	}
-	route, err := svc.ResolveDID(context.Background(), app, "8001")
-	if err != nil || route.ApplicationID != app || route.ConfigVersion != v.Version {
+	route, err := svc.ResolveDID(context.Background(), "*", "8001")
+	if err != nil || route.ConfigVersion != v.Version {
 		t.Fatalf("route %+v %v", route, err)
 	}
 	var wg sync.WaitGroup

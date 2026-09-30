@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -328,28 +329,6 @@ func (d SwitchRouterDeps) handleIVRFlowList(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-func (d SwitchRouterDeps) handleIVRFlowCreate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name      string          `json:"name"`
-		DraftJSON string          `json:"draft_json"`
-		Draft     json.RawMessage `json:"draft"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeErr(w, err)
-		return
-	}
-	draft := body.DraftJSON
-	if len(body.Draft) > 0 {
-		draft = string(body.Draft)
-	}
-	out, err := d.Admin.CreateIVRFlow(r.Context(), body.Name, draft)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, out)
-}
-
 func (d SwitchRouterDeps) handleIVRFlowGet(w http.ResponseWriter, r *http.Request) {
 	out, err := d.Admin.GetIVRFlow(r.Context(), chi.URLParam(r, "flowId"))
 	if err != nil {
@@ -359,21 +338,51 @@ func (d SwitchRouterDeps) handleIVRFlowGet(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (d SwitchRouterDeps) handleIVRFlowPatch(w http.ResponseWriter, r *http.Request) {
+func decodeIVRPayload(r *http.Request) (flowID, payload string, err error) {
 	var body struct {
-		Name      string          `json:"name"`
-		DraftJSON string          `json:"draft_json"`
-		Draft     json.RawMessage `json:"draft"`
+		ID          string          `json:"id"`
+		FlowID      string          `json:"flow_id"`
+		PayloadJSON string          `json:"payload_json"`
+		Payload     json.RawMessage `json:"payload"`
 	}
-	if err := decodeJSON(r, &body); err != nil {
+	if err = decodeJSON(r, &body); err != nil {
+		return "", "", err
+	}
+	flowID = strings.TrimSpace(body.FlowID)
+	if flowID == "" {
+		flowID = strings.TrimSpace(body.ID)
+	}
+	payload = strings.TrimSpace(body.PayloadJSON)
+	if payload == "" && len(body.Payload) > 0 {
+		payload = string(body.Payload)
+	}
+	if payload == "" {
+		return "", "", errs.InvalidRequest("payload_json 必填")
+	}
+	return flowID, payload, nil
+}
+
+func (d SwitchRouterDeps) handleIVRFlowCreate(w http.ResponseWriter, r *http.Request) {
+	flowID, payload, err := decodeIVRPayload(r)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	draft := body.DraftJSON
-	if len(body.Draft) > 0 {
-		draft = string(body.Draft)
+	out, err := d.Admin.UpsertIVRFlow(r.Context(), flowID, payload)
+	if err != nil {
+		writeErr(w, err)
+		return
 	}
-	out, err := d.Admin.UpdateIVRFlow(r.Context(), chi.URLParam(r, "flowId"), body.Name, draft)
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (d SwitchRouterDeps) handleIVRFlowUpsert(w http.ResponseWriter, r *http.Request) {
+	_, payload, err := decodeIVRPayload(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := d.Admin.UpsertIVRFlow(r.Context(), chi.URLParam(r, "flowId"), payload)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -387,38 +396,4 @@ func (d SwitchRouterDeps) handleIVRFlowDelete(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (d SwitchRouterDeps) handleIVRFlowPublish(w http.ResponseWriter, r *http.Request) {
-	out, err := d.Admin.PublishIVRFlow(r.Context(), chi.URLParam(r, "flowId"))
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (d SwitchRouterDeps) handleIVRFlowVersions(w http.ResponseWriter, r *http.Request) {
-	items, err := d.Admin.ListIVRVersions(r.Context(), chi.URLParam(r, "flowId"))
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
-func (d SwitchRouterDeps) handleIVRFlowRollback(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Version int `json:"version"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeErr(w, err)
-		return
-	}
-	out, err := d.Admin.RollbackIVRFlow(r.Context(), chi.URLParam(r, "flowId"), body.Version)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
 }

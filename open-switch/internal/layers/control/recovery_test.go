@@ -87,7 +87,7 @@ type recoveryIVRCfg struct {
 }
 
 func (c recoveryIVRCfg) GetQueue(_ context.Context, id string) (ports.QueueSnapshot, error) {
-	return ports.QueueSnapshot{ApplicationID: "test", ConfigVersion: 1, ID: id, MaxWaitSec: 300}, nil
+	return ports.QueueSnapshot{ConfigVersion: 1, ID: id, MaxWaitSec: 300}, nil
 }
 func (c recoveryIVRCfg) GetLatestIVR(context.Context, string) (ports.IVRSnapshot, error) {
 	return ports.IVRSnapshot{}, nil
@@ -107,7 +107,7 @@ type memIVRSessions struct {
 	sess ports.IVRSessionView
 }
 
-func (m memIVRSessions) UpsertIVRSession(context.Context, string, string, string, int, string, string, *time.Time) error {
+func (m memIVRSessions) UpsertIVRSession(context.Context, string, string, int, string, string, *time.Time) error {
 	return nil
 }
 func (m memIVRSessions) GetIVRSession(_ context.Context, callID string) (ports.IVRSessionView, error) {
@@ -135,7 +135,7 @@ func TestRecoverQueuedResumesInsteadOfHangup(t *testing.T) {
 	persist := newFakePersist()
 	queuedAt := time.Now().UTC().Add(-2 * time.Minute)
 	persist.calls["q-call"] = ports.CallRecord{
-		ID: "q-call", ApplicationID: "test", State: stateQueued, Direction: "inbound",
+		ID: "q-call", State: stateQueued, Direction: "inbound",
 		ConfigVersion: &cfgVer, Caller: "138", QueueID: &qID,
 		CreatedAt: queuedAt, UpdatedAt: queuedAt,
 	}
@@ -163,7 +163,7 @@ func TestRecoverIVRResumesInsteadOfHangup(t *testing.T) {
 	persist := newFakePersist()
 	deadline := time.Now().UTC().Add(20 * time.Second)
 	persist.calls["ivr-call"] = ports.CallRecord{
-		ID: "ivr-call", ApplicationID: "test", State: stateIVR, Direction: "inbound",
+		ID: "ivr-call", State: stateIVR, Direction: "inbound",
 		ConfigVersion: &cfgVer, Caller: "138", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	persist.legs["ivr-call"] = []ports.CallLegRecord{{ID: "cust", CallID: "ivr-call", Role: dto.LegRoleCustomer, CreatedAt: time.Now().UTC()}}
@@ -171,7 +171,7 @@ func TestRecoverIVRResumesInsteadOfHangup(t *testing.T) {
 	svc := NewService(Deps{
 		Media: media, Config: recoveryIVRCfg{payload: payload}, Calls: persist,
 		IVRSessions: memIVRSessions{sess: ports.IVRSessionView{
-			CallID: "ivr-call", ApplicationID: "test", FlowID: flow, FlowVersion: 1,
+			CallID: "ivr-call", FlowID: flow, FlowVersion: 1,
 			NodeID: "menu", StateJSON: `{}`, DeadlineAt: &deadline,
 		}},
 		BusinessActions: &fakeBusinessActions{},

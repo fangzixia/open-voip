@@ -19,7 +19,6 @@ import (
 // SwitchRouterDeps Switch API 依赖。
 type SwitchRouterDeps struct {
 	Config          config.Config
-	Applications    *store.ApplicationRegistry
 	Runtime         RuntimeReader
 	Events          *store.CallEvents
 	Commands        *store.Commands
@@ -32,7 +31,7 @@ type SwitchRouterDeps struct {
 	RouterDeps
 }
 
-// NewSwitchRouter 构建应用隔离的 /switch/v2 路由。
+// NewSwitchRouter 构建 /switch/v2 路由（无鉴权，依赖内网隔离）。
 func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 	r := chi.NewRouter()
 	r.NotFound(httpapi.NotFound)
@@ -45,11 +44,7 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 	r.Get("/health", handleHealth)
 
 	r.Route("/switch/v2", func(sw chi.Router) {
-		sw.With(middleware.RegisterAuth(deps.Config.Integration, deps.Applications)).Post("/integrations/register", deps.handleIntegrationRegister)
-		sw.With(middleware.RegisterAuth(deps.Config.Integration, deps.Applications)).Post("/integrations/{applicationId}/rotate-secret", deps.handleIntegrationRotateSecret)
-
 		sw.Group(func(api chi.Router) {
-			api.Use(middleware.ApplicationAuth(deps.Applications))
 			api.Use(deps.authorizeCallResource)
 			api.Post("/configuration/versions", deps.handleConfigStore)
 			api.Get("/configuration/versions/{version}", deps.handleConfigGet)
@@ -86,13 +81,10 @@ func NewSwitchRouter(deps SwitchRouterDeps) http.Handler {
 			api.Delete("/did-routes/{didId}", deps.handleDIDConfigDelete)
 
 			api.Get("/ivr/flows", deps.handleIVRFlowList)
-			api.Post("/ivr/flows", deps.handleIVRFlowCreate)
 			api.Get("/ivr/flows/{flowId}", deps.handleIVRFlowGet)
-			api.Patch("/ivr/flows/{flowId}", deps.handleIVRFlowPatch)
+			api.Put("/ivr/flows/{flowId}", deps.handleIVRFlowUpsert)
+			api.Post("/ivr/flows", deps.handleIVRFlowCreate)
 			api.Delete("/ivr/flows/{flowId}", deps.handleIVRFlowDelete)
-			api.Post("/ivr/flows/{flowId}/publish", deps.handleIVRFlowPublish)
-			api.Get("/ivr/flows/{flowId}/versions", deps.handleIVRFlowVersions)
-			api.Post("/ivr/flows/{flowId}/rollback", deps.handleIVRFlowRollback)
 			api.Post("/agents/{agentId}/check-in", deps.handleAgentCheckIn)
 			api.Post("/agents/{agentId}/check-out", deps.handleAgentCheckOut)
 			api.Put("/agents/{agentId}/presence", deps.handleAgentPresence)

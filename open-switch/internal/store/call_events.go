@@ -3,25 +3,25 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"time"
+
 	"gorm.io/gorm"
+
 	"open-switch/internal/datetime"
 	"open-switch/internal/ports"
-	"open-switch/internal/scope"
-	"time"
 )
 
 type CallEventRow struct {
-	ApplicationID string          `json:"application_id"`
-	ID            int64           `json:"id"`
-	CallID        string          `json:"call_id"`
-	Seq           int64           `json:"seq"`
-	Version       int64           `json:"version"`
-	CommandID     *string         `json:"command_id,omitempty"`
-	AgentID       string          `json:"agent_id"`
-	TargetOnly    bool            `json:"target_only"`
-	Type          string          `json:"type"`
-	Payload       json.RawMessage `json:"payload"`
-	CreatedAt     time.Time       `json:"created_at"`
+	ID         int64           `json:"id"`
+	CallID     string          `json:"call_id"`
+	Seq        int64           `json:"seq"`
+	Version    int64           `json:"version"`
+	CommandID  *string         `json:"command_id,omitempty"`
+	AgentID    string          `json:"agent_id"`
+	TargetOnly bool            `json:"target_only"`
+	Type       string          `json:"type"`
+	Payload    json.RawMessage `json:"payload"`
+	CreatedAt  time.Time       `json:"created_at"`
 }
 
 func (CallEventRow) TableName() string { return "os_call_events" }
@@ -39,14 +39,6 @@ func (s CallEvents) PublishCallEvent(ctx context.Context, ev ports.CallEvent) er
 }
 
 func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
-	if ev.ApplicationID == "" {
-		ev.ApplicationID = scope.Application(ctx)
-	}
-	if ev.ApplicationID == "" && ev.CallID != "" {
-		if err := s.DB.WithContext(ctx).Raw("SELECT application_id FROM os_calls WHERE id = ?", ev.CallID).Scan(&ev.ApplicationID).Error; err != nil {
-			return err
-		}
-	}
 	raw, err := datetime.Marshal(ev.Payload)
 	if err != nil {
 		return err
@@ -62,7 +54,7 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 			return err
 		}
 		var seq int64
-		if err := tx.Raw("SELECT COALESCE(MAX(seq), 0) + 1 FROM os_call_events WHERE application_id = ? AND call_id::text = ?", ev.ApplicationID, ev.CallID).Scan(&seq).Error; err != nil {
+		if err := tx.Raw("SELECT COALESCE(MAX(seq), 0) + 1 FROM os_call_events WHERE call_id::text = ?", ev.CallID).Scan(&seq).Error; err != nil {
 			return err
 		}
 		createdAt = time.Now().UTC()
@@ -74,7 +66,7 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 		if ev.CommandID != "" {
 			commandID = ev.CommandID
 		}
-		if err := tx.Raw("INSERT INTO os_call_events (application_id, call_id, seq, version, command_id, agent_id, target_only, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id", ev.ApplicationID, callID, seq, ev.Version, commandID, ev.AgentID, ev.TargetOnly, ev.Type, string(raw), createdAt).Scan(&ev.ID).Error; err != nil {
+		if err := tx.Raw("INSERT INTO os_call_events (call_id, seq, version, command_id, agent_id, target_only, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id", callID, seq, ev.Version, commandID, ev.AgentID, ev.TargetOnly, ev.Type, string(raw), createdAt).Scan(&ev.ID).Error; err != nil {
 			return err
 		}
 		ev.Seq = seq
@@ -85,16 +77,15 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 	}
 	if s.AfterAppend != nil && ev.ID > 0 {
 		row := CallEventRow{
-			ApplicationID: ev.ApplicationID,
-			ID:            ev.ID,
-			CallID:        ev.CallID,
-			Seq:           ev.Seq,
-			Version:       ev.Version,
-			AgentID:       ev.AgentID,
-			TargetOnly:    ev.TargetOnly,
-			Type:          ev.Type,
-			Payload:       append(json.RawMessage(nil), raw...),
-			CreatedAt:     createdAt,
+			ID:         ev.ID,
+			CallID:     ev.CallID,
+			Seq:        ev.Seq,
+			Version:    ev.Version,
+			AgentID:    ev.AgentID,
+			TargetOnly: ev.TargetOnly,
+			Type:       ev.Type,
+			Payload:    append(json.RawMessage(nil), raw...),
+			CreatedAt:  createdAt,
 		}
 		if ev.CommandID != "" {
 			cid := ev.CommandID
@@ -110,9 +101,6 @@ func (s CallEvents) List(ctx context.Context, afterID int64, callID string, limi
 		limit = 100
 	}
 	q := s.DB.WithContext(ctx).Where("id > ?", afterID)
-	if appID := scope.Application(ctx); appID != "" {
-		q = q.Where("application_id = ?", appID)
-	}
 	if callID != "" {
 		q = q.Where("call_id = ?", callID)
 	}
@@ -121,15 +109,9 @@ func (s CallEvents) List(ctx context.Context, afterID int64, callID string, limi
 	return rows, err
 }
 
-// MinRetainedEventID 返回应用下仍保留的最小事件 ID（无事件时返回 0）。
-func (s CallEvents) MinRetainedEventID(ctx context.Context, applicationID string) (int64, error) {
+// MinRetainedEventID 返回最早事件 ID（无事件时返回 0）。
+func (s CallEvents) MinRetainedEventID(ctx context.Context) (int64, error) {
 	var minID int64
-	err := s.DB.WithContext(ctx).Raw("SELECT COALESCE(MIN(id), 0) FROM os_call_events WHERE application_id = ?", applicationID).Scan(&minID).Error
+	err := s.DB.WithContext(ctx).Raw("SELECT COALESCE(MIN(id), 0) FROM os_call_events").Scan(&minID).Error
 	return minID, err
-}
-
-// PurgeBefore 删除指定时间之前的事件，返回删除行数。
-func (s CallEvents) PurgeBefore(ctx context.Context, applicationID string, before time.Time) (int64, error) {
-	res := s.DB.WithContext(ctx).Exec("DELETE FROM os_call_events WHERE application_id = ? AND created_at < ?", applicationID, before)
-	return res.RowsAffected, res.Error
 }

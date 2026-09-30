@@ -9,7 +9,6 @@ import (
 
 // CallRecord 跨层通话持久化记录，禁止引用 GORM model。
 type CallRecord struct {
-	ApplicationID string     `json:"application_id"`
 	BusinessRef   string     `json:"business_ref,omitempty"`
 	Metadata      string     `json:"metadata,omitempty"`
 	Version       int64      `json:"version"`
@@ -43,7 +42,6 @@ type CallRecord struct {
 
 // CallLegRecord 通话腿持久化记录。
 type CallLegRecord struct {
-	ApplicationID  string `json:"application_id"`
 	Type           string `json:"type"`
 	State          string `json:"state"`
 	ParticipantRef string `json:"participant_ref,omitempty"`

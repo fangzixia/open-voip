@@ -8,7 +8,6 @@ import (
 // RoutingSessionView 路由会话与队列项只读快照。
 type RoutingSessionView struct {
 	CallID          string     `json:"call_id"`
-	ApplicationID   string     `json:"application_id"`
 	State           string     `json:"state"`
 	QueueID         string     `json:"queue_id,omitempty"`
 	ConfigVersion   int64      `json:"config_version"`

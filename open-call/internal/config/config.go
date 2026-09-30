@@ -69,13 +69,7 @@ type TTSOpenAICompatibleConfig struct {
 }
 
 type IntegrationConfig struct {
-	SwitchBaseURL      string `yaml:"switch_base_url"`
-	ApplicationID      string `yaml:"application_id"`
-	Secret             string `yaml:"secret"`
-	EventsCallbackURL  string `yaml:"events_callback_url"`
-	RegisterToken      string `yaml:"register_token"`
-	EventRetentionDays int    `yaml:"event_retention_days"`
-	MaxConcurrentCalls int    `yaml:"max_concurrent_calls"`
+	SwitchBaseURL string `yaml:"switch_base_url"`
 }
 
 type ServerConfig struct {
@@ -187,17 +181,6 @@ func (c *Config) Validate() error {
 	} else if u, err := url.Parse(c.Integration.SwitchBaseURL); err != nil || u.Scheme == "" || u.Host == "" {
 		problems = append(problems, "integration.switch_base_url 必须是完整 URL")
 	}
-	appID := strings.TrimSpace(c.Integration.ApplicationID)
-	if appID == "" || strings.ContainsAny(appID, " /\\:@\r\n\t") {
-		problems = append(problems, "integration.application_id 无效")
-	}
-	if u, err := url.Parse(strings.TrimSpace(c.Integration.EventsCallbackURL)); err != nil || u.Scheme == "" || u.Host == "" {
-		problems = append(problems, "integration.events_callback_url 必须是完整 URL")
-	}
-	secret := strings.TrimSpace(c.Integration.Secret)
-	if len(secret) < 16 || strings.EqualFold(secret, "changeme") || strings.Contains(secret, "change_me") {
-		problems = append(problems, "integration.secret 须为 Switch register 签发的密钥（至少 16 字符）")
-	}
 	level := strings.ToLower(strings.TrimSpace(c.Log.Level))
 	if level != "debug" && level != "info" && level != "warn" && level != "error" {
 		problems = append(problems, "log.level 必须为 debug/info/warn/error 之一")
@@ -308,12 +291,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Security.ClientEventRequestsPerMin <= 0 {
 		c.Security.ClientEventRequestsPerMin = 60
-	}
-	if c.Integration.EventRetentionDays <= 0 {
-		c.Integration.EventRetentionDays = 14
-	}
-	if c.Integration.MaxConcurrentCalls <= 0 {
-		c.Integration.MaxConcurrentCalls = 100
 	}
 	if c.TTS.SampleRate == 0 {
 		c.TTS.SampleRate = 16000

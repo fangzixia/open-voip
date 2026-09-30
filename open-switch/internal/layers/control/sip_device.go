@@ -2,10 +2,10 @@ package control
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
-	"uuid"
 )
 
 type sipAnswerKey struct{}

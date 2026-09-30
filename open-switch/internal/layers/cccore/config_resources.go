@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"uuid"
+	"github.com/google/uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -16,7 +16,8 @@ func (s *Service) ListQueueConfigs(ctx context.Context) ([]ports.QueueConfig, er
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, appID)
+	_ = appID
+	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +48,8 @@ func (s *Service) GetQueueConfig(ctx context.Context, id string) (ports.QueueCon
 	if err != nil {
 		return ports.QueueConfig{}, err
 	}
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, appID)
+	_ = appID
+	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
 	if err != nil {
 		return ports.QueueConfig{}, err
 	}
@@ -122,7 +124,8 @@ func (s *Service) ListSkillConfigs(ctx context.Context) ([]ports.SkillConfig, er
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, appID)
+	_ = appID
+	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +194,8 @@ func (s *Service) ListAgentConfigs(ctx context.Context) ([]ports.AgentConfig, er
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, appID)
+	_ = appID
+	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +255,8 @@ func (s *Service) ListDIDConfigs(ctx context.Context) ([]ports.DIDConfig, error)
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, appID)
+	_ = appID
+	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
 	if err != nil {
 		return nil, err
 	}

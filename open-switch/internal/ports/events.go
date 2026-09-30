@@ -2,14 +2,13 @@ package ports
 
 import "context"
 
-// CallEvent 呼叫类 WebSocket 事件载荷，类型字符串见 docs/events.md。
+// CallEvent 呼叫类事件载荷，类型字符串见 docs/events.md。
 type CallEvent struct {
-	ApplicationID string `json:"application_id,omitempty"`
-	Version       int64  `json:"version,omitempty"`
-	CommandID     string `json:"command_id,omitempty"`
-	ID            int64  `json:"id,omitempty"`
-	Seq           int64  `json:"seq,omitempty"`
-	TargetOnly    bool   `json:"target_only,omitempty"`
+	Version    int64  `json:"version,omitempty"`
+	CommandID  string `json:"command_id,omitempty"`
+	ID         int64  `json:"id,omitempty"`
+	Seq        int64  `json:"seq,omitempty"`
+	TargetOnly bool   `json:"target_only,omitempty"`
 	// Type 例如 call.ringing、call.answered。
 	Type string `json:"type"`
 	// CallID 通话 ID。
@@ -20,7 +19,7 @@ type CallEvent struct {
 	Payload map[string]any `json:"payload"`
 }
 
-// AgentEvent 坐席类 WebSocket 事件。
+// AgentEvent 坐席类事件。
 type AgentEvent struct {
 	// Type 例如 agent.state_changed。
 	Type string `json:"type"`

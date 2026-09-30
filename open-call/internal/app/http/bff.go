@@ -31,7 +31,7 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 		origDirector(r)
 		r.Header.Del("X-Principal")
 		r.Header.Del("X-Agent-ID")
-		r.Header.Set("Authorization", "Bearer "+cfg.Secret)
+		r.Header.Del("Authorization")
 		if p, ok := middleware.PrincipalFromContext(r.Context()); ok && p.AgentID != "" {
 			r.Header.Set("X-Agent-ID", p.AgentID)
 		}

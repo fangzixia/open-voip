@@ -37,7 +37,6 @@ func (c *Client) UploadIVRAsset(ctx context.Context, filename string, wav []byte
 	if err != nil {
 		return IVRAsset{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.secret)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	setTraceHeaders(req, ctx)
 	observability.Emit(ctx, "switch.request.started", map[string]any{"method": http.MethodPost, "path": "/switch/v2/ivr-assets"})

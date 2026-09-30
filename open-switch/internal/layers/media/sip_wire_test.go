@@ -3,13 +3,13 @@ package media
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"net"
 	"open-switch/internal/config"
 	"open-switch/internal/ports/dto"
 	"strings"
 	"testing"
 	"time"
-	"uuid"
 )
 
 // 使用模拟话机走真实 UDP 信令：REGISTER 挑战、鉴权注册、

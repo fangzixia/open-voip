@@ -52,7 +52,7 @@ func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
-	h := WrapSwitchBFF(config.IntegrationConfig{Secret: "internal-secret", SwitchBaseURL: upstream.URL}, bffAuth{}, http.NotFoundHandler())
+	h := WrapSwitchBFF(config.IntegrationConfig{SwitchBaseURL: upstream.URL}, bffAuth{}, http.NotFoundHandler())
 	cases := []struct {
 		path, body string
 		want       int
@@ -76,8 +76,8 @@ func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 	requests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer internal-secret" {
-			t.Error("missing integration secret")
+		if r.Header.Get("Authorization") != "" {
+			t.Error("end-user Authorization must not reach switch")
 		}
 		if r.Header.Get("X-Principal") != "" {
 			t.Error("end-user principal must not reach switch")
@@ -100,7 +100,7 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 	}))
 	defer upstream.Close()
 	local := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusAccepted) })
-	h := WrapSwitchBFF(config.IntegrationConfig{Secret: "internal-secret", SwitchBaseURL: upstream.URL}, bffAuth{}, local)
+	h := WrapSwitchBFF(config.IntegrationConfig{SwitchBaseURL: upstream.URL}, bffAuth{}, local)
 	for _, token := range []string{"", "invalid", "readonly", "valid"} {
 		req := httptest.NewRequest("POST", "/api/v1/calls/call/hangup", nil)
 		req.Header.Set("X-Principal", `{"UserID":"forged","Role":"admin"}`)

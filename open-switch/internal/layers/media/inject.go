@@ -3,28 +3,28 @@ package media
 import (
 	"context"
 	"encoding/binary"
+	"github.com/google/uuid"
+	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4/pkg/media"
 	"io"
+	"math/rand/v2"
 	"open-switch/internal/scope"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-	"uuid"
-
-	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4/pkg/media"
-	"math/rand/v2"
 )
 
-// resolvePrompt 仅解析当前应用命名空间下的 WAV 素材 ID。
+// resolvePrompt 解析单租户素材目录下的 WAV 素材 ID。
 func (s *Service) resolvePrompt(ctx context.Context, path string) string {
-	if scope.Application(ctx) == "" || filepath.Ext(path) != ".wav" {
+	_ = ctx
+	if filepath.Ext(path) != ".wav" {
 		return ""
 	}
 	if _, err := uuid.Parse(strings.TrimSuffix(path, ".wav")); err != nil {
 		return ""
 	}
-	return filepath.Join(s.recDir, "prompts", scope.AssetNamespace(ctx), path)
+	return filepath.Join(s.recDir, "prompts", scope.AssetNamespace(), path)
 }
 
 func (s *Service) playWaitingTone(callID string, loop bool, seq uint64) {

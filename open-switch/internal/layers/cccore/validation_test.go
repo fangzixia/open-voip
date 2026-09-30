@@ -1,9 +1,9 @@
 package cccore
 
 import (
+	"github.com/google/uuid"
 	"open-switch/internal/ports"
 	"testing"
-	"uuid"
 )
 
 // TestPublishedGraphAndCalendarValidation 校验 IVR 图与营业时间的边界用例。

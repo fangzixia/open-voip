@@ -354,7 +354,6 @@ CREATE INDEX idx_oc_agent_state_projection_time ON oc_agent_state_projection (ag
 
 CREATE TABLE oc_switch_event_inbox (
   event_id BIGINT PRIMARY KEY,
-  application_id TEXT NOT NULL,
   received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -626,7 +625,6 @@ COMMENT ON COLUMN oc_agent_state_projection.created_at IS '事件发生时间';
 
 COMMENT ON TABLE oc_switch_event_inbox IS '已接收的 Switch 事件去重收件箱';
 COMMENT ON COLUMN oc_switch_event_inbox.event_id IS 'Switch 事件全局 ID';
-COMMENT ON COLUMN oc_switch_event_inbox.application_id IS '租户应用 ID';
 COMMENT ON COLUMN oc_switch_event_inbox.received_at IS '业务侧接收时间';
 
 COMMENT ON TABLE oc_switch_event_outbox IS '待向 WebSocket/Webhook 投递的事件出站队列';

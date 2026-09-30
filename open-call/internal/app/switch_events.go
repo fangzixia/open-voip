@@ -42,7 +42,7 @@ func CommitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event, _ p
 		if ev.ID <= cursor {
 			return nil
 		}
-		if err := tx.Create(&models.SwitchEventInbox{EventID: ev.ID, ApplicationID: ev.ApplicationID, ReceivedAt: time.Now().UTC()}).Error; err != nil {
+		if err := tx.Create(&models.SwitchEventInbox{EventID: ev.ID, ReceivedAt: time.Now().UTC()}).Error; err != nil {
 			return err
 		}
 		if err := projectSwitchEvent(ctx, tx, ev); err != nil {
@@ -53,13 +53,12 @@ func CommitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event, _ p
 			// 仅面向坐席的事件不携带 call_id，避免客户侧 WebSocket 订阅收到。
 			callID = ""
 		}
-		payload := make(map[string]any, len(ev.Payload)+4)
+		payload := make(map[string]any, len(ev.Payload)+3)
 		for k, v := range ev.Payload {
 			payload[k] = v
 		}
 		payload["switch_event_id"] = ev.ID
 		payload["switch_call_seq"] = ev.Seq
-		payload["application_id"] = ev.ApplicationID
 		payload["version"] = ev.Version
 		raw, err := json.Marshal(ports.CallEvent{Type: ev.Type, CallID: callID, AgentID: ev.AgentID, Payload: payload})
 		if err != nil {

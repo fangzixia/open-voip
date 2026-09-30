@@ -1,13 +1,12 @@
 package scope
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 )
 
-// AssetNamespace 根据已认证应用 ID 生成稳定的、可用于路径的素材目录名。
-func AssetNamespace(ctx context.Context) string {
-	sum := sha256.Sum256([]byte(Application(ctx)))
+// AssetNamespace 单租户固定素材目录命名空间。
+func AssetNamespace() string {
+	sum := sha256.Sum256([]byte("default"))
 	return hex.EncodeToString(sum[:])
 }

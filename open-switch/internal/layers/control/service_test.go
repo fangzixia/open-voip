@@ -82,7 +82,7 @@ func (f *fakeACD) RequestAgent(_ context.Context, _ dto.DispatchRequest) (dto.Di
 type fakeCfg struct{}
 
 func (fakeCfg) GetQueue(_ context.Context, id string) (ports.QueueSnapshot, error) {
-	return ports.QueueSnapshot{ApplicationID: "test", ConfigVersion: 1, ID: id, Name: "语音服务", MaxWaitSec: 300}, nil
+	return ports.QueueSnapshot{ConfigVersion: 1, ID: id, Name: "语音服务", MaxWaitSec: 300}, nil
 }
 func (fakeCfg) GetLatestIVR(context.Context, string) (ports.IVRSnapshot, error) {
 	return ports.IVRSnapshot{}, errs.ErrNotImplemented
@@ -353,9 +353,9 @@ type overflowCfg struct{ fakeCfg }
 
 func (overflowCfg) GetQueue(_ context.Context, id string) (ports.QueueSnapshot, error) {
 	if id == "q1" {
-		return ports.QueueSnapshot{ApplicationID: "test", ConfigVersion: 1, ID: "q1", Name: "语音", MaxWaitSec: 300, OverflowAction: "queue", OverflowQueueID: "q2"}, nil
+		return ports.QueueSnapshot{ConfigVersion: 1, ID: "q1", Name: "语音", MaxWaitSec: 300, OverflowAction: "queue", OverflowQueueID: "q2"}, nil
 	}
-	return ports.QueueSnapshot{ApplicationID: "test", ConfigVersion: 1, ID: id, Name: "溢出队列", MaxWaitSec: 300}, nil
+	return ports.QueueSnapshot{ConfigVersion: 1, ID: id, Name: "溢出队列", MaxWaitSec: 300}, nil
 }
 
 func TestOverflowAndVideoRequest(t *testing.T) {

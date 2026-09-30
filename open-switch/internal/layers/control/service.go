@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"uuid"
+	"github.com/google/uuid"
 
 	"open-switch/internal/datetime"
 	"open-switch/internal/errs"
@@ -127,13 +127,13 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		if req.SessionType == dto.SessionTypeVideo && !q.VideoEnabled {
 			return "", errs.Unprocessable("该队列不支持视频", errs.CodeAgentNotVideoCapable)
 		}
-		req.ApplicationID, req.ConfigVersion = q.ApplicationID, q.ConfigVersion
+		req.ConfigVersion = q.ConfigVersion
 		if !q.PriorityEnabled {
 			req.Priority = 0
 		}
 	}
-	if req.ApplicationID == "" || req.ConfigVersion < 1 {
-		return "", errs.Forbidden("缺少已激活的应用配置作用域")
+	if req.ConfigVersion < 1 {
+		return "", errs.Forbidden("缺少已激活的配置作用域")
 	}
 
 	now := time.Now().UTC()
@@ -142,7 +142,6 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		callID = uuid.New().String()
 	}
 	rec := ports.CallRecord{
-		ApplicationID: req.ApplicationID,
 		ConfigVersion: new(req.ConfigVersion),
 		Version:       1,
 		ID:            callID,
@@ -156,7 +155,6 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	if req.QueueID != "" {
 		rec.QueueID = new(req.QueueID)
 	}
-	ctx = scope.WithApplication(ctx, req.ApplicationID)
 	ctx = scope.WithConfigVersion(ctx, req.ConfigVersion)
 	leg := ports.CallLegRecord{
 		ID:        uuid.New().String(),
@@ -506,7 +504,7 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 		return err
 	}
 	if s.deps.Bridges != nil {
-		if bridgeIDs, err := s.deps.Bridges.EndByCall(ctx, rt.rec.ApplicationID, callID); err != nil {
+		if bridgeIDs, err := s.deps.Bridges.EndByCall(ctx, callID); err != nil {
 			slog.Warn("桥接结束落库失败", "call_id", callID, "err", err)
 		} else {
 			for _, bridgeID := range bridgeIDs {
@@ -599,9 +597,6 @@ func (s *Service) GetCall(ctx context.Context, callID string) (ports.CallView, e
 	rt := s.calls[callID]
 	s.mu.Unlock()
 	if rt != nil {
-		if appID := scope.Application(ctx); appID != "" && rt.rec.ApplicationID != appID {
-			return ports.CallView{}, errs.NotFound("通话不存在")
-		}
 		return toView(rt), nil
 	}
 	rec, err := s.deps.Calls.GetCall(ctx, callID)
@@ -980,7 +975,7 @@ func (s *Service) emitCall(ctx context.Context, callID, typ, agentID string, pay
 
 func toView(rt *runtimeCall) ports.CallView {
 	v := ports.CallView{
-		ApplicationID: rt.rec.ApplicationID, Version: rt.rec.Version, ConfigVersion: rt.rec.ConfigVersion,
+		Version: rt.rec.Version, ConfigVersion: rt.rec.ConfigVersion,
 		ID:        rt.rec.ID,
 		CreatedAt: rt.rec.CreatedAt, Caller: rt.caller, Callee: rt.callee, AnsweredAt: rt.answeredAt, EndedAt: rt.rec.EndedAt,
 		State:           rt.rec.State,

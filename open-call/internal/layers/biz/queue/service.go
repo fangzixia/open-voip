@@ -384,7 +384,7 @@ func (s *Service) validateReferences(ctx context.Context, queueID, overflowID, i
 	}
 	if ivrID != "" {
 		if _, err := s.sw.GetIVRFlow(ctx, ivrID); err != nil {
-			return errs.InvalidRequest("ivr_flow_id 不存在")
+			return errs.InvalidRequest("ivr_flow_id 尚未发布到 Switch")
 		}
 	}
 	if len(skills) > 0 {

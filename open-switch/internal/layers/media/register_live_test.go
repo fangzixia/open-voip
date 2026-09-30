@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"uuid"
+	"github.com/google/uuid"
 )
 
 // 向运行中的 open-switch 发 REGISTER，验证本机 USB/软电话所用账号能否注册。

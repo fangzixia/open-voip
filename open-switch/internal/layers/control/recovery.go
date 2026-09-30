@@ -6,7 +6,6 @@ import (
 
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
-	"open-switch/internal/scope"
 )
 
 // setAgentState 统一更新坐席状态并附带通话追踪信息。
@@ -28,7 +27,7 @@ func (s *Service) Recover(ctx context.Context) error {
 		return err
 	}
 	for _, rec := range records {
-		appCtx := scope.WithApplication(ctx, rec.ApplicationID)
+		appCtx := ctx
 		legs, err := s.deps.Calls.ListLegs(appCtx, rec.ID)
 		if err != nil {
 			return err

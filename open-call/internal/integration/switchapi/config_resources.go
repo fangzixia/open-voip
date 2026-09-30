@@ -125,51 +125,29 @@ func (c *Client) DeleteDIDConfig(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/switch/v2/did-routes/"+url.PathEscape(id), nil, nil)
 }
 
-func (c *Client) ListIVRFlows(ctx context.Context) ([]ports.SwitchIVRFlowView, error) {
-	return listItems[ports.SwitchIVRFlowView](c, ctx, "/switch/v2/ivr/flows")
+func (c *Client) ListIVRFlows(ctx context.Context) ([]ports.SwitchIVRPublishedView, error) {
+	return listItems[ports.SwitchIVRPublishedView](c, ctx, "/switch/v2/ivr/flows")
 }
 
-func (c *Client) CreateIVRFlow(ctx context.Context, name, draftJSON string) (ports.SwitchIVRFlowView, error) {
-	var out ports.SwitchIVRFlowView
-	err := c.do(ctx, http.MethodPost, "/switch/v2/ivr/flows", map[string]string{"name": name, "draft_json": draftJSON}, &out)
-	return out, err
-}
-
-func (c *Client) GetIVRFlow(ctx context.Context, flowID string) (ports.SwitchIVRFlowView, error) {
-	var out ports.SwitchIVRFlowView
+func (c *Client) GetIVRFlow(ctx context.Context, flowID string) (ports.SwitchIVRPublishedView, error) {
+	var out ports.SwitchIVRPublishedView
 	err := c.do(ctx, http.MethodGet, "/switch/v2/ivr/flows/"+url.PathEscape(flowID), nil, &out)
 	return out, err
 }
 
-func (c *Client) UpdateIVRFlow(ctx context.Context, flowID, name, draftJSON string) (ports.SwitchIVRFlowView, error) {
-	body := map[string]string{}
-	if name != "" {
-		body["name"] = name
+func (c *Client) UpsertIVRFlow(ctx context.Context, flowID, payloadJSON string) (ports.SwitchIVRPublishedView, error) {
+	var out ports.SwitchIVRPublishedView
+	path := "/switch/v2/ivr/flows"
+	method := http.MethodPost
+	body := map[string]string{"payload_json": payloadJSON}
+	if flowID != "" {
+		path = "/switch/v2/ivr/flows/" + url.PathEscape(flowID)
+		method = http.MethodPut
 	}
-	if draftJSON != "" {
-		body["draft_json"] = draftJSON
-	}
-	var out ports.SwitchIVRFlowView
-	err := c.do(ctx, http.MethodPatch, "/switch/v2/ivr/flows/"+url.PathEscape(flowID), body, &out)
+	err := c.do(ctx, method, path, body, &out)
 	return out, err
 }
 
 func (c *Client) DeleteIVRFlow(ctx context.Context, flowID string) error {
 	return c.do(ctx, http.MethodDelete, "/switch/v2/ivr/flows/"+url.PathEscape(flowID), nil, nil)
-}
-
-func (c *Client) PublishIVRFlow(ctx context.Context, flowID string) (ports.SwitchIVRVersionView, error) {
-	var out ports.SwitchIVRVersionView
-	err := c.do(ctx, http.MethodPost, "/switch/v2/ivr/flows/"+url.PathEscape(flowID)+"/publish", nil, &out)
-	return out, err
-}
-
-func (c *Client) ListIVRVersions(ctx context.Context, flowID string) ([]ports.SwitchIVRVersionView, error) {
-	return listItems[ports.SwitchIVRVersionView](c, ctx, "/switch/v2/ivr/flows/"+url.PathEscape(flowID)+"/versions")
-}
-
-func (c *Client) RollbackIVRFlow(ctx context.Context, flowID string, version int) (ports.SwitchIVRVersionView, error) {
-	var out ports.SwitchIVRVersionView
-	err := c.do(ctx, http.MethodPost, "/switch/v2/ivr/flows/"+url.PathEscape(flowID)+"/rollback", map[string]int{"version": version}, &out)
-	return out, err
 }

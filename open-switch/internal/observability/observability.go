@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"uuid"
+	"github.com/google/uuid"
 )
 
 const (

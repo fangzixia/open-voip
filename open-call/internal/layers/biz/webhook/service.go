@@ -218,7 +218,7 @@ func (s *Service) Dispatch(ctx context.Context, eventType string, payload map[st
 	}
 	eventID := uuid.New().String()
 	if sourceID, ok := payload["switch_event_id"]; ok {
-		eventID = nameUUID(nameSpaceOID, []byte(fmt.Sprint(payload["application_id"])+":"+fmt.Sprint(sourceID))).String()
+		eventID = nameUUID(nameSpaceOID, []byte(fmt.Sprint(sourceID))).String()
 	}
 	ids := observability.From(ctx)
 	body, err := datetime.Marshal(map[string]any{

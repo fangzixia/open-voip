@@ -8,11 +8,11 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
 	"open-switch/internal/scope"
-	"uuid"
 )
 
 // CreateDirect 由控制器直接创建通话，不查询业务平台 API。
@@ -70,7 +70,7 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 		return ports.CallView{}, err
 	}
 	now := time.Now().UTC()
-	rec := ports.CallRecord{Version: 1, ApplicationID: scope.Application(ctx), ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
+	rec := ports.CallRecord{Version: 1, ID: req.CallID, Direction: req.Direction, SessionType: req.SessionType, State: stateCreated, Caller: req.Caller, Callee: req.Callee, CreatedAt: now, UpdatedAt: now}
 	leg := ports.CallLegRecord{ID: uuid.New().String(), CallID: req.CallID, Role: req.InitialLegRole, CreatedAt: now}
 	if req.AgentID != "" {
 		leg.AgentID = &req.AgentID
@@ -112,7 +112,7 @@ func (s *Service) CreateStubCall(ctx context.Context, req dto.StubCallRequest) (
 	}
 	now := time.Now().UTC()
 	rec := ports.CallRecord{
-		Version: 1, ApplicationID: scope.Application(ctx), ID: req.CallID, BusinessRef: req.BusinessRef, Metadata: meta,
+		Version: 1, ID: req.CallID, BusinessRef: req.BusinessRef, Metadata: meta,
 		Direction: "internal", SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
@@ -290,7 +290,7 @@ func (s *Service) bridgeDirectOnce(ctx context.Context, callID, a, b string) err
 	}
 	bridgePayload := map[string]any{"call_id": callID, "leg_a": a, "leg_b": b}
 	if s.deps.Bridges != nil {
-		bridgeID, err := s.deps.Bridges.ActivatePair(ctx, rt.rec.ApplicationID, callID, a, b)
+		bridgeID, err := s.deps.Bridges.ActivatePair(ctx, callID, a, b)
 		if err != nil {
 			return err
 		}
@@ -330,7 +330,7 @@ func (s *Service) ReplaceBridge(ctx context.Context, callID, bridgeID, legA, leg
 		if s.deps.Bridges == nil {
 			return errs.ErrNotImplemented
 		}
-		if err := s.deps.Bridges.ReplacePair(ctx, rt.rec.ApplicationID, callID, bridgeID, legA, legB); err != nil {
+		if err := s.deps.Bridges.ReplacePair(ctx, callID, bridgeID, legA, legB); err != nil {
 			return err
 		}
 		if m, ok := s.deps.Media.(interface{ UnbridgeLegs(string) }); ok {
@@ -347,17 +347,10 @@ func (s *Service) ReplaceBridge(ctx context.Context, callID, bridgeID, legA, leg
 func (s *Service) EndBridge(ctx context.Context, callID, bridgeID string) error {
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
-	s.mu.Lock()
-	rt := s.calls[callID]
-	s.mu.Unlock()
-	appID := ""
-	if rt != nil {
-		appID = rt.rec.ApplicationID
-	}
 	if s.deps.Bridges == nil {
 		return errs.ErrNotImplemented
 	}
-	if err := s.deps.Bridges.EndBridge(ctx, appID, callID, bridgeID); err != nil {
+	if err := s.deps.Bridges.EndBridge(ctx, callID, bridgeID); err != nil {
 		return err
 	}
 	s.emitCall(ctx, callID, "bridge.ended", "", map[string]any{"call_id": callID, "bridge_id": bridgeID})

@@ -2,18 +2,17 @@ package control
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
 	"open-switch/internal/datetime"
 	"open-switch/internal/layers/cccore"
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
-	"open-switch/internal/scope"
 	"open-switch/internal/store"
 	"open-switch/internal/store/migrate"
 	"os"
 	"testing"
 	"time"
-	"uuid"
 )
 
 // TestLocalCCLifecycleIntegration 覆盖 IVR 业务判断、完成/重复提交与超时等呼叫控制边界。
@@ -41,8 +40,8 @@ func TestLocalCCLifecycleIntegration(t *testing.T) {
 	svc.deps.Recordings = core
 	svc.deps.CallEvents = events
 	svc.deps.RecordingPolicy = core
-	app := "lifecycle-" + uuid.New().String()
-	ctx := scope.WithApplication(context.Background(), app)
+	ctx := context.Background()
+	_ = "lifecycle" // single-tenant
 	q, a, flow := uuid.New().String(), uuid.New().String(), uuid.New().String()
 	bundle := ports.ConfigBundle{
 		Queues: []ports.QueueConfig{{ID: q, Name: "voice", AgentIDs: []string{a}}},
@@ -67,12 +66,8 @@ func TestLocalCCLifecycleIntegration(t *testing.T) {
 	if err != nil || view.State != stateRinging {
 		t.Fatalf("%+v %v", view, err)
 	}
-	foreign := scope.WithApplication(context.Background(), "other")
-	if _, err := svc.GetCall(foreign, call); err == nil {
-		t.Fatal("cross-app call leaked")
-	}
-	if list, err := svc.ListCalls(foreign); err != nil || len(list) != 0 {
-		t.Fatal("cross-app list leaked")
+	if list, err := svc.ListCalls(ctx); err != nil || len(list) == 0 {
+		t.Fatal("expected active call in list")
 	}
 	if err := svc.Answer(ctx, call, a); err != nil {
 		t.Fatal(err)
@@ -104,7 +99,7 @@ func TestLocalCCLifecycleIntegration(t *testing.T) {
 	if _, err := core.SetPresence(ctx, a, "busy", "break"); err != nil {
 		t.Fatal(err)
 	}
-	ivrCall, err := svc.StartInbound(ctx, dto.InboundRequest{ApplicationID: app, ConfigVersion: v.Version, IVRFlowID: flow, Caller: "business"})
+	ivrCall, err := svc.StartInbound(ctx, dto.InboundRequest{ConfigVersion: v.Version, IVRFlowID: flow, Caller: "business"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +129,7 @@ func TestLocalCCLifecycleIntegration(t *testing.T) {
 	if err := svc.CompleteBusinessAction(ctx, ivrCall, actionID, "yes"); err != nil {
 		t.Fatalf("completed action replay after hangup: %v", err)
 	}
-	timed, err := svc.StartInbound(ctx, dto.InboundRequest{ApplicationID: app, ConfigVersion: v.Version, IVRFlowID: flow})
+	timed, err := svc.StartInbound(ctx, dto.InboundRequest{ConfigVersion: v.Version, IVRFlowID: flow})
 	if err != nil {
 		t.Fatal(err)
 	}

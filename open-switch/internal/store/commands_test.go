@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"gorm.io/gorm/logger"
-	"open-switch/internal/scope"
 	"open-switch/internal/store/migrate"
 )
 
@@ -26,7 +25,7 @@ func TestCommandIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmds := Commands{DB: db}
-	ctx := scope.WithApplication(context.Background(), "cmd-test-app")
+	ctx := context.Background()
 	hash := "abc123"
 	first, reused, err := cmds.Accept(ctx, "00000000-0000-4000-8000-000000000001", "idem-1", hash, "sip.dial", map[string]any{"leg_id": "leg-1"})
 	if err != nil || reused {

@@ -8,11 +8,7 @@ import (
 
 // ApplyConfigMutation 读取当前激活配置（或空配置）、应用变更、校验并激活新版本。
 func (s *Service) ApplyConfigMutation(ctx context.Context, mutate func(*ports.ConfigBundle) error) (ports.ConfigVersionView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.ConfigVersionView{}, err
-	}
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, appID)
+	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
 	if err != nil {
 		return ports.ConfigVersionView{}, err
 	}

@@ -20,17 +20,15 @@ import (
 
 // Client 实现 CallControlPort，供 guest 与 WebSocket 使用。
 type Client struct {
-	base   string
-	secret string
-	http   *http.Client
+	base string
+	http *http.Client
 }
 
 // NewClient 创建 Switch HTTP 客户端。
 func NewClient(cfg config.IntegrationConfig) *Client {
 	return &Client{
-		base:   strings.TrimRight(cfg.SwitchBaseURL, "/"),
-		secret: cfg.Secret,
-		http:   &http.Client{Timeout: 30 * time.Second},
+		base: strings.TrimRight(cfg.SwitchBaseURL, "/"),
+		http: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -48,7 +46,6 @@ func (c *Client) do(ctx context.Context, method, path string, in any, out any) e
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.secret)
 	req.Header.Set("Content-Type", "application/json")
 	if m := mutationFrom(ctx); m.IdempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", m.IdempotencyKey)

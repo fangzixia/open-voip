@@ -102,7 +102,7 @@ func Run(configPath string) error {
 	cdrRecorder := cdr.NewRecorderService(db)
 	recMeta := recmeta.NewService(db)
 	recMeta.SetFiles(switchClient)
-	ivrSvc := ivr.NewService(switchClient)
+	ivrSvc := ivr.NewService(db, switchClient)
 	skillSvc := skill.NewService(switchClient)
 	reportSvc := report.NewService(db, switchClient)
 	hookSvc := webhook.NewService(db, cfg.Webhook)
@@ -137,7 +137,7 @@ func Run(configPath string) error {
 		FFmpeg:             ffmpegBin,
 		TTS:                ttsEngine,
 		Switch:             switchClient,
-		SwitchEventHandler: SwitchEventHTTP(db, cfg.Integration, wsHub, businessActions, switchClient),
+		SwitchEventHandler: SwitchEventHTTP(db, wsHub, businessActions, switchClient),
 		Auth:               authSvc,
 		Authorization:      authzSvc,
 		OIDC:               oidcSvc,

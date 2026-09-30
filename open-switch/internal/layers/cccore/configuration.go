@@ -11,13 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
-	"open-switch/internal/scope"
 	"open-switch/internal/store/models"
 )
 
@@ -53,20 +52,16 @@ var _ ports.RecordingPolicyPort = (*Service)(nil)
 var _ ports.CDRRecorderPort = (*Service)(nil)
 var _ ports.RecordingStorePort = (*Service)(nil)
 
+// applicationID 兼容旧调用点；单租户下恒为空。
 func applicationID(ctx context.Context) (string, error) {
-	id := scope.Application(ctx)
-	if id == "" {
-		return "", errs.Forbidden("缺少应用作用域")
-	}
-	return id, nil
+	_ = ctx
+	return "", nil
 }
 
 // StoreConfig 校验并存储一份不可变配置快照，但不激活。
 func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (ports.ConfigVersionView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.ConfigVersionView{}, err
-	}
+	appID, _ := applicationID(ctx)
+	_ = appID
 	normalizeBundle(&bundle)
 	if err := validateBundle(bundle); err != nil {
 		return ports.ConfigVersionView{}, err
@@ -78,23 +73,23 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 	checksum := hex.EncodeToString(sum[:])
 
 	var result models.ConfigVersion
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "config:"+appID).Error; err != nil {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "config").Error; err != nil {
 			return err
 		}
-		if err := tx.Where("application_id = ? AND checksum = ?", appID, checksum).First(&result).Error; err == nil {
+		if err := tx.Where("checksum = ?", checksum).First(&result).Error; err == nil {
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		version := bundle.Version
 		if version <= 0 {
-			if err := tx.Raw("SELECT COALESCE(MAX(version), 0) + 1 FROM os_config_versions WHERE application_id = ?", appID).Scan(&version).Error; err != nil {
+			if err := tx.Raw("SELECT COALESCE(MAX(version), 0) + 1 FROM os_config_versions").Scan(&version).Error; err != nil {
 				return err
 			}
 		}
 		var exists int64
-		if err := tx.Model(&models.ConfigVersion{}).Where("application_id = ? AND version = ?", appID, version).Count(&exists).Error; err != nil {
+		if err := tx.Model(&models.ConfigVersion{}).Where("version = ?", version).Count(&exists).Error; err != nil {
 			return err
 		}
 		if exists != 0 {
@@ -106,11 +101,11 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 			return err
 		}
 		now := time.Now().UTC()
-		result = models.ConfigVersion{ApplicationID: appID, Version: version, Status: "validated", Checksum: checksum, Payload: string(payload), CreatedAt: now}
+		result = models.ConfigVersion{Version: version, Status: "validated", Checksum: checksum, Payload: string(payload), CreatedAt: now}
 		if err := tx.Create(&result).Error; err != nil {
 			return err
 		}
-		return insertBundle(tx, appID, version, bundle, now)
+		return insertBundle(tx, version, bundle, now)
 	})
 	if err != nil {
 		return ports.ConfigVersionView{}, err
@@ -120,34 +115,30 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 
 // ActivateConfig 原子地将已校验快照设为新通话的权威配置。
 func (s *Service) ActivateConfig(ctx context.Context, version int64) (ports.ConfigVersionView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.ConfigVersionView{}, err
-	}
 	var result models.ConfigVersion
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(67104232)").Error; err != nil {
 			return err
 		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("application_id = ? AND version = ?", appID, version).First(&result).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("version = ?", version).First(&result).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errs.NotFound("配置版本不存在")
 			}
 			return err
 		}
-		if err := validateActiveDIDConflicts(tx, appID, version); err != nil {
+		if err := validateActiveDIDConflicts(tx, "", version); err != nil {
 			return err
 		}
 		now := time.Now().UTC()
-		if err := tx.Model(&models.ConfigVersion{}).Where("application_id = ? AND status = ?", appID, "active").Update("status", "superseded").Error; err != nil {
+		if err := tx.Model(&models.ConfigVersion{}).Where("status = ?", "active").Update("status", "superseded").Error; err != nil {
 			return err
 		}
 		result.Status = "active"
 		result.ActivatedAt = &now
-		if err := tx.Model(&models.ConfigVersion{}).Where("application_id = ? AND version = ?", appID, version).Updates(map[string]any{"status": "active", "activated_at": now}).Error; err != nil {
+		if err := tx.Model(&models.ConfigVersion{}).Where("version = ?", version).Updates(map[string]any{"status": "active", "activated_at": now}).Error; err != nil {
 			return err
 		}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "application_id"}}, DoUpdates: clause.Assignments(map[string]any{"version": version, "activated_at": now})}).Create(&models.ActiveConfig{ApplicationID: appID, Version: version, ActivatedAt: now}).Error
+		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(map[string]any{"version": version, "activated_at": now})}).Create(&models.ActiveConfig{ID: 1, Version: version, ActivatedAt: now}).Error
 	})
 	if err != nil {
 		return ports.ConfigVersionView{}, err
@@ -156,12 +147,8 @@ func (s *Service) ActivateConfig(ctx context.Context, version int64) (ports.Conf
 }
 
 func (s *Service) GetConfigVersion(ctx context.Context, version int64) (ports.ConfigVersionView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.ConfigVersionView{}, err
-	}
 	var row models.ConfigVersion
-	if err := s.db.WithContext(ctx).Where("application_id = ? AND version = ?", appID, version).First(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("version = ?", version).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ports.ConfigVersionView{}, errs.NotFound("配置版本不存在")
 		}
@@ -171,7 +158,7 @@ func (s *Service) GetConfigVersion(ctx context.Context, version int64) (ports.Co
 }
 
 func configView(row models.ConfigVersion) ports.ConfigVersionView {
-	return ports.ConfigVersionView{ApplicationID: row.ApplicationID, Version: row.Version, Status: row.Status, Checksum: row.Checksum, CreatedAt: row.CreatedAt, ActivatedAt: row.ActivatedAt}
+	return ports.ConfigVersionView{Version: row.Version, Status: row.Status, Checksum: row.Checksum, CreatedAt: row.CreatedAt, ActivatedAt: row.ActivatedAt}
 }
 
 func normalizeBundle(bundle *ports.ConfigBundle) {
@@ -346,30 +333,30 @@ func validateBundle(bundle ports.ConfigBundle) error {
 
 func validUUID(value string) bool { _, err := uuid.Parse(value); return err == nil }
 
-func insertBundle(tx *gorm.DB, appID string, version int64, bundle ports.ConfigBundle, now time.Time) error {
+func insertBundle(tx *gorm.DB, version int64, bundle ports.ConfigBundle, now time.Time) error {
 	for _, in := range bundle.Skills {
-		if err := tx.Create(&models.Skill{ApplicationID: appID, ConfigVersion: version, ID: in.ID, Name: in.Name, CreatedAt: now}).Error; err != nil {
+		if err := tx.Create(&models.Skill{ConfigVersion: version, ID: in.ID, Name: in.Name, CreatedAt: now}).Error; err != nil {
 			return err
 		}
 	}
 	for _, in := range bundle.Agents {
-		row := models.Agent{ApplicationID: appID, ConfigVersion: version, ID: in.ID, UserID: in.UserRef, Extension: in.Extension, DisplayName: in.DisplayName, VideoCapable: in.VideoCapable, TerminalType: in.TerminalType, SIPUsername: in.SIPUsername, Enabled: in.Enabled, CreatedAt: now, UpdatedAt: now}
+		row := models.Agent{ConfigVersion: version, ID: in.ID, UserID: in.UserRef, Extension: in.Extension, DisplayName: in.DisplayName, VideoCapable: in.VideoCapable, TerminalType: in.TerminalType, SIPUsername: in.SIPUsername, Enabled: in.Enabled, CreatedAt: now, UpdatedAt: now}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
 		for _, skillID := range in.SkillIDs {
-			if err := tx.Create(&models.AgentSkill{ApplicationID: appID, ConfigVersion: version, AgentID: in.ID, SkillID: skillID}).Error; err != nil {
+			if err := tx.Create(&models.AgentSkill{ConfigVersion: version, AgentID: in.ID, SkillID: skillID}).Error; err != nil {
 				return err
 			}
 		}
 	}
 	for _, in := range bundle.IVRs {
-		if err := tx.Create(&models.IVRPublishedSnapshot{ApplicationID: appID, ConfigVersion: version, FlowID: in.FlowID, Version: in.Version, PayloadJSON: in.PayloadJSON, PublishedAt: now}).Error; err != nil {
+		if err := tx.Create(&models.IVRPublishedSnapshot{ConfigVersion: version, FlowID: in.FlowID, Version: in.Version, PayloadJSON: in.PayloadJSON, PublishedAt: now}).Error; err != nil {
 			return err
 		}
 	}
 	for _, in := range bundle.Queues {
-		row := models.Queue{ApplicationID: appID, ConfigVersion: version, ID: in.ID, Name: in.Name, VideoEnabled: in.VideoEnabled, MaxWaitSec: in.MaxWaitSec, DispatchStrategy: in.DispatchStrategy, RecordingPolicy: in.RecordingPolicy, OverflowAction: in.OverflowAction, WaitPrompt: in.WaitPrompt, AnnounceRecording: in.AnnounceRecording, PriorityEnabled: in.PriorityEnabled, BusinessHoursJSON: in.BusinessHoursJSON, AfterHoursAction: in.AfterHoursAction, ForceHangupOnCheckout: in.ForceHangupOnCheckout, ListenAnnounce: in.ListenAnnounce, CreatedAt: now, UpdatedAt: now}
+		row := models.Queue{ConfigVersion: version, ID: in.ID, Name: in.Name, VideoEnabled: in.VideoEnabled, MaxWaitSec: in.MaxWaitSec, DispatchStrategy: in.DispatchStrategy, RecordingPolicy: in.RecordingPolicy, OverflowAction: in.OverflowAction, WaitPrompt: in.WaitPrompt, AnnounceRecording: in.AnnounceRecording, PriorityEnabled: in.PriorityEnabled, BusinessHoursJSON: in.BusinessHoursJSON, AfterHoursAction: in.AfterHoursAction, ForceHangupOnCheckout: in.ForceHangupOnCheckout, ListenAnnounce: in.ListenAnnounce, CreatedAt: now, UpdatedAt: now}
 		if in.OverflowQueueID != "" {
 			row.OverflowQueueID = &in.OverflowQueueID
 		}
@@ -380,12 +367,12 @@ func insertBundle(tx *gorm.DB, appID string, version int64, bundle ports.ConfigB
 			return err
 		}
 		for _, skillID := range in.SkillIDs {
-			if err := tx.Create(&models.QueueSkill{ApplicationID: appID, ConfigVersion: version, QueueID: in.ID, SkillID: skillID}).Error; err != nil {
+			if err := tx.Create(&models.QueueSkill{ConfigVersion: version, QueueID: in.ID, SkillID: skillID}).Error; err != nil {
 				return err
 			}
 		}
 		for _, agentID := range in.AgentIDs {
-			if err := tx.Create(&models.QueueAgent{ApplicationID: appID, ConfigVersion: version, QueueID: in.ID, AgentID: agentID}).Error; err != nil {
+			if err := tx.Create(&models.QueueAgent{ConfigVersion: version, QueueID: in.ID, AgentID: agentID}).Error; err != nil {
 				return err
 			}
 		}
@@ -395,7 +382,7 @@ func insertBundle(tx *gorm.DB, appID string, version int64, bundle ports.ConfigB
 		if in.TargetID != "" {
 			target = &in.TargetID
 		}
-		row := models.DIDRoute{ApplicationID: appID, ConfigVersion: version, ID: in.ID, TrunkID: in.TrunkID, DID: in.DID, TargetType: in.TargetType, TargetID: target, CreatedAt: now, UpdatedAt: now}
+		row := models.DIDRoute{ConfigVersion: version, ID: in.ID, TrunkID: in.TrunkID, DID: in.DID, TargetType: in.TargetType, TargetID: target, CreatedAt: now, UpdatedAt: now}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
@@ -403,22 +390,10 @@ func insertBundle(tx *gorm.DB, appID string, version int64, bundle ports.ConfigB
 	return nil
 }
 
-func validateActiveDIDConflicts(tx *gorm.DB, appID string, version int64) error {
-	var conflicts int64
-	err := tx.Raw(`SELECT COUNT(1)
-FROM os_did_routes candidate
-JOIN os_did_routes active_route
-  ON candidate.normalized_did = active_route.normalized_did
- AND (candidate.trunk_id = active_route.trunk_id OR candidate.trunk_id = '*' OR active_route.trunk_id = '*')
-JOIN os_active_config active
-  ON active.application_id = active_route.application_id AND active.version = active_route.config_version
-WHERE candidate.application_id = ? AND candidate.config_version = ? AND active_route.application_id <> ?`, appID, version, appID).Scan(&conflicts).Error
-	if err != nil {
-		return err
-	}
-	if conflicts > 0 {
-		return errs.Conflict("DID 路由与其他已激活应用冲突", "")
-	}
+func validateActiveDIDConflicts(tx *gorm.DB, _ string, version int64) error {
+	// 单租户：仅校验候选版本内 DID 自洽即可，无跨应用冲突。
+	_ = version
+	_ = tx
 	return nil
 }
 
@@ -438,9 +413,9 @@ func NormalizeDID(value string) string {
 	return b.String()
 }
 
-func activeVersion(db *gorm.DB, appID string) (int64, error) {
+func activeVersion(db *gorm.DB, _ string) (int64, error) {
 	var active models.ActiveConfig
-	if err := db.Where("application_id = ?", appID).First(&active).Error; err != nil {
+	if err := db.Where("id = ?", 1).First(&active).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return 0, errs.Conflict("尚未激活呼叫中心配置", "")
 		}

@@ -62,7 +62,7 @@ func (s *SnapshotService) UpsertDID(ctx context.Context, trunkID, did, targetTyp
 	}
 	if targetType == "ivr" {
 		flow, err := s.sw.GetIVRFlow(ctx, targetID)
-		if err != nil || flow.PublishedVersion == 0 {
+		if err != nil || flow.Version == 0 {
 			return DIDDTO{}, errs.InvalidRequest("目标 IVR 尚未发布")
 		}
 	}
@@ -98,7 +98,7 @@ func (s *SnapshotService) BindQueueIVR(ctx context.Context, queueID, flowID stri
 	}
 	if flowID != "" {
 		flow, err := s.sw.GetIVRFlow(ctx, flowID)
-		if err != nil || flow.PublishedVersion == 0 {
+		if err != nil || flow.Version == 0 {
 			return errs.InvalidRequest("只能绑定已经发布的 IVR 流程")
 		}
 	}

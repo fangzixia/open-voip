@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode"
 
-	"uuid"
+	"github.com/google/uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/observability"
@@ -226,9 +226,6 @@ func (s *Service) ForceReleaseAgent(ctx context.Context, agentID, policy string)
 	s.mu.Lock()
 	var ids []string
 	for id, rt := range s.calls {
-		if appID := scope.Application(ctx); appID != "" && rt.rec.ApplicationID != appID {
-			continue
-		}
 		if rt.offeredAgent == agentID {
 			ids = append(ids, id)
 			continue
@@ -401,7 +398,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if looksPSTN(req.Destination) {
 		dir = "outbound"
 	}
-	rec := ports.CallRecord{Version: 1, ConfigVersion: new(info.ConfigVersion), ApplicationID: scope.Application(ctx), ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
+	rec := ports.CallRecord{Version: 1, ConfigVersion: new(info.ConfigVersion), ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
 		return "", err
 	}

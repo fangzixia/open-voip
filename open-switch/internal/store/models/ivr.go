@@ -2,28 +2,8 @@ package models
 
 import "time"
 
-// IVRFlow IVR 流程定义（草稿与元数据）。
-type IVRFlow struct {
-	// ApplicationID 租户应用 ID。
-	ApplicationID string `gorm:"primaryKey;size:64;comment:租户应用 ID"`
-	// ID 流程 UUID。
-	ID string `gorm:"type:uuid;primaryKey;comment:IVR 流程 ID"`
-	// Name 流程名称。
-	Name string `gorm:"size:128;not null;comment:流程名称"`
-	// DraftJSON 草稿配置 JSON。
-	DraftJSON string `gorm:"type:text;comment:草稿 JSON 配置"`
-	// CreatedAt 创建时间。
-	CreatedAt time.Time `gorm:"comment:创建时间"`
-	// UpdatedAt 更新时间。
-	UpdatedAt time.Time `gorm:"comment:更新时间"`
-}
-
-// TableName 指定表名。
-func (IVRFlow) TableName() string { return "os_ivr_flows" }
-
-// IVRPublishedSnapshot 已发布 IVR 快照，呼入只读最新版本号。
+// IVRPublishedSnapshot 已发布 IVR 快照，按配置版本存储，呼入只读。
 type IVRPublishedSnapshot struct {
-	ApplicationID string `gorm:"primaryKey;size:64"`
 	// FlowID 所属流程。
 	FlowID string `gorm:"type:uuid;primaryKey;not null;comment:流程 ID"`
 	// Version 单调递增版本号。

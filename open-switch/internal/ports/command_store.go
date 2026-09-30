@@ -8,7 +8,6 @@ import (
 // CommandView 异步命令查询结果（方案 §6 可恢复命令）。
 type CommandView struct {
 	ID             string         `json:"id"`
-	ApplicationID  string         `json:"application_id"`
 	CallID         string         `json:"call_id,omitempty"`
 	Type           string         `json:"type"`
 	Status         string         `json:"status"`

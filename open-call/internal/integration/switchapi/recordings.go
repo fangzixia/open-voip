@@ -26,7 +26,6 @@ func (c *Client) OpenRecordingAs(ctx context.Context, callID, id, path, format s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.secret)
 	setTraceHeaders(req, ctx)
 	client := &http.Client{Transport: c.http.Transport, Timeout: 10 * time.Minute}
 	res, err := client.Do(req)

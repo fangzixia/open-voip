@@ -9,7 +9,6 @@ import (
 
 // CallView 供 HTTP 返回的通话视图。
 type CallView struct {
-	ApplicationID string     `json:"application_id"`
 	Version       int64      `json:"version"`
 	ConfigVersion *int64     `json:"config_version,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`

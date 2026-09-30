@@ -113,7 +113,7 @@ func TestEventInboxProjectionCursorAndDelivery(t *testing.T) {
 		if err := tx.Raw("SELECT last_event_id FROM oc_switch_event_cursor WHERE id=1").Scan(&cursor).Error; err != nil {
 			t.Fatal(err)
 		}
-		ev := switchapi.Event{ID: cursor + 1, ApplicationID: "projection-test", AgentID: uuid.New().String(), Type: "agent.routing_state_changed", CreatedAt: "invalid", Payload: map[string]any{"state": "idle"}}
+		ev := switchapi.Event{ID: cursor + 1, AgentID: uuid.New().String(), Type: "agent.routing_state_changed", CreatedAt: "invalid", Payload: map[string]any{"state": "idle"}}
 		if err := CommitSwitchEvent(ctx, tx, ev, nil); err == nil {
 			t.Fatal("invalid projection committed")
 		}

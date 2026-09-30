@@ -4,9 +4,8 @@ import "time"
 
 // SwitchEventInbox 记录已从 Switch 拉取并提交的事件，用于去重与审计。
 type SwitchEventInbox struct {
-	EventID       int64 `gorm:"primaryKey"`
-	ApplicationID string
-	ReceivedAt    time.Time
+	EventID    int64 `gorm:"primaryKey"`
+	ReceivedAt time.Time
 }
 
 func (SwitchEventInbox) TableName() string { return "oc_switch_event_inbox" }

@@ -2,11 +2,11 @@ package http
 
 import (
 	"net/http"
-	"open-switch/internal/errs"
-	"open-switch/internal/scope"
-	"open-switch/internal/store"
 	"strconv"
 	"time"
+
+	"open-switch/internal/errs"
+	"open-switch/internal/store"
 )
 
 // handleEvents 按 after_id 增量返回持久化呼叫事件（主路径为 integrator callback；本接口用于对账）。
@@ -28,15 +28,14 @@ func (d SwitchRouterDeps) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if waitSec > 30 {
 		waitSec = 30
 	}
-	appID := scope.Application(r.Context())
-	if appID != "" && after > 0 && d.Events != nil {
-		minID, err := d.Events.MinRetainedEventID(r.Context(), appID)
+	if after > 0 && d.Events != nil {
+		minID, err := d.Events.MinRetainedEventID(r.Context())
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
 		if minID > 0 && after < minID {
-			httpapiFailure(w, http.StatusGone, "cursor_expired", "事件游标早于保留窗口，请对账后重置游标；最早可用 event_id="+strconv.FormatInt(minID, 10))
+			httpapiFailure(w, http.StatusGone, "cursor_expired", "事件游标早于最早可用事件，请对账后重置游标；最早可用 event_id="+strconv.FormatInt(minID, 10))
 			return
 		}
 	}
@@ -47,7 +46,8 @@ func (d SwitchRouterDeps) handleEvents(w http.ResponseWriter, r *http.Request) {
 	deadline := time.Now().Add(time.Duration(waitSec) * time.Second)
 	var rows []store.CallEventRow
 	for {
-		rows, err := d.Events.List(r.Context(), after, r.URL.Query().Get("call_id"), limit)
+		var err error
+		rows, err = d.Events.List(r.Context(), after, r.URL.Query().Get("call_id"), limit)
 		if err != nil {
 			writeErr(w, err)
 			return

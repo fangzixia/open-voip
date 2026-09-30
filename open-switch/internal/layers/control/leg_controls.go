@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"uuid"
+	"github.com/google/uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports/dto"

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"open-call/internal/config"
 	"open-call/internal/errs"
 	"open-call/internal/httpapi"
 	"open-call/internal/integration/switchapi"
@@ -15,15 +14,11 @@ import (
 )
 
 // SwitchEventHTTP 返回 open-switch 事件 callback 处理器。
-func SwitchEventHTTP(db *gorm.DB, cfg config.IntegrationConfig, hub ports.CallEventPublisher, actions *businessaction.Service, client *switchapi.Client) http.HandlerFunc {
+func SwitchEventHTTP(db *gorm.DB, hub ports.CallEventPublisher, actions *businessaction.Service, client *switchapi.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var ev switchapi.Event
 		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
 			httpapi.Error(w, err)
-			return
-		}
-		if ev.ApplicationID != "" && ev.ApplicationID != cfg.ApplicationID {
-			httpapi.Write(w, http.StatusForbidden, map[string]string{"error": "application_id 不匹配"})
 			return
 		}
 		if ev.ID <= 0 {

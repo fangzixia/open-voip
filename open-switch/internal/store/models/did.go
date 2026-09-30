@@ -4,7 +4,6 @@ import "time"
 
 // DIDRoute 外显/DID 号码到队列的路由（MEDIA-08）。
 type DIDRoute struct {
-	ApplicationID string `gorm:"primaryKey;size:64"`
 	// ID 路由 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:DID 路由 ID"`
 	// DID 被叫号码或外显。

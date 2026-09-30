@@ -29,8 +29,7 @@ func (m *memCommands) Accept(ctx context.Context, callID, idempotencyKey, reques
 			hash string
 		}{}
 	}
-	app := scope.Application(ctx)
-	key := app + "|" + idempotencyKey
+	key := idempotencyKey
 	if existing, ok := m.byKey[key]; ok {
 		if existing.hash != requestHash {
 			return ports.CommandView{}, false, errs.Conflict("Idempotency-Key 已用于不同请求体", "")
@@ -39,7 +38,7 @@ func (m *memCommands) Accept(ctx context.Context, callID, idempotencyKey, reques
 	}
 	id := "cmd-" + idempotencyKey
 	view := ports.CommandView{
-		ID: id, ApplicationID: app, CallID: callID, Type: typ, Status: "accepted",
+		ID: id, CallID: callID, Type: typ, Status: "accepted",
 		IdempotencyKey: idempotencyKey, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	m.byKey[key] = struct {
@@ -91,14 +90,14 @@ func (m *memCommands) ReconcileStale(context.Context, time.Duration) error { ret
 
 // §9 验收骨架：接听命令在相同 Idempotency-Key 下只执行一次（无需 PostgreSQL）。
 func TestSection9AnswerIdempotency(t *testing.T) {
-	ctx := scope.WithApplication(context.Background(), "test")
+	ctx := context.Background()
 	svc, _, _, _ := newTestService("ag1")
 	svc.deps.Commands = &memCommands{}
 	id, err := svc.StartInbound(ctx, dto.InboundRequest{QueueID: "q1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	answerCtx := scope.WithApplication(scope.WithIdempotency(ctx, "answer-once"), "test")
+	answerCtx := scope.WithIdempotency(ctx, "test")
 	if err := svc.Answer(answerCtx, id, "ag1"); err != nil {
 		t.Fatal(err)
 	}
