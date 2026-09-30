@@ -573,7 +573,7 @@ export const componentStyles = css`
     box-shadow: none;
   }
 
-  input,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
   select,
   textarea {
     min-height: var(--ov-control-height);
@@ -582,18 +582,134 @@ export const componentStyles = css`
     background: #fff;
     border-color: var(--ov-border-strong);
     border-radius: var(--ov-radius-sm);
-    transition: border-color 0.16s, box-shadow 0.16s;
+    transition: border-color 0.16s, box-shadow 0.16s, background 0.16s;
+  }
+
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 32px;
+    cursor: pointer;
+    background-color: #fff;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23687086' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 12px;
+  }
+
+  select.mini {
+    width: 80px;
+    min-width: 80px;
+    flex: none;
+    padding-left: 8px;
+    padding-right: 28px;
+    background-position: right 8px center;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):hover:not(:disabled),
+  select:hover:not(:disabled),
+  textarea:hover:not(:disabled) {
+    border-color: #c9c7f4;
   }
 
   textarea {
     height: auto;
   }
 
-  input:not([type="checkbox"]):not([type="radio"]):focus,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus,
   select:focus,
   textarea:focus {
     border-color: #9895e5;
     box-shadow: var(--ov-focus);
+  }
+
+  select:disabled,
+  input:disabled,
+  textarea:disabled {
+    color: var(--ov-text-muted);
+    background-color: var(--ov-surface-soft);
+    cursor: not-allowed;
+    opacity: 0.85;
+  }
+
+  select:disabled {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%239299aa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+
+  .file {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+    margin: 4px 0;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .file input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .file-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--ov-control-height);
+    height: var(--ov-control-height);
+    padding: 0 14px;
+    color: var(--ov-text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 34px;
+    background: #fff;
+    border: 1px solid var(--ov-border-strong);
+    border-radius: var(--ov-radius-sm);
+    transition: border-color 0.16s, color 0.16s, background 0.16s, box-shadow 0.16s;
+  }
+
+  .file:hover:not(.is-disabled) .file-btn {
+    color: var(--ov-primary);
+    background: var(--ov-primary-soft);
+    border-color: #c9c7f4;
+  }
+
+  .file input:focus-visible + .file-btn {
+    border-color: var(--ov-primary);
+    box-shadow: var(--ov-focus);
+  }
+
+  .file-name {
+    min-width: 0;
+    color: var(--ov-text-muted);
+    font-size: 13px;
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file.has-file .file-name {
+    color: var(--ov-text-secondary);
+  }
+
+  .file.is-disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+  }
+
+  .file.is-disabled input {
+    cursor: not-allowed;
   }
 
   .check input {

@@ -207,7 +207,16 @@ export class IVRFlowEditor extends LitElement {
     this.busy=true;
     try { const asset=await this.service.uploadIvrAsset(file); await this.loadAssets(); if (this.selectedNode && ["play","menu"].includes(this.draft.nodes[this.selectedNode]?.type)) this.updateNode("file",`${asset.id}.wav`); this.notice=`已上传 ${asset.name}`; }
     catch(e) { this.problem=e.message; }
-    finally { this.busy=false; event.target.value=""; }
+    finally {
+      this.busy=false;
+      event.target.value="";
+      const root=event.target.closest(".file");
+      if (root) {
+        root.classList.remove("has-file");
+        const label=root.querySelector(".file-name");
+        if (label) label.textContent="仅支持 .wav";
+      }
+    }
   }
   async synthesize() {
     const name=(this.ttsAssetName||"").trim();

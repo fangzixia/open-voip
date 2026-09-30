@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { NODE_TYPES } from "../ivr-model.js";
 import { formatDateTime } from "../../../datetime.js";
+import { renderFileInput } from "../../file-input.js";
 import { renderNodeEditor } from "./ivr-node-editor.js";
 import { renderCanvas } from "./ivr-canvas.js";
 
@@ -18,7 +19,14 @@ export function renderIvrLayout(host) {
         <div class="pane inspector"><h3>节点属性</h3>${renderNodeEditor(host)}</div>
       </div>
       <div class="details">
-        <div class="pane"><h3>语音素材</h3><label>上传语音文件<input type="file" accept=".wav,audio/wav" @change=${e=>host.upload(e)} ?disabled=${host.busy} /></label>
+        <div class="pane"><h3>语音素材</h3><label>上传语音文件</label>
+          ${renderFileInput({
+            accept: ".wav,audio/wav",
+            disabled: host.busy,
+            buttonText: "选择 WAV",
+            hint: "仅支持 .wav",
+            onChange: (e) => host.upload(e),
+          })}
           ${host.ttsOptions?.enabled ? html`
             <div class="divider"></div>
             <p class="muted">文本生成（${host.ttsOptions.provider_label||host.ttsOptions.provider}，${host.ttsOptions.sample_rate||16000} Hz）</p>
