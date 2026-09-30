@@ -3,17 +3,17 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"gorm.io/gorm/clause"
 	"log/slog"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"open-call/internal/datetime"
 	"open-call/internal/integration/switchapi"
 	"open-call/internal/layers/biz/cdr"
 	"open-call/internal/layers/biz/recmeta"
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
-	"time"
-
-	"gorm.io/gorm"
 )
 
 // runSwitchOutboxDelivery 投递已投影的出站事件（Switch HTTP callback 为主路径）。
@@ -32,19 +32,28 @@ func runSwitchOutboxDelivery(ctx context.Context, db *gorm.DB, sink ports.CallEv
 	}
 }
 
-// CommitSwitchEvent 在同一事务中写入收件箱、业务投影、出站载荷并推进游标。
+// CommitSwitchEvent 在同一事务中写入收件箱、业务投影、出站载荷并推进水印。
+//
+// 去重只依赖 inbox 主键：乱序或晚到事件只要尚未入库就会被处理。
+// oc_switch_event_cursor.last_event_id 仅表示「已观察到的最大 event_id」（对账水印），
+// 不得再用来拒绝 ID 小于水印的事件，否则空洞填补会永久丢数据。
 func CommitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event, _ ports.CallEventPublisher) error {
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var cursor int64
-		if err := tx.Raw("SELECT last_event_id FROM oc_switch_event_cursor WHERE id=1 FOR UPDATE").Scan(&cursor).Error; err != nil {
+		// 串行化同库提交，避免并发下投影与水印交错。
+		var locked int64
+		if err := tx.Raw("SELECT last_event_id FROM oc_switch_event_cursor WHERE id=1 FOR UPDATE").Scan(&locked).Error; err != nil {
 			return err
 		}
-		if ev.ID <= cursor {
+		inbox := models.SwitchEventInbox{EventID: ev.ID, ReceivedAt: time.Now().UTC()}
+		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&inbox)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			// 已处理过（含乱序重投），幂等成功。
 			return nil
 		}
-		if err := tx.Create(&models.SwitchEventInbox{EventID: ev.ID, ReceivedAt: time.Now().UTC()}).Error; err != nil {
-			return err
-		}
+
 		if err := projectSwitchEvent(ctx, tx, ev); err != nil {
 			return err
 		}
@@ -67,7 +76,10 @@ func CommitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event, _ p
 		if err := tx.Create(&models.SwitchEventOutbox{EventID: ev.ID, Payload: string(raw)}).Error; err != nil {
 			return err
 		}
-		return tx.Exec("UPDATE oc_switch_event_cursor SET last_event_id=?,updated_at=NOW() WHERE id=1", ev.ID).Error
+		return tx.Exec(
+			"UPDATE oc_switch_event_cursor SET last_event_id=GREATEST(last_event_id, ?), updated_at=NOW() WHERE id=1",
+			ev.ID,
+		).Error
 	})
 }
 

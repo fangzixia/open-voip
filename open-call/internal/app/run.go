@@ -108,7 +108,7 @@ func Run(configPath string) error {
 	hookSvc := webhook.NewService(db, cfg.Webhook)
 	auditSvc := audit.NewService(db)
 	cfgIO := configio.NewService(db, switchClient)
-	guestSvc := guest.NewService(db, switchClient, cfg.Public.GuestBaseURL)
+	guestSvc := guest.NewService(db, switchClient, switchClient, cfg.Public.GuestBaseURL)
 	businessActions := businessaction.NewService(db)
 
 	wsHub.Configure(authSvc, switchClient, agentSvc, switchClient, hookSvc)

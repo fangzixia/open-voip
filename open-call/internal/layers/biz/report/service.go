@@ -55,12 +55,13 @@ type AgentUtil struct {
 	Utilization float64 `json:"utilization"`
 }
 
-// Service 报表查询（只读 calls/cdr/sessions）。
+// Service 报表查询（只读 calls/cdr/sessions）；队列清单以 Switch 为准。
 type Service struct {
 	db      *gorm.DB
 	runtime interface {
 		ListCalls(context.Context) ([]ports.CallView, error)
 		AgentSession(context.Context, string) (ports.SwitchAgentSession, error)
+		ListQueueConfigs(context.Context) ([]ports.SwitchQueueConfig, error)
 	}
 }
 
@@ -68,6 +69,7 @@ type Service struct {
 func NewService(db *gorm.DB, runtime interface {
 	ListCalls(context.Context) ([]ports.CallView, error)
 	AgentSession(context.Context, string) (ports.SwitchAgentSession, error)
+	ListQueueConfigs(context.Context) ([]ports.SwitchQueueConfig, error)
 }) *Service {
 	return &Service{db: db, runtime: runtime}
 }
@@ -99,8 +101,8 @@ func (s *Service) Live(ctx context.Context) (Live, error) {
 		}
 	}
 	out.ActiveCalls = int64(len(calls))
-	var queues []models.Queue
-	if err := s.db.WithContext(ctx).Find(&queues).Error; err != nil {
+	queues, err := s.runtime.ListQueueConfigs(ctx)
+	if err != nil {
 		return out, err
 	}
 	for _, q := range queues {

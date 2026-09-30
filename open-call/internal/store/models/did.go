@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// DIDRoute 是业务侧维护、待发布到 Switch 的号码路由草稿。
+// DIDRoute 遗留 DID 草稿模型（运行时以 Switch 为准；configio 导出仍用此结构）。
 type DIDRoute struct {
 	// ID 路由 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:DID 路由 ID"`

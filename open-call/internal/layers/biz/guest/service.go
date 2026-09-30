@@ -2,6 +2,7 @@ package guest
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"time"
@@ -35,16 +36,36 @@ type JoinResult struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// queueLookup 队列运行时配置以 Switch 为准。
+type queueLookup interface {
+	GetQueueConfig(context.Context, string) (ports.SwitchQueueConfig, error)
+}
+
 // Service 访客会话与入队。
 type Service struct {
 	db        *gorm.DB
 	calls     ports.CallControlPort
+	queues    queueLookup
 	guestBase string
 }
 
 // NewService 创建访客服务。
-func NewService(db *gorm.DB, calls ports.CallControlPort, guestBase string) *Service {
-	return &Service{db: db, calls: calls, guestBase: guestBase}
+func NewService(db *gorm.DB, calls ports.CallControlPort, queues queueLookup, guestBase string) *Service {
+	return &Service{db: db, calls: calls, queues: queues, guestBase: guestBase}
+}
+
+func (s *Service) requireQueue(ctx context.Context, queueID string) (ports.SwitchQueueConfig, error) {
+	if s.queues == nil {
+		return ports.SwitchQueueConfig{}, errs.NotImplemented("交换服务未配置")
+	}
+	q, err := s.queues.GetQueueConfig(ctx, queueID)
+	if err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			return ports.SwitchQueueConfig{}, errs.NotFound("队列不存在")
+		}
+		return ports.SwitchQueueConfig{}, err
+	}
+	return q, nil
 }
 
 // CreateSession 管理员/坐席签发入会 token。
@@ -61,9 +82,9 @@ func (s *Service) CreateSession(ctx context.Context, queueID string, ttlSec int,
 	if allowedMedia != "audio" && allowedMedia != "video" {
 		return SessionDTO{}, errs.InvalidRequest("allowed_media 必须为 audio 或 video")
 	}
-	var q models.Queue
-	if err := s.db.WithContext(ctx).First(&q, "id = ?", queueID).Error; err != nil {
-		return SessionDTO{}, errs.NotFound("队列不存在")
+	q, err := s.requireQueue(ctx, queueID)
+	if err != nil {
+		return SessionDTO{}, err
 	}
 	if allowedMedia == "video" && !q.VideoEnabled {
 		return SessionDTO{}, errs.Unprocessable("该队列不支持视频", errs.CodeAgentNotVideoCapable)
@@ -117,9 +138,9 @@ func (s *Service) Join(ctx context.Context, queueID string, sessionType dto.Sess
 	if utf8.RuneCountInString(userID) > 64 {
 		return JoinResult{}, errs.InvalidRequest("user_id 不能超过 64 个字符")
 	}
-	var q models.Queue
-	if err := s.db.WithContext(ctx).First(&q, "id = ?", queueID).Error; err != nil {
-		return JoinResult{}, errs.NotFound("队列不存在")
+	q, err := s.requireQueue(ctx, queueID)
+	if err != nil {
+		return JoinResult{}, err
 	}
 	if sessionType == dto.SessionTypeVideo && !q.VideoEnabled {
 		return JoinResult{}, errs.Unprocessable("该队列不支持视频", errs.CodeAgentNotVideoCapable)

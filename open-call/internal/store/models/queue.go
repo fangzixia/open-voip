@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// Queue 呼入队列配置。
+// Queue 遗留队列镜像（运行时以 Switch 为准，open-call 不再直写）。
 type Queue struct {
 	// ID 队列 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`

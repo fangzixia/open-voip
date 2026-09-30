@@ -114,7 +114,7 @@ CREATE TABLE oc_cdr (
   id UUID PRIMARY KEY,
   call_id UUID NOT NULL,
   direction VARCHAR(16),
-  queue_id UUID REFERENCES oc_queues (id) ON DELETE SET NULL,
+  queue_id UUID,
   agent_id UUID REFERENCES oc_agents (id) ON DELETE SET NULL,
   caller VARCHAR(64),
   callee VARCHAR(64),
@@ -141,7 +141,7 @@ CREATE INDEX idx_oc_cdr_result_started ON oc_cdr (result, started_at DESC);
 
 CREATE TABLE oc_guest_sessions (
   id UUID PRIMARY KEY,
-  queue_id UUID NOT NULL REFERENCES oc_queues (id) ON DELETE RESTRICT,
+  queue_id UUID NOT NULL,
   call_id UUID,
   allowed_media VARCHAR(16) NOT NULL DEFAULT 'audio',
   priority BIGINT NOT NULL DEFAULT 0,
@@ -409,7 +409,7 @@ COMMENT ON COLUMN oc_ivr_flows.draft_json IS '草稿 JSON 配置';
 COMMENT ON COLUMN oc_ivr_flows.created_at IS '创建时间';
 COMMENT ON COLUMN oc_ivr_flows.updated_at IS '更新时间';
 
-COMMENT ON TABLE oc_queues IS '呼入队列配置';
+COMMENT ON TABLE oc_queues IS '遗留队列镜像表；运行时队列配置以 Switch 为准，open-call 不再直写本表';
 COMMENT ON COLUMN oc_queues.id IS '队列 ID';
 COMMENT ON COLUMN oc_queues.name IS '队列名称';
 COMMENT ON COLUMN oc_queues.video_enabled IS '是否视频队列';
@@ -429,15 +429,15 @@ COMMENT ON COLUMN oc_queues.listen_announce IS '监听是否提示客户';
 COMMENT ON COLUMN oc_queues.created_at IS '创建时间';
 COMMENT ON COLUMN oc_queues.updated_at IS '更新时间';
 
-COMMENT ON TABLE oc_queue_agents IS '队列与可签入坐席的绑定关系';
+COMMENT ON TABLE oc_queue_agents IS '遗留队列坐席绑定镜像；运行时绑定以 Switch 为准';
 COMMENT ON COLUMN oc_queue_agents.queue_id IS '队列 ID';
 COMMENT ON COLUMN oc_queue_agents.agent_id IS '坐席 ID';
 
-COMMENT ON TABLE oc_queue_skills IS '队列所需技能';
+COMMENT ON TABLE oc_queue_skills IS '遗留队列技能绑定镜像；运行时绑定以 Switch 为准';
 COMMENT ON COLUMN oc_queue_skills.queue_id IS '队列 ID';
 COMMENT ON COLUMN oc_queue_skills.skill_id IS '技能 ID';
 
-COMMENT ON TABLE oc_did_routes IS '呼入号码路由配置草稿，发布至 Switch 后生效';
+COMMENT ON TABLE oc_did_routes IS '遗留 DID 草稿表；运行时 DID 以 Switch 为准';
 COMMENT ON COLUMN oc_did_routes.id IS 'DID 路由 ID';
 COMMENT ON COLUMN oc_did_routes.trunk_id IS '中继标识，* 表示默认中继';
 COMMENT ON COLUMN oc_did_routes.d_id IS '归一化后的 DID 号码';
@@ -450,7 +450,7 @@ COMMENT ON TABLE oc_cdr IS '话单记录';
 COMMENT ON COLUMN oc_cdr.id IS '话单 ID';
 COMMENT ON COLUMN oc_cdr.call_id IS '通话 ID';
 COMMENT ON COLUMN oc_cdr.direction IS '呼叫方向';
-COMMENT ON COLUMN oc_cdr.queue_id IS '队列 ID';
+COMMENT ON COLUMN oc_cdr.queue_id IS '队列 ID（Switch 队列，无本地 FK）';
 COMMENT ON COLUMN oc_cdr.agent_id IS '坐席 ID';
 COMMENT ON COLUMN oc_cdr.caller IS '主叫';
 COMMENT ON COLUMN oc_cdr.callee IS '被叫';
@@ -468,7 +468,7 @@ COMMENT ON COLUMN oc_cdr.created_at IS '创建时间';
 
 COMMENT ON TABLE oc_guest_sessions IS '访客入会 token 与会话元数据';
 COMMENT ON COLUMN oc_guest_sessions.id IS '访客会话 ID';
-COMMENT ON COLUMN oc_guest_sessions.queue_id IS '目标队列 ID';
+COMMENT ON COLUMN oc_guest_sessions.queue_id IS '目标队列 ID（Switch 队列，无本地 FK）';
 COMMENT ON COLUMN oc_guest_sessions.call_id IS '关联通话 ID';
 COMMENT ON COLUMN oc_guest_sessions.allowed_media IS '允许媒介';
 COMMENT ON COLUMN oc_guest_sessions.priority IS '由受信任签发方设置的队列优先级';
@@ -612,7 +612,7 @@ COMMENT ON COLUMN oc_oidc_tickets.expires_at IS '兑换凭据过期时间';
 
 COMMENT ON TABLE oc_switch_event_cursor IS '消费 Switch 事件流的游标（单行）';
 COMMENT ON COLUMN oc_switch_event_cursor.id IS '固定为 1 的主键';
-COMMENT ON COLUMN oc_switch_event_cursor.last_event_id IS '已处理的最大事件 ID';
+COMMENT ON COLUMN oc_switch_event_cursor.last_event_id IS '已观察到的最大事件 ID（对账水印）；乱序去重依赖 inbox，不以水印拒绝晚到事件';
 COMMENT ON COLUMN oc_switch_event_cursor.updated_at IS '游标更新时间';
 
 COMMENT ON TABLE oc_agent_state_projection IS '从 Switch 事件投影的坐席状态变更历史（只读）';

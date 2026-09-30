@@ -152,6 +152,43 @@ func TestEventInboxProjectionCursorAndDelivery(t *testing.T) {
 		if err := tx.First(&row, "event_id=?", ev.ID).Error; err != nil || row.DeliveredAt == nil {
 			t.Fatal("successful delivery not acknowledged")
 		}
+
+		// 乱序：先跳号再补洞，晚到事件不得被水印拒绝。
+		high := switchapi.Event{
+			ID: ev.ID + 2, AgentID: uuid.New().String(), Type: "agent.routing_state_changed",
+			CreatedAt: datetime.Format(time.Now()), Payload: map[string]any{"state": "busy", "reason": "gap"},
+		}
+		gap := switchapi.Event{
+			ID: ev.ID + 1, AgentID: uuid.New().String(), Type: "agent.routing_state_changed",
+			CreatedAt: datetime.Format(time.Now()), Payload: map[string]any{"state": "idle", "reason": "fill"},
+		}
+		if err := CommitSwitchEvent(ctx, tx, high, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := CommitSwitchEvent(ctx, tx, gap, nil); err != nil {
+			t.Fatal(err)
+		}
+		var watermark int64
+		tx.Raw("SELECT last_event_id FROM oc_switch_event_cursor WHERE id=1").Scan(&watermark)
+		if watermark != high.ID {
+			t.Fatalf("watermark want %d got %d", high.ID, watermark)
+		}
+		for _, id := range []int64{ev.ID, gap.ID, high.ID} {
+			var n int64
+			tx.Model(&models.SwitchEventInbox{}).Where("event_id=?", id).Count(&n)
+			if n != 1 {
+				t.Fatalf("inbox missing event %d", id)
+			}
+			tx.Model(&models.SwitchEventOutbox{}).Where("event_id=?", id).Count(&n)
+			if n != 1 {
+				t.Fatalf("outbox missing event %d", id)
+			}
+		}
+		// 重复乱序重投仍幂等。
+		if err := CommitSwitchEvent(ctx, tx, gap, nil); err != nil {
+			t.Fatal(err)
+		}
+
 		return rollback
 	})
 	if !errors.Is(err, rollback) {

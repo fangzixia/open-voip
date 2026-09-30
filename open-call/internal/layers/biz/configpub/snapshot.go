@@ -35,7 +35,7 @@ type DIDDTO struct {
 	TargetID   string `json:"target_id,omitempty"`
 }
 
-// SnapshotService 通过 Switch 管理 DID 与队列 IVR 绑定。
+// SnapshotService 通过 Switch 管理 DID 路由（队列/技能/IVR 运行时真相源在 Switch CRUD）。
 type SnapshotService struct {
 	sw ports.SwitchAdminPort
 }
@@ -110,24 +110,4 @@ func (s *SnapshotService) UpsertDID(ctx context.Context, trunkID, did, targetTyp
 // DeleteDID 删除。
 func (s *SnapshotService) DeleteDID(ctx context.Context, id string) error {
 	return s.sw.DeleteDIDConfig(ctx, id)
-}
-
-// BindQueueIVR 队列绑定 IVR。
-func (s *SnapshotService) BindQueueIVR(ctx context.Context, queueID, flowID string) error {
-	q, err := s.sw.GetQueueConfig(ctx, queueID)
-	if err != nil {
-		return err
-	}
-	if q.VideoEnabled {
-		return errs.InvalidRequest("IVR 只能绑定语音队列")
-	}
-	if flowID != "" {
-		flow, err := s.sw.GetIVRFlow(ctx, flowID)
-		if err != nil || flow.Version == 0 {
-			return errs.InvalidRequest("只能绑定已经发布的 IVR 流程")
-		}
-	}
-	q.IVRFlowID = flowID
-	_, err = s.sw.UpdateQueueConfig(ctx, queueID, q)
-	return err
 }

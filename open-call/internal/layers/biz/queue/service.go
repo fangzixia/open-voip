@@ -327,36 +327,6 @@ func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error
 	return q.AgentIDs, nil
 }
 
-func queueSkills(db *gorm.DB, queueID string) []string {
-	var ids []string
-	_ = db.Model(&models.QueueSkill{}).Where("queue_id = ?", queueID).Pluck("skill_id", &ids)
-	if ids == nil {
-		return []string{}
-	}
-	return ids
-}
-
-func replaceQueueSkills(tx *gorm.DB, queueID string, skillIDs []string) error {
-	if len(skillIDs) > 0 {
-		var n int64
-		if err := tx.Model(&models.Skill{}).Where("id IN ?", skillIDs).Count(&n).Error; err != nil {
-			return err
-		}
-		if n != int64(len(uniqueStrings(skillIDs))) {
-			return errs.InvalidRequest("skill_ids 包含不存在的技能")
-		}
-	}
-	if err := tx.Where("queue_id = ?", queueID).Delete(&models.QueueSkill{}).Error; err != nil {
-		return err
-	}
-	for _, id := range uniqueStrings(skillIDs) {
-		if err := tx.Create(&models.QueueSkill{QueueID: queueID, SkillID: id}).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func validateQueueValues(recording, overflow, after, hours string) error {
 	if recording != "off" && recording != "audio" && recording != "video_composite" {
 		return errs.InvalidRequest("recording_policy 无效")
@@ -415,33 +385,6 @@ func uniqueStrings(in []string) []string {
 				out = append(out, v)
 			}
 		}
-	}
-	return out
-}
-
-func toDTO(row models.Queue) DTO {
-	out := DTO{
-		ID:                    row.ID,
-		Name:                  row.Name,
-		VideoEnabled:          row.VideoEnabled,
-		MaxWaitSec:            row.MaxWaitSec,
-		Strategy:              row.DispatchStrategy,
-		OverflowPolicy:        row.OverflowAction,
-		RecordingPolicy:       row.RecordingPolicy,
-		WaitPrompt:            row.WaitPrompt,
-		AnnounceRecording:     row.AnnounceRecording,
-		PriorityEnabled:       row.PriorityEnabled,
-		BusinessHoursJSON:     row.BusinessHoursJSON,
-		AfterHoursAction:      row.AfterHoursAction,
-		ForceHangupOnCheckout: row.ForceHangupOnCheckout,
-		ListenAnnounce:        row.ListenAnnounce,
-		SkillIDs:              []string{},
-	}
-	if row.OverflowQueueID != nil {
-		out.OverflowQueueID = *row.OverflowQueueID
-	}
-	if row.IVRFlowID != nil {
-		out.IVRFlowID = *row.IVRFlowID
 	}
 	return out
 }

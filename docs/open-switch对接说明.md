@@ -424,8 +424,9 @@ sequenceDiagram
 
 ### 5.4 配置发布
 
-整包：`POST /configuration/versions` → `POST .../activate`。  
-日常：3.2 资源 API 每次写即激活新版本。
+日常：3.2 资源 API（队列/技能/DID/坐席绑定等）每次写即激活新版本；**Switch 为运行时配置真相源**。  
+整包：`POST /configuration/versions` → `POST .../activate`（configio 导入/灾备用）。  
+open-call 的 `oc_queues` / `oc_did_routes` 等为遗留镜像，访客签发与实时报表直接读 Switch，不再以本地表为准。
 
 ---
 

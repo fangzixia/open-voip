@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -226,7 +227,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	var ag models.Agent
 	if err := s.db.WithContext(ctx).Where("user_id = ?", u.ID).First(&ag).Error; err == nil {
 		if syncErr := s.syncAgent(ctx, ag); syncErr != nil {
-			return DTO{}, syncErr
+			s.compensateCreate(ctx, u.ID, ag.ID)
+			return DTO{}, errs.Internal(fmt.Sprintf("同步坐席到交换服务失败，已回滚新建账号: %v", syncErr))
 		}
 	}
 	return s.Get(ctx, u.ID)
@@ -359,7 +361,10 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 	var ag models.Agent
 	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&ag).Error; err == nil {
 		if syncErr := s.syncAgent(ctx, ag); syncErr != nil {
-			return DTO{}, syncErr
+			// 再试一次；仍失败则明确告知库已改、Switch 未齐，避免静默孤儿。
+			if syncErr = s.syncAgent(ctx, ag); syncErr != nil {
+				return DTO{}, errs.Internal(fmt.Sprintf("用户资料已保存，但同步坐席到交换服务失败，请重试保存: %v", syncErr))
+			}
 		}
 	}
 	return s.Get(ctx, id)
@@ -468,6 +473,24 @@ func (s *Service) syncAgent(ctx context.Context, ag models.Agent) error {
 		VideoCapable: ag.VideoCapable, TerminalType: terminal, SIPUsername: ag.SIPUsername, Enabled: !u.Disabled,
 	})
 	return err
+}
+
+// compensateCreate 在 Switch 同步失败时撤销刚创建的用户与坐席，避免可登录却无法签入的孤儿。
+func (s *Service) compensateCreate(ctx context.Context, userID, agentID string) {
+	if s.sw != nil && agentID != "" {
+		_ = s.sw.DeleteAgentConfig(ctx, agentID)
+	}
+	_ = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if agentID != "" {
+			if err := tx.Delete(&models.Agent{}, "id = ?", agentID).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("user_id = ?", userID).Delete(&authz.UserRole{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&models.User{}, "id = ?", userID).Error
+	})
 }
 
 func validateTerminal(kind, username, extension string, video bool) error {

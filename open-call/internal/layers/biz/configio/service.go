@@ -151,7 +151,9 @@ func (s *Service) Import(ctx context.Context, bundle Bundle) error {
 	return err
 }
 
-// ImportWithOptions 先完成全量引用校验，再在单个事务中恢复配置。
+// ImportWithOptions 先完成全量引用校验，再恢复配置。
+// 顺序：校验 → 编译 Switch 包 → StoreConfig（未激活）→ 业务库事务 → ActivateConfig。
+// Store 失败则库未动；库失败则 Switch 仅多一个未激活版本；Activate 失败返回明确错误（库已写入）。
 func (s *Service) ImportWithOptions(ctx context.Context, bundle Bundle, options ImportOptions) (ImportReport, error) {
 	if options.Mode == "" {
 		options.Mode = "merge"
@@ -167,23 +169,40 @@ func (s *Service) ImportWithOptions(ctx context.Context, bundle Bundle, options 
 		report.DryRun = true
 		return report, nil
 	}
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return importTransaction(tx, bundle, options, &report) })
+
+	var storedVersion int64
+	if s.sw != nil {
+		swBundle, compileErr := compileSwitchBundle(ctx, s.db, bundle)
+		if compileErr != nil {
+			return report, compileErr
+		}
+		stored, storeErr := s.sw.StoreConfig(ctx, swBundle)
+		if storeErr != nil {
+			return report, storeErr
+		}
+		storedVersion = stored.Version
+	}
+
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return importTransaction(tx, bundle, options, &report)
+	})
 	if err != nil {
+		if storedVersion > 0 {
+			return report, errs.Internal(fmt.Sprintf(
+				"业务库导入失败（Switch 已暂存未激活版本 %d，可忽略或稍后清理）: %v", storedVersion, err))
+		}
 		return report, err
 	}
-	if options.DryRun || s.sw == nil {
+
+	if s.sw == nil || storedVersion == 0 {
 		return report, nil
 	}
-	swBundle, err := compileSwitchBundle(ctx, s.db, bundle)
-	if err != nil {
-		return report, err
+	if _, actErr := s.sw.ActivateConfig(ctx, storedVersion); actErr != nil {
+		return report, errs.Internal(fmt.Sprintf(
+			"业务库已导入成功，但激活 Switch 配置版本 %d 失败，请手动激活该版本或从备份回滚后重试: %v",
+			storedVersion, actErr))
 	}
-	stored, err := s.sw.StoreConfig(ctx, swBundle)
-	if err != nil {
-		return report, err
-	}
-	_, err = s.sw.ActivateConfig(ctx, stored.Version)
-	return report, err
+	return report, nil
 }
 
 func validate(bundle Bundle, options ImportOptions) (ImportReport, error) {
