@@ -1,4 +1,4 @@
-// 本文件负责通用组件样式。
+// 本文件负责通用组件样式�?
 import { css } from "lit";
 
 export const componentStyles = css`
@@ -222,7 +222,7 @@ export const componentStyles = css`
     width: 100%;
     max-width: 100%;
     padding: 4px 11px;
-    border: 1px solid #d9d9d9;
+    border: 1px solid var(--ov-border-strong);
   }
 
   select {
@@ -320,7 +320,7 @@ export const componentStyles = css`
     gap: 12px 16px;
     align-items: flex-start;
     margin-bottom: 12px;
-    /* 标签行高 + 字段内 gap，用于把裸按钮对齐到输入框 */
+    /* 标签行高 + 字段�?gap，用于把裸按钮对齐到输入�?*/
     --ov-form-control-offset: calc(22px + 4px);
   }
 
@@ -364,13 +364,13 @@ export const componentStyles = css`
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
-    border: 1px solid #f0f0f0;
+    border: 1px solid var(--ov-border);
   }
 
   th,
   td {
     text-align: left;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--ov-border);
   }
 
   th {
@@ -403,7 +403,7 @@ export const componentStyles = css`
   .kpi strong {
     display: block;
     font-weight: 600;
-    color: #1890ff;
+    color: var(--ov-primary);
     line-height: 1.2;
   }
 
@@ -471,15 +471,15 @@ export const componentStyles = css`
   }
 
   .svc-card {
-    border: 1px solid #d9d9d9;
+    border: 1px solid var(--ov-border-strong);
     padding: 20px 18px;
     cursor: pointer;
     background: #fff;
   }
 
   .svc-card.selected {
-    border-color: #1890ff;
-    box-shadow: 0 0 0 1px #1890ff;
+    border-color: var(--ov-primary);
+    box-shadow: 0 0 0 1px var(--ov-primary);
   }
 
   .svc-card h3 {
@@ -490,14 +490,14 @@ export const componentStyles = css`
   .desc {
     display: grid;
     grid-template-columns: 120px 1fr;
-    border: 1px solid #f0f0f0;
+    border: 1px solid var(--ov-border);
   }
 
   .desc dt,
   .desc dd {
     margin: 0;
     padding: 10px 12px;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--ov-border);
   }
 
   .desc dt {
@@ -508,7 +508,7 @@ export const componentStyles = css`
   pre {
     overflow: auto;
     background: #fafafa;
-    border: 1px solid #f0f0f0;
+    border: 1px solid var(--ov-border);
     padding: 12px;
     font-size: 12px;
   }

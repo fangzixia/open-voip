@@ -7,8 +7,54 @@ import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
 import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
+import { canOpenAdminPage, firstAdminPage } from "../shared/workspace-permissions.js";
 import { appStyles } from "../shared/styles/index.js";
 import "../shared/components/ivr/ivr-editor.js";
+
+/** 按导航页懒加载的数据作业：[hostKey, loader, field|null, permission] */
+const NAV_LOAD_JOBS = {
+  overview: [
+    ["status", fetchStatus, null, "status.read"],
+    ["queues", listQueues, "items", "queues.read"],
+    ["agents", listAgents, "items", "agents.read"],
+    ["cdr", listCdr, "items", "cdr.read"],
+    ["live", fetchLiveReport, null, "reports.read"],
+    ["hist", fetchHistoricalReport, null, "reports.read"],
+  ],
+  queues: [
+    ["queues", listQueues, "items", "queues.read"],
+    ["agents", listAgents, "items", "agents.read"],
+    ["skills", listSkills, null, "skills.read"],
+    ["users", listUsers, "items", "users.read"],
+  ],
+  agents: [
+    ["agents", listAgents, "items", "agents.read"],
+    ["hist", fetchHistoricalReport, null, "reports.read"],
+    ["utils", fetchAgentUtil, "items", "reports.read"],
+  ],
+  dids: [
+    ["dids", listDids, null, "dids.read"],
+    ["queues", listQueues, "items", "queues.read"],
+    ["ivrs", listIvr, null, "ivr.read"],
+  ],
+  cdr: [
+    ["cdr", listCdr, "items", "cdr.read"],
+    ["wrapUps", listWrapUps, "items", "cdr.read"],
+  ],
+  recordings: [["recs", listRecordings, "items", "recordings.read"]],
+  ivr: [
+    ["ivrs", listIvr, null, "ivr.read"],
+    ["queues", listQueues, "items", "queues.read"],
+  ],
+  webhooks: [["hooks", listWebhooks, null, "webhooks.read"]],
+  audit: [["audit", listAudit, "items", "audit.read"]],
+  identity: [
+    ["users", listUsers, "items", "users.read"],
+    ["roles", listRoles, "items", "roles.read"],
+    ["permissionsCatalog", listPermissions, "items", "roles.read"],
+    ["groupMappings", listGroupMappings, "items", "identity.read"],
+  ],
+};
 
 function blankQueueForm(video = false) {
   return {
@@ -66,6 +112,8 @@ export class AdminApp extends LitElement {
     clock: { type: String },
     authOptions: { type: Object }, me: { type: Object }, roles: { type: Array }, permissionsCatalog: { type: Array }, groupMappings: { type: Array }, selectedUser: { type: String }, identities: { type: Array }, newRole: { type: Object }, newMapping: { type: Object }, identityInput: { type: Object }, agentProfileDraft: { type: Object }, newIdentityUser: { type: Object },
     openCalls: { type: Array }, runtimeCall: { type: Object }, bridgeForm: { type: Object },
+    embedded: { type: Boolean },
+    workspaceActive: { type: Boolean },
   };
 
   static styles = appStyles;
@@ -114,6 +162,8 @@ export class AdminApp extends LitElement {
     this.openCalls = [];
     this.runtimeCall = null;
     this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
+    this.embedded = false;
+    this.workspaceActive = false;
   }
 
   #run(fn) {
@@ -122,9 +172,18 @@ export class AdminApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this._unbindApi = bindApiFeedback(this, () => { this.authed = false; });
+    this._unbindApi = bindApiFeedback(this, () => {
+      this.authed = false;
+      if (this.embedded) {
+        this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true }));
+      }
+    });
     this.#tickClock();
     this.#clockTimer = setInterval(() => this.#tickClock(), 1000);
+    if (this.embedded) {
+      if (getAccessToken()) void this.#load();
+      return;
+    }
     authOptions().then((v) => { this.authOptions = v || {}; }).catch((e) => {
       this.authOptions = { unavailable: true };
       this.feedback.liveError(e instanceof Error ? e.message : "无法读取登录方式");
@@ -132,6 +191,12 @@ export class AdminApp extends LitElement {
     const ticket = popSSOTicket();
     if (ticket) this.#completeSSO(ticket);
     else if (this.authed) this.#load();
+  }
+
+  updated(changed) {
+    if (changed.has("workspaceActive") && this.workspaceActive) {
+      this.feedback.activate();
+    }
   }
 
   disconnectedCallback() {
@@ -173,24 +238,26 @@ export class AdminApp extends LitElement {
     });
   }
 
-  /** 加载管理端总览所需的队列、坐席、话单和配置数据。 */
+  /** 鉴权后选择可访问导航，并按当前页懒加载。 */
   async #load() {
     this.me = await authMe();
+    const perms = this.me?.permissions || [];
+    if (!canOpenAdminPage(perms, this.nav)) this.nav = firstAdminPage(perms) || "identity";
+    await this.#loadNav(this.nav);
+  }
+
+  /** 按导航页加载所需数据。 */
+  async #loadNav(nav = this.nav) {
+    if (!this.authed && !getAccessToken()) return;
+    if (nav === "runtime") {
+      await this.#loadRuntime();
+      return;
+    }
     const allow = (code) => this.me?.permissions?.includes(code);
-    const navPermission = { overview: "status.read", runtime: "calls.read", queues: "queues.read", agents: "agents.read", dids: "dids.read", cdr: "cdr.read", recordings: "recordings.read", ivr: "ivr.read", webhooks: "webhooks.read", audit: "audit.read", identity: "users.read" };
-    const canOpen = (key) => key === "identity" ? ["users.read", "users.create", "roles.read", "identity.read"].some(allow) : allow(navPermission[key]);
-    if (!canOpen(this.nav)) this.nav = Object.keys(navPermission).find(canOpen) || "identity";
-    const jobs = [
-      ["status", fetchStatus, null, "status.read"], ["users", listUsers, "items", "users.read"], ["queues", listQueues, "items", "queues.read"],
-      ["cdr", listCdr, "items", "cdr.read"], ["live", fetchLiveReport, null, "reports.read"], ["hist", fetchHistoricalReport, null, "reports.read"],
-      ["recs", listRecordings, "items", "recordings.read"], ["audit", listAudit, "items", "audit.read"], ["ivrs", listIvr, null, "ivr.read"],
-      ["hooks", listWebhooks, null, "webhooks.read"], ["agents", listAgents, "items", "agents.read"], ["utils", fetchAgentUtil, "items", "reports.read"],
-      ["dids", listDids, null, "dids.read"], ["skills", listSkills, null, "skills.read"], ["wrapUps", listWrapUps, "items", "cdr.read"],
-      ["roles", listRoles, "items", "roles.read"], ["permissionsCatalog", listPermissions, "items", "roles.read"], ["groupMappings", listGroupMappings, "items", "identity.read"],
-    ];
-    await Promise.allSettled(jobs.filter(([, , , code]) => allow(code)).map(async ([key, load, field]) => {
+    const jobs = NAV_LOAD_JOBS[nav] || [];
+    await Promise.allSettled(jobs.filter(([, , , code]) => !code || allow(code)).map(async ([key, load, field]) => {
       const result = await load();
-      if (!this.authed) return;
+      if (!this.authed && !getAccessToken()) return;
       this[key] = field ? result?.[field] || [] : result;
     }));
   }
@@ -201,7 +268,7 @@ export class AdminApp extends LitElement {
     await this.#run(async () => {
       await createQueue({ ...this[key], video_enabled: !!video });
       this[key] = blankQueueForm(!!video);
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
@@ -209,21 +276,21 @@ export class AdminApp extends LitElement {
     const ids = this.users.filter((u) => u.agent_id).map((u) => u.agent_id);
     await this.#run(async () => {
       await bindQueueAgents(queueId, ids);
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
   async #addHook() {
     await this.#run(async () => {
       await createWebhook(this.hookUrl, ["*"]);
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
   async #addSkill() {
     await this.#run(async () => {
       await createSkill(this.skillName || "通用");
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
@@ -231,7 +298,7 @@ export class AdminApp extends LitElement {
     if (!this.bindAgentId || !this.bindSkillId) return;
     await this.#run(async () => {
       await bindAgentSkills(this.bindAgentId, [this.bindSkillId]);
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
@@ -254,7 +321,7 @@ export class AdminApp extends LitElement {
     ev.preventDefault();
     await this.#run(async () => {
       await upsertDid(this.didForm);
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
@@ -269,14 +336,14 @@ export class AdminApp extends LitElement {
   async #force() {
     await this.#run(async () => {
       await forceCheckout(this.forceAgentId);
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
   async #toggleVip(q) {
     await this.#run(async () => {
       await patchQueue(q.id, { ...q, priority_enabled: !q.priority_enabled });
-      await this.#load();
+      await this.#loadNav();
     });
   }
 
@@ -364,9 +431,10 @@ export class AdminApp extends LitElement {
       force: (...args) => this.#force(...args),
       idleAgents: (...args) => this.#idleAgents(...args),
       load: (...args) => this.#load(...args),
+      loadNav: (...args) => this.#loadNav(...args),
       login: (...args) => this.#login(...args),
       startSSO: () => startSSO(),
-      ...identityActions(this, () => this.#load()),
+      ...identityActions(this, () => this.#loadNav("identity")),
       logout: (...args) => this.#logout(...args),
       playRec: (...args) => this.#playRec(...args),
       qa: (...args) => this.#qa(...args),

@@ -1,4 +1,4 @@
-// 本文件负责页面布局样式。
+// 本文件负责页面布局样式�?
 import { css } from "lit";
 
 export const layoutStyles = css`
@@ -56,8 +56,8 @@ export const layoutStyles = css`
   }
 
   .topbar button:hover {
-    border-color: #1890ff;
-    color: #1890ff;
+    border-color: var(--ov-primary);
+    color: var(--ov-primary);
   }
 
   .layout-body {
@@ -94,7 +94,7 @@ export const layoutStyles = css`
 
   .nav-item.active .nav-badge {
     background: #fff;
-    color: #1890ff;
+    color: var(--ov-primary);
   }
 
   .content {

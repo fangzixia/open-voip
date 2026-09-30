@@ -20,7 +20,10 @@ export const NAV = [
 ];
 
 export function renderApp(host, actions) {
-    if (!host.me) return renderLoginView(host, actions);
+    if (!host.me) {
+      if (host.embedded) return html`<p class="muted" style="padding:24px">正在加载坐席工作台…</p>`;
+      return renderLoginView(host, actions);
+    }
     const state = host.me.session?.state || "offline";
     const can = (code) => host.permissions?.includes(code);
     const page = (render, stateKeys, actionKeys, ...rest) =>

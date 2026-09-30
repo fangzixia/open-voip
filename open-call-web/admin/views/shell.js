@@ -3,6 +3,7 @@ import { html } from "lit";
 import { renderAppShell, renderFeedback, renderLoginLayout } from "../../shared/components/ui.js";
 import { renderCredentialFields } from "../../shared/components/credentials.js";
 import { project } from "../../shared/view-model.js";
+import { canOpenAdminPage } from "../../shared/workspace-permissions.js";
 import { adminViewActions } from "../controllers/view-actions.js";
 import { renderAgents } from "./agents.js";
 import { renderAudit } from "./audit.js";
@@ -30,15 +31,12 @@ export const NAV = [
   { id: "identity", label: "用户与权限", group: "系统设置" },
 ];
 
-const pagePermissions = {
-  overview: "status.read", runtime: "calls.read", queues: "queues.read", agents: "agents.read", dids: "dids.read",
-  cdr: "cdr.read", recordings: "recordings.read", ivr: "ivr.read",
-  webhooks: "webhooks.read", audit: "audit.read",
-};
-
 export function renderApp(host, operations) {
   const actions = adminViewActions(host, operations);
   if (!host.authed) {
+    if (host.embedded) {
+      return html`<p class="muted" style="padding:24px">正在加载管理控台…</p>`;
+    }
     return renderLoginLayout({
       subtitle: "管理控台",
       title: "管理员登录",
@@ -54,11 +52,10 @@ export function renderApp(host, operations) {
 
   const page = (render, stateKeys, actionKeys) =>
     render(project(host, stateKeys), project(actions, actionKeys));
+  const perms = host.me?.permissions || [];
   return renderAppShell({
     subtitle: "管理控台",
-    navItems: NAV.filter((item) => item.id === "identity"
-      ? ["users.read", "users.create", "roles.read", "identity.read"].some((p) => host.me?.permissions?.includes(p))
-      : host.me?.permissions?.includes(pagePermissions[item.id])),
+    navItems: NAV.filter((item) => canOpenAdminPage(perms, item.id)),
     activeNav: host.nav,
     onNavigate: actions.navigate,
     breadcrumb: actions.crumb(),

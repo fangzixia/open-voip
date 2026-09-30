@@ -7,7 +7,7 @@ export function adminViewActions(host, operations) {
       if (host.feedback) host.feedback.begin();
       else { host.error = ""; host.notice = ""; }
       host.nav = id;
-      if (id === "runtime" && typeof host.loadRuntime === "function") void host.loadRuntime();
+      if (typeof host.loadNav === "function") void host.loadNav(id);
     },
     setUsername: (value) => { host.username = value; },
     setPassword: (value) => { host.password = value; },

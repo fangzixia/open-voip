@@ -3,10 +3,10 @@ import { css } from "lit";
 import { tokenStyles } from "../../../styles/tokens.js";
 
 export const ivrEditorStyles = [tokenStyles, css`
-    :host { display:block; color:var(--ov-text); font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
+    :host { display:block; color:var(--ov-text); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
     * { box-sizing:border-box; }
     button,input,select { font:inherit; }
-    button { cursor:pointer; border-radius:var(--ov-radius-sm); border:1px solid var(--ov-border-strong); background:#fff; color:var(--ov-text); min-height:36px; padding:4px 12px; }
+    button { cursor:pointer; border-radius:var(--ov-radius-sm); border:1px solid var(--ov-border-strong); background:var(--ov-surface); color:var(--ov-text); min-height:36px; padding:4px 12px; }
     button:hover { color:var(--ov-primary); border-color:var(--ov-primary); }
     button:focus-visible,input:focus-visible,select:focus-visible { outline:none; box-shadow:var(--ov-focus); }
     button:disabled { opacity:.5; cursor:not-allowed; }
@@ -14,17 +14,17 @@ export const ivrEditorStyles = [tokenStyles, css`
     .primary:hover { color:white; background:var(--ov-primary-hover); }
     .danger { color:var(--ov-danger); }
     .ghost { border-color:transparent; background:transparent; color:var(--ov-primary); }
-    .wrap { background:white; border:1px solid var(--ov-border); border-radius:var(--ov-radius-lg); box-shadow:var(--ov-shadow-sm); padding:16px; min-height:600px; }
+    .wrap { background:var(--ov-surface); border:1px solid var(--ov-border); border-radius:var(--ov-radius-lg); box-shadow:var(--ov-shadow-sm); padding:16px; min-height:600px; }
     .header,.toolbar,.row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .header { justify-content:space-between; margin-bottom:12px; }
     .header h2 { margin:0; font-size:18px; }
     .header .flow-name { width:220px; margin-top:5px; }
-    .muted { color:#737373; }
+    .muted { color:var(--ov-text-muted); }
     .status { margin:0 0 10px; }
-    .error { color:#cf1322; background:#fff1f0; border:1px solid #ffa39e; padding:8px; margin:8px 0; }
+    .error { color:var(--ov-danger); background:#fff1f0; border:1px solid #ffa39e; padding:8px; margin:8px 0; }
     .success { color:#135200; background:#f6ffed; padding:8px; margin:8px 0; }
     .workspace { display:grid; grid-template-columns:minmax(175px,210px) minmax(360px,1fr) minmax(250px,300px); gap:14px; align-items:start; }
-    .pane { border:1px solid #e5e5e5; padding:12px; min-width:0; }
+    .pane { border:1px solid var(--ov-border); padding:12px; min-width:0; }
     .pane h3 { margin:0 0 10px; font-size:14px; }
     .list { display:grid; gap:6px; }
     .list button { text-align:left; }

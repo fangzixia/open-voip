@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FeedbackController, currentFeedbackEpoch, installFeedbackEpochReader, runFeedbackAction } from "./feedback.js";
+import { FeedbackController, currentFeedbackEpoch, runFeedbackAction, setForegroundFeedback } from "./feedback.js";
 
 function mockHost() {
   const host = {
@@ -46,12 +46,31 @@ test("runFeedbackAction 成功与失败", async () => {
   assert.equal(host.error, "操作失败");
 });
 
-test("断开后 epoch reader 复位", () => {
+test("hostDisconnected 清除前台 feedback", () => {
+  setForegroundFeedback(null);
   const host = mockHost();
   const fb = new FeedbackController(host);
   fb.begin();
   assert.equal(currentFeedbackEpoch(), 1);
   fb.hostDisconnected();
   assert.equal(currentFeedbackEpoch(), 0);
-  installFeedbackEpochReader(() => 0);
+});
+
+test("activate / setForegroundFeedback 切换前台世代", () => {
+  setForegroundFeedback(null);
+  const hostA = mockHost();
+  const hostB = mockHost();
+  const fbA = new FeedbackController(hostA);
+  const fbB = new FeedbackController(hostB);
+  fbA.begin();
+  fbB.begin();
+  fbB.begin();
+  assert.equal(currentFeedbackEpoch(), 1);
+  fbB.activate();
+  assert.equal(currentFeedbackEpoch(), 2);
+  setForegroundFeedback(fbA);
+  assert.equal(currentFeedbackEpoch(), 1);
+  fbA.hostDisconnected();
+  assert.equal(currentFeedbackEpoch(), 0);
+  setForegroundFeedback(null);
 });

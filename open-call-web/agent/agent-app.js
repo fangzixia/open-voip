@@ -1,14 +1,15 @@
 // 坐席工作台：签入、通话控制、WebRTC 与业务动作回调。
 import { NAV, renderApp } from "./views/shell.js";
+import { AgentMediaController } from "./controllers/media.js";
 import { bindApiFeedback } from "../shared/http-client.js";
-import { FeedbackController } from "../shared/feedback.js";
+import { FeedbackController, runFeedbackAction } from "../shared/feedback.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, screenShare, sendDtmf, setAgentState, startSSO, setCallVersion, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
+import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, sendDtmf, setAgentState, startSSO, setCallVersion, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
-import { applyAudioOutput, listMediaDevices, replaceInputDevice, setLocalMuted, startMediaSession, startScreenShare, stopMedia,  } from "../shared/webrtc.js";
+import { listMediaDevices } from "../shared/webrtc.js";
 import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
 
@@ -53,22 +54,20 @@ export class AgentApp extends LitElement {
     recentCalls: { type: Array },
     clock: { type: String },
     live: { type: Object },
+    embedded: { type: Boolean },
+    workspaceActive: { type: Boolean },
   };
 
   static styles = appStyles;
 
   #ws = new BusinessWebSocket();
-  #pc = null;
-  #local = null;
-  #remote = null;
-  #remoteAudio = null;
   #timer = null;
   #startedAt = 0;
   #clockTimer = null;
-  #mediaConnecting = false;
   feedback = new FeedbackController(this);
+  media = new AgentMediaController(this);
 
-  get hasLocal() { return !!this.#local; }
+  get hasLocal() { return this.media.hasLocal; }
 
   constructor() {
     super();
@@ -110,6 +109,12 @@ export class AgentApp extends LitElement {
     this.recentCalls = [];
     this.clock = "";
     this.live = null;
+    this.embedded = false;
+    this.workspaceActive = false;
+  }
+
+  #run(fn) {
+    return runFeedbackAction(this.feedback, fn);
   }
 
   connectedCallback() {
@@ -118,6 +123,10 @@ export class AgentApp extends LitElement {
     this._unbindApi = bindApiFeedback(this, () => { this.#ws.disconnect(); this.#endLocal(); this.me = null; });
     this.#tickClock();
     this.#clockTimer = setInterval(() => this.#tickClock(), 1000);
+    if (this.embedded) {
+      if (getAccessToken()) this.#restore();
+      return;
+    }
     authOptions().then((v) => { this.authOptions = v || {}; }).catch((e) => { this.authOptions = { unavailable: true }; this.feedback.liveError(e instanceof Error ? e.message : "无法读取登录方式"); });
     const ticket = popSSOTicket();
     if (ticket) this.#completeSSO(ticket);
@@ -129,8 +138,14 @@ export class AgentApp extends LitElement {
     this._unbindApi?.();
     this.#ws.disconnect();
     this.#stopTimer();
-    stopMedia(this.#pc, this.#local);
+    this.media.stop();
     clearInterval(this.#clockTimer);
+  }
+
+  updated(changed) {
+    if (changed.has("workspaceActive") && this.workspaceActive) {
+      this.feedback.activate();
+    }
   }
 
   #tickClock() {
@@ -138,52 +153,47 @@ export class AgentApp extends LitElement {
   }
 
   async #restore() {
-    const __fbEpoch = this.feedback.begin();
-    try {
-      const identity = await authMe();
-      this.permissions = identity.permissions || [];
-      const can = (code) => this.permissions.includes(code);
-      this.me = await fetchAgentMe();
-      setCallContext({ agent_id: this.me.id, role: this.me.role || "agent" });
-      this.queues = can("queues.read") ? (await listQueues()).items || [] : [];
-      this.devices = await listMediaDevices();
-      this.agents = can("agents.read") ? (await listAgents()).items || [] : [];
-      if (!can("calls.operate") && ["inbound", "outbound"].includes(this.nav)) this.nav = "queue";
+    await this.#run(async () => {
       try {
-        this.live = await fetchLiveReport();
-      } catch {
-        this.live = null;
+        const identity = await authMe();
+        this.permissions = identity.permissions || [];
+        const can = (code) => this.permissions.includes(code);
+        this.me = await fetchAgentMe();
+        setCallContext({ agent_id: this.me.id, role: this.me.role || "agent" });
+        this.queues = can("queues.read") ? (await listQueues()).items || [] : [];
+        this.devices = await listMediaDevices();
+        this.agents = can("agents.read") ? (await listAgents()).items || [] : [];
+        if (!can("calls.operate") && ["inbound", "outbound"].includes(this.nav)) this.nav = "queue";
+        try {
+          this.live = await fetchLiveReport();
+        } catch {
+          this.live = null;
+        }
+        this.#connectWs();
+        this.feedback.clear();
+      } catch (e) {
+        clearAccessToken();
+        this.me = null;
+        throw e;
       }
-      this.#connectWs();
-      this.feedback.clear();
-    } catch (e) {
-      clearAccessToken();
-      this.me = null;
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #login(ev) {
-    const __fbEpoch = this.feedback.begin();
     ev.preventDefault();
-    try {
+    await this.#run(async () => {
       const tokens = await login(this.username, this.password);
       setAuthTokens(tokens, { persist: true });
       await this.#restore();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #completeSSO(ticket) {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       const tokens = await exchangeSSOTicket(ticket);
       setAuthTokens(tokens, { persist: true });
       await this.#restore();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   #connectWs() {
@@ -195,8 +205,7 @@ export class AgentApp extends LitElement {
 
   /** 连接恢复后从服务端同步振铃和当前通话，必要时重新加入媒体。 */
   async #syncCalls() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       this.me = await fetchAgentMe();
       const { items = [] } = await fetchMyCalls();
       const ringing = items.find(c => c.state === "ringing" && c.agent_id === this.me.id && !c.legs?.some(l => l.agent_id === this.me.id));
@@ -208,9 +217,9 @@ export class AgentApp extends LitElement {
         if (active.version != null) setCallVersion(active.version);
         const activeLeg = active.legs?.find((item) => item.agent_id === this.me.id);
         setCallContext({ call_id: active.id, leg_id: activeLeg?.id || "", queue_id: active.queue_id || "" });
-        if (["active", "held"].includes(active.state) && !this.#pc && this.me.terminal_type !== "sip") await this.#rejoinMedia(active.session_type !== "audio");
+        if (["active", "held"].includes(active.state) && !this.media.pc && this.me.terminal_type !== "sip") await this.media.rejoin(active.session_type !== "audio");
       }
-    } catch (e) { this.feedback.fail(e, __fbEpoch); }
+    });
   }
 
   /** 将业务事件映射为来电提示、通话状态和视频协商提示。 */
@@ -233,10 +242,10 @@ export class AgentApp extends LitElement {
       this.videoAsk = msg.payload;
     } else if (msg.type === "video.accepted") {
       this.feedback.liveNotice("对端已同意开启视频");
-      this.#rejoinMedia(true);
+      this.media.rejoin(true);
     } else if (msg.type === "video.downgraded") {
       this.feedback.liveNotice("已降为语音");
-      this.#rejoinMedia(false);
+      this.media.rejoin(false);
     } else if (msg.type === "call.consulting") {
       this.consulting = true;
       this.feedback.liveNotice("咨询转已接通，可完成转接或继续三方");
@@ -252,17 +261,14 @@ export class AgentApp extends LitElement {
       void this.#syncCalls();
     } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.call?.id) {
       this.feedback.liveNotice("交换服务已恢复，正在重新连接媒体…");
-      void this.#syncCalls().then(() => this.#rejoinMedia(this.call?.session_type !== "audio"));
+      void this.#syncCalls().then(() => this.media.rejoin(this.call?.session_type !== "audio"));
     }
   }
 
   async #doCheckIn() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       await this.#ensureCheckedIn(true);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #ensureCheckedIn(force = false) {
@@ -276,43 +282,32 @@ export class AgentApp extends LitElement {
   }
 
   async #doCheckOut() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       await checkOut(this.me.id);
       this.me = { ...this.me, session: { ...this.me.session, state: "offline", queue_ids: [] } };
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #toggleBusy() {
-    const __fbEpoch = this.feedback.begin();
     const next = this.me.session?.state === "busy" ? "idle" : "busy";
-    try {
+    await this.#run(async () => {
       const sess = await setAgentState(this.me.id, next, next === "busy" ? this.busyReason || "break" : "");
       this.me = { ...this.me, session: sess };
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #setIdle() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       const sess = await setAgentState(this.me.id, "idle", "");
       this.me = { ...this.me, session: sess };
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   /** 接听当前来电并为坐席通话腿建立 WebRTC 会话。 */
   async #answer() {
-    const __fbEpoch = this.feedback.begin();
-    if (this.#mediaConnecting) return;
-    this.#mediaConnecting = true;
-    try {
-      if (this.me?.terminal_type === "sip") { this.feedback.ok("请在 SIP 话机接听", __fbEpoch); return; }
+    if (this.media.connecting) return;
+    await this.#run(async (epoch) => {
+      if (this.me?.terminal_type === "sip") { this.feedback.ok("请在 SIP 话机接听", epoch); return; }
       const incomingId = this.incoming.call_id;
       await answerCall(incomingId);
       const call = await getCall(incomingId);
@@ -323,7 +318,7 @@ export class AgentApp extends LitElement {
       const leg = (call.legs || []).find((l) => l.agent_id === this.me?.id) || call.legs?.[1];
       setCallContext({ call_id: call.id, leg_id: leg?.id || "", queue_id: call.queue_id || "" });
       reportEvent("call.answered");
-      const session = await startMediaSession({
+      await this.media.start({
         callId: call.id,
         legId: leg.id,
         video,
@@ -331,19 +326,10 @@ export class AgentApp extends LitElement {
         videoDeviceId: this.videoDeviceId,
         allowAudioOnlyForVideo: true,
       });
-      this.#pc = session.pc;
-      this.#local = session.localStream;
-      this.#remote = session.remoteStream;
-      this.#remoteAudio = session.remoteAudioStream;
-      this.cameraUnavailable = session.cameraUnavailable;
       this.feedback.clear();
-      this.#bindVideos();
+      this.media.bindVideos();
       this.#startTimer();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    } finally {
-      this.#mediaConnecting = false;
-    }
+    });
   }
 
   async #decline() {
@@ -386,17 +372,12 @@ export class AgentApp extends LitElement {
       ].slice(0, 20);
     }
     this.#stopTimer();
-    stopMedia(this.#pc, this.#local);
-    this.#pc = null;
-    this.#local = null;
-    this.#remote = null;
-    this.#remoteAudio = null;
+    this.media.stop();
     this.cameraUnavailable = false;
     this.audioPlaybackBlocked = false;
     this.call = null;
     this.incoming = null;
     this.elapsed = 0;
-    this.sharing = false;
     this.consulting = false;
     this.showPad = false;
     if (wrapId) {
@@ -407,57 +388,14 @@ export class AgentApp extends LitElement {
     }
   }
 
-  /** 媒体类型变化或断线恢复时重新协商当前通话。 */
-  async #rejoinMedia(video) {
-    const __fbEpoch = this.feedback.begin();
-    if (!this.call || this.me?.terminal_type === "sip" || this.#mediaConnecting) return;
-    const leg = (this.call.legs || []).find((l) => l.agent_id === this.me?.id) || this.call.legs?.[1];
-    if (!leg) return;
-    this.#mediaConnecting = true;
-    stopMedia(this.#pc, this.#local);
-    try {
-      const session = await startMediaSession({
-        callId: this.call.id,
-        legId: leg.id,
-        video,
-        audioDeviceId: this.audioDeviceId,
-        videoDeviceId: this.videoDeviceId,
-        allowAudioOnlyForVideo: true,
-      });
-      this.#pc = session.pc;
-      this.#local = session.localStream;
-      this.#remote = session.remoteStream;
-      this.#remoteAudio = session.remoteAudioStream;
-      this.cameraUnavailable = session.cameraUnavailable;
-      this.feedback.clear();
-      this.call = { ...this.call, session_type: video ? "mixed" : "audio" };
-      this.#bindVideos();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    } finally {
-      this.#mediaConnecting = false;
-    }
-  }
-
-  async #toggleMute(kind) {
-    if (kind === "audio") this.audioMuted = !this.audioMuted;
-    else this.videoMuted = !this.videoMuted;
-    const leg = (this.call?.legs || []).find((l) => l.agent_id === this.me?.id);
-    await setLocalMuted(this.#local, this.call?.id, leg?.id, {
-      audio: this.audioMuted,
-      video: this.videoMuted,
-    });
-  }
-
   async #dial() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async (epoch) => {
       if (!this.dest.trim()) {
-        this.feedback.fail("请输入目标号码", __fbEpoch);
+        this.feedback.fail("请输入目标号码", epoch);
         return;
       }
       await this.#ensureCheckedIn();
-      if (this.me?.terminal_type === "sip") { this.feedback.ok("已自动签入，请从已注册的 SIP 话机拨号", __fbEpoch); return; }
+      if (this.me?.terminal_type === "sip") { this.feedback.ok("已自动签入，请从已注册的 SIP 话机拨号", epoch); return; }
       const call = await outboundCall(this.dest.trim());
       this.call = call;
       this.nav = "desk";
@@ -466,39 +404,33 @@ export class AgentApp extends LitElement {
       setCallContext({ call_id: call.id, leg_id: leg?.id || "", queue_id: call.queue_id || "" });
       reportEvent("call.outbound_created", { state: call.state });
       if (call.state === "active" && leg) {
-        const session = await startMediaSession({
+        await this.media.start({
           callId: call.id,
           legId: leg.id,
           video: false,
           audioDeviceId: this.audioDeviceId,
         });
-        this.#pc = session.pc;
-        this.#local = session.localStream;
-        this.#remote = session.remoteStream;
-        this.#remoteAudio = session.remoteAudioStream;
-        this.#bindVideos();
+        this.media.bindVideos();
         this.#startTimer();
       }
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #hold() {
-    const __fbEpoch = this.feedback.begin();
     this.held = !this.held;
-    try {
-      await holdCall(this.call.id, this.held);
-    } catch (e) {
-      this.held = !this.held;
-      this.feedback.fail(e, __fbEpoch);
-    }
+    await this.#run(async () => {
+      try {
+        await holdCall(this.call.id, this.held);
+      } catch (e) {
+        this.held = !this.held;
+        throw e;
+      }
+    });
   }
 
   /** 根据页面选择的目标和模式发起转接。 */
   async #xfer() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async (epoch) => {
       const target = this.agents.find((a) => a.extension === this.dest);
       const mode = this.xferMode || "blind";
       await transferCall(
@@ -506,109 +438,56 @@ export class AgentApp extends LitElement {
         target ? { mode, target_agent_id: target.id } : { mode: "blind", target_queue_id: this.dest },
       );
       this.consulting = mode === "consult";
-      this.feedback.ok(mode === "consult" ? "咨询转振铃中，客户已保持" : "已盲转", __fbEpoch);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+      this.feedback.ok(mode === "consult" ? "咨询转振铃中，客户已保持" : "已盲转", epoch);
+    });
   }
 
   async #completeXfer() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async (epoch) => {
       await completeTransfer(this.call.id);
       this.consulting = false;
-      this.feedback.ok("咨询转已完成", __fbEpoch);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
-  }
-
-  async #share() {
-    const __fbEpoch = this.feedback.begin();
-    try {
-      if (!this.#pc?.getSenders().some((s) => s.track?.kind === "video")) {
-        await this.#rejoinMedia(true);
-      }
-      const stream = await startScreenShare(this.#pc);
-      const leg = (this.call?.legs || []).find((l) => l.agent_id === this.me?.id);
-      await screenShare(this.call.id, true, leg?.id);
-      this.sharing = true;
-      stream.getVideoTracks()[0].onended = () => {
-        this.sharing = false;
-        screenShare(this.call.id, false, leg?.id);
-      };
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+      this.feedback.ok("咨询转已完成", epoch);
+    });
   }
 
   async #askVideo() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       await requestVideo(this.call.id);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #downgrade() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       await downgradeVideo(this.call.id);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #conf() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async (epoch) => {
       const target = this.agents.find((a) => a.extension === this.dest);
       if (!target) throw new Error("请先填写对方分机");
       await conferenceInvite(this.call.id, target.id);
-      this.feedback.ok("已邀请第三人，对方振铃中", __fbEpoch);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+      this.feedback.ok("已邀请第三人，对方振铃中", epoch);
+    });
   }
 
   async #listen() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       const id = this.incoming?.call_id || this.dest;
       const out = await listenCall(id);
       setCallContext({ call_id: out.call_id, leg_id: out.leg_id });
       reportEvent("call.listen_started");
       this.call = await getCall(out.call_id);
       this.nav = "desk";
-      const session = await startMediaSession({
+      await this.media.start({
         callId: out.call_id,
         legId: out.leg_id,
         video: false,
         recvOnly: true,
       });
-      this.#pc = session.pc;
-      this.#remote = session.remoteStream;
-      this.#remoteAudio = session.remoteAudioStream;
-      this.#bindVideos();
+      this.media.bindVideos();
       this.#startTimer();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
-  }
-
-  async #preview() {
-    const __fbEpoch = this.feedback.begin();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: this.videoDeviceId ? { deviceId: { exact: this.videoDeviceId } } : true,
-      });
-      this.#local = stream;
-      this.#bindVideos();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #dtmf(d) {
@@ -617,9 +496,8 @@ export class AgentApp extends LitElement {
   }
 
   async #submitWrap() {
-    const __fbEpoch = this.feedback.begin();
-    const id = this.call?.id || this.pendingWrapId;
-    try {
+    await this.#run(async (epoch) => {
+      const id = this.call?.id || this.pendingWrapId;
       await wrapUp(id, this.wrapNotes);
       try {
         const sess = await setAgentState(this.me.id, "idle", "wrap-up");
@@ -627,104 +505,33 @@ export class AgentApp extends LitElement {
       } catch {
         /* 通话中提交小结时状态仍为 on_call */
       }
-      this.feedback.ok("小结已提交，已示闲", __fbEpoch);
+      this.feedback.ok("小结已提交，已示闲", epoch);
       this.pendingWrapId = "";
       this.wrapNotes = "";
       clearCallContext();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #makeLink() {
-    const __fbEpoch = this.feedback.begin();
-    try {
+    await this.#run(async () => {
       const qid = this.selectedQueues[0] || this.queues[0]?.id;
       const s = await createGuestSession(qid, 3600, this.guestMedia);
       this.guestLink = new URL(s.guest_url, location.origin).href;
       this.guestExpiresAt = s.expires_at || "";
       this.feedback.clear();
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
+    });
   }
 
   async #copyGuestLink() {
     if (!this.guestLink) return;
-    const __fbEpoch = this.feedback.begin();
-    try {
-      await navigator.clipboard.writeText(this.guestLink);
-      this.feedback.ok("访客链接已复制", __fbEpoch);
-    } catch {
-      this.feedback.fail("复制失败，请手动复制链接", __fbEpoch);
-    }
-  }
-
-  #bindVideos() {
-    this.updateComplete.then(() => {
-      const localV = this.renderRoot.querySelector("#local");
-      const remoteV = this.renderRoot.querySelector("#remote");
-      const remoteAudio = this.renderRoot.querySelector("#remote-audio");
-      if (localV) localV.srcObject = this.#local;
-      if (remoteV) {
-        remoteV.srcObject = this.#remote;
-        void remoteV.play().catch(() => {});
-      }
-      if (remoteAudio) {
-        remoteAudio.srcObject = this.#remoteAudio;
-        applyAudioOutput(remoteAudio, this.speakerDeviceId).catch(() => {});
-        void this.#playRemoteAudio();
+    await this.#run(async (epoch) => {
+      try {
+        await navigator.clipboard.writeText(this.guestLink);
+        this.feedback.ok("访客链接已复制", epoch);
+      } catch {
+        this.feedback.fail("复制失败，请手动复制链接", epoch);
       }
     });
-  }
-
-  async #playRemoteAudio() {
-    const audio = this.renderRoot.querySelector("#remote-audio");
-    if (!audio) return;
-    try {
-      await audio.play();
-      this.audioPlaybackBlocked = false;
-    } catch {
-      this.audioPlaybackBlocked = true;
-    }
-  }
-
-  async #onMicChange(id) {
-    const __fbEpoch = this.feedback.begin();
-    this.audioDeviceId = id;
-    if (!this.#pc || !this.call) return;
-    try {
-      await replaceInputDevice(this.#pc, this.#local, "audio", id);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
-  }
-
-  async #onCamChange(id) {
-    const __fbEpoch = this.feedback.begin();
-    this.videoDeviceId = id;
-    if (!this.#pc || !this.call) return;
-    try {
-      if (!this.#local?.getVideoTracks().length) {
-        await this.#rejoinMedia(true);
-        return;
-      }
-      await replaceInputDevice(this.#pc, this.#local, "video", id);
-      this.cameraUnavailable = false;
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
-  }
-
-  async #onSpeakerChange(id) {
-    const __fbEpoch = this.feedback.begin();
-    this.speakerDeviceId = id;
-    const remoteV = this.renderRoot.querySelector("#remote-audio");
-    try {
-      await applyAudioOutput(remoteV, id);
-    } catch (e) {
-      this.feedback.fail(e, __fbEpoch);
-    }
   }
 
   #startTimer() {
@@ -740,16 +547,18 @@ export class AgentApp extends LitElement {
   }
 
   async #logout() {
-    const __fbEpoch = this.feedback.begin();
-    try { await logout(); } catch (e) { this.feedback.fail(e, __fbEpoch); }
-    clearAccessToken();
-    this.#ws.disconnect();
-    this.#endLocal();
-    this.pendingWrapId = "";
-    clearCallContext();
-    this.nav = "desk";
-    this.me = null;
-    this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true }));
+    await this.#run(async () => {
+      try { await logout(); } finally {
+        clearAccessToken();
+        this.#ws.disconnect();
+        this.#endLocal();
+        this.pendingWrapId = "";
+        clearCallContext();
+        this.nav = "desk";
+        this.me = null;
+        this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true }));
+      }
+    });
   }
 
   #crumb() {
@@ -773,7 +582,7 @@ export class AgentApp extends LitElement {
   #navigate(id) {
     this.feedback.begin();
     this.nav = id;
-    if (id === "desk" && this.#pc) this.#bindVideos();
+    if (id === "desk" && this.media.pc) this.media.bindVideos();
   }
 
   #respondVideo(accept) {
@@ -784,7 +593,7 @@ export class AgentApp extends LitElement {
     return renderApp(this, {
       answer: (...args) => this.#answer(...args),
       askVideo: (...args) => this.#askVideo(...args),
-      bindVideos: (...args) => this.#bindVideos(...args),
+      bindVideos: (...args) => this.media.bindVideos(...args),
       completeXfer: (...args) => this.#completeXfer(...args),
       conf: (...args) => this.#conf(...args),
       copyGuestLink: (...args) => this.#copyGuestLink(...args),
@@ -803,11 +612,11 @@ export class AgentApp extends LitElement {
       logout: (...args) => this.#logout(...args),
       makeLink: (...args) => this.#makeLink(...args),
       navigate: (...args) => this.#navigate(...args),
-      onCamChange: (...args) => this.#onCamChange(...args),
-      onMicChange: (...args) => this.#onMicChange(...args),
-      onSpeakerChange: (...args) => this.#onSpeakerChange(...args),
-      playRemoteAudio: (...args) => this.#playRemoteAudio(...args),
-      preview: (...args) => this.#preview(...args),
+      onCamChange: (...args) => this.media.onCamChange(...args),
+      onMicChange: (...args) => this.media.onMicChange(...args),
+      onSpeakerChange: (...args) => this.media.onSpeakerChange(...args),
+      playRemoteAudio: (...args) => this.media.playRemoteAudio(...args),
+      preview: (...args) => this.media.preview(...args),
       respondVideo: (...args) => this.#respondVideo(...args),
       setBusyReason: (value) => { this.busyReason = value; },
       setDest: (value) => { this.dest = value; },
@@ -819,12 +628,12 @@ export class AgentApp extends LitElement {
       setShowPad: (value) => { this.showPad = value; },
       setWrapNotes: (value) => { this.wrapNotes = value; },
       setXferMode: (value) => { this.xferMode = value; },
-      share: (...args) => this.#share(...args),
+      share: (...args) => this.media.share(...args),
       stageCaller: (...args) => this.#stageCaller(...args),
       stageQueue: (...args) => this.#stageQueue(...args),
       submitWrap: (...args) => this.#submitWrap(...args),
       toggleBusy: (...args) => this.#toggleBusy(...args),
-      toggleMute: (...args) => this.#toggleMute(...args),
+      toggleMute: (...args) => this.media.toggleMute(...args),
       waitingCount: (...args) => this.#waitingCount(...args),
       xfer: (...args) => this.#xfer(...args)
     });
