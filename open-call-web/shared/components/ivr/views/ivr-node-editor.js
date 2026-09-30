@@ -37,7 +37,12 @@ export function renderNodeEditor(host) {
         <button @click=${()=>host.mutate(d=>{const choices=d.nodes[id].choices;let i=1;while(("result_"+i) in choices)i++;choices["result_"+i]="";})}>添加业务结果</button>
         <label>超时去向${renderTargetSelect(host,n.default,v=>host.updateNode("default",v),id)}</label>
       ` : nothing}
-      ${n.type==="time_check" ? html`<label>工作时间所属队列<select .value=${n.queue_id||""} @change=${e=>host.updateNode("queue_id",e.target.value)}><option value="">请选择队列</option>${host.queues.map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><label>营业时${renderTargetSelect(host, n.open,v=>host.updateNode("open",v),id)}</label><label>非营业时${renderTargetSelect(host, n.closed,v=>host.updateNode("closed",v),id)}</label>` : nothing}
-      ${n.type==="route_queue" ? html`<label>目标队列<select .value=${n.queue_id||""} @change=${e=>host.updateNode("queue_id",e.target.value)}><option value="">请选择队列</option>${host.queues.map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><label>通话类型<select .value=${n.session_type||"audio"} @change=${e=>host.updateNode("session_type",e.target.value)}><option value="audio">语音</option><option value="video">视频</option></select></label>` : nothing}
+      ${n.type==="time_check" ? html`<label>工作时间所属队列（语音）<select .value=${n.queue_id||""} @change=${e=>host.updateNode("queue_id",e.target.value)}><option value="">请选择队列</option>${(host.queues||[]).filter(q=>!q.video_enabled).map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><label>营业时${renderTargetSelect(host, n.open,v=>host.updateNode("open",v),id)}</label><label>非营业时${renderTargetSelect(host, n.closed,v=>host.updateNode("closed",v),id)}</label>` : nothing}
+      ${n.type==="route_queue" ? (() => {
+        const session = n.session_type || "audio";
+        const wantVideo = session === "video";
+        const opts = (host.queues || []).filter((q) => !!q.video_enabled === wantVideo);
+        return html`<label>通话类型<select .value=${session} @change=${e=>{host.updateNode("session_type",e.target.value);host.updateNode("queue_id","");}}><option value="audio">语音</option><option value="video">视频</option></select></label><label>目标队列<select .value=${n.queue_id||""} @change=${e=>host.updateNode("queue_id",e.target.value)}><option value="">请选择${wantVideo?"视频":"语音"}队列</option>${opts.map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><p class="muted">${wantVideo ? "视频队列仅用于访客端场景。" : "电话呼入请选择语音队列。"}</p>`;
+      })() : nothing}
       ${n.type==="hangup" ? html`<p class="muted">执行到此节点后结束通话。</p>` : nothing}`;
   }

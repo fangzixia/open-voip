@@ -1,6 +1,7 @@
 // 坐席工作台：签入、通话控制、WebRTC 与业务动作回调。
 import { NAV, renderApp } from "./views/shell.js";
 import { bindApiFeedback } from "../shared/http-client.js";
+import { FeedbackController } from "../shared/feedback.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
@@ -65,6 +66,7 @@ export class AgentApp extends LitElement {
   #startedAt = 0;
   #clockTimer = null;
   #mediaConnecting = false;
+  feedback = new FeedbackController(this);
 
   get hasLocal() { return !!this.#local; }
 
@@ -116,7 +118,7 @@ export class AgentApp extends LitElement {
     this._unbindApi = bindApiFeedback(this, () => { this.#ws.disconnect(); this.#endLocal(); this.me = null; });
     this.#tickClock();
     this.#clockTimer = setInterval(() => this.#tickClock(), 1000);
-    authOptions().then((v) => { this.authOptions = v || {}; }).catch(() => { this.authOptions = { unavailable: true }; this.error = "无法读取登录方式"; });
+    authOptions().then((v) => { this.authOptions = v || {}; }).catch((e) => { this.authOptions = { unavailable: true }; this.feedback.liveError(e instanceof Error ? e.message : "无法读取登录方式"); });
     const ticket = popSSOTicket();
     if (ticket) this.#completeSSO(ticket);
     else if (getAccessToken()) this.#restore();
@@ -136,6 +138,7 @@ export class AgentApp extends LitElement {
   }
 
   async #restore() {
+    const __fbEpoch = this.feedback.begin();
     try {
       const identity = await authMe();
       this.permissions = identity.permissions || [];
@@ -152,26 +155,36 @@ export class AgentApp extends LitElement {
         this.live = null;
       }
       this.#connectWs();
-      this.error = "";
+      this.feedback.clear();
     } catch (e) {
       clearAccessToken();
       this.me = null;
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #login(ev) {
+    const __fbEpoch = this.feedback.begin();
     ev.preventDefault();
     try {
       const tokens = await login(this.username, this.password);
       setAuthTokens(tokens, { persist: true });
       await this.#restore();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
-  async #completeSSO(ticket) { try { const tokens = await exchangeSSOTicket(ticket); setAuthTokens(tokens, { persist: true }); await this.#restore(); } catch (e) { this.error = e instanceof Error ? e.message : String(e); } }
+  async #completeSSO(ticket) {
+    const __fbEpoch = this.feedback.begin();
+    try {
+      const tokens = await exchangeSSOTicket(ticket);
+      setAuthTokens(tokens, { persist: true });
+      await this.#restore();
+    } catch (e) {
+      this.feedback.fail(e, __fbEpoch);
+    }
+  }
 
   #connectWs() {
     this.#ws.disconnect();
@@ -182,6 +195,7 @@ export class AgentApp extends LitElement {
 
   /** 连接恢复后从服务端同步振铃和当前通话，必要时重新加入媒体。 */
   async #syncCalls() {
+    const __fbEpoch = this.feedback.begin();
     try {
       this.me = await fetchAgentMe();
       const { items = [] } = await fetchMyCalls();
@@ -196,7 +210,7 @@ export class AgentApp extends LitElement {
         setCallContext({ call_id: active.id, leg_id: activeLeg?.id || "", queue_id: active.queue_id || "" });
         if (["active", "held"].includes(active.state) && !this.#pc && this.me.terminal_type !== "sip") await this.#rejoinMedia(active.session_type !== "audio");
       }
-    } catch (e) { this.error = e.message; }
+    } catch (e) { this.feedback.fail(e, __fbEpoch); }
   }
 
   /** 将业务事件映射为来电提示、通话状态和视频协商提示。 */
@@ -214,39 +228,40 @@ export class AgentApp extends LitElement {
     } else if (msg.type === "agent.routing_state_changed" && this.me) {
       this.me = { ...this.me, session: { ...this.me.session, state: msg.payload.state, busy_reason: msg.payload.busy_reason } };
     } else if (msg.type === "recording.notice") {
-      this.notice = msg.payload?.message || "";
+      this.feedback.liveNotice(msg.payload?.message || "");
     } else if (msg.type === "video.requested") {
       this.videoAsk = msg.payload;
     } else if (msg.type === "video.accepted") {
-      this.notice = "对端已同意开启视频";
+      this.feedback.liveNotice("对端已同意开启视频");
       this.#rejoinMedia(true);
     } else if (msg.type === "video.downgraded") {
-      this.notice = "已降为语音";
+      this.feedback.liveNotice("已降为语音");
       this.#rejoinMedia(false);
     } else if (msg.type === "call.consulting") {
       this.consulting = true;
-      this.notice = "咨询转已接通，可完成转接或继续三方";
+      this.feedback.liveNotice("咨询转已接通，可完成转接或继续三方");
     } else if (msg.type === "call.transferred") {
       this.consulting = false;
       if (msg.payload?.from_agent_id === this.me?.id) {
-        this.notice = "咨询转已完成，请填写小结";
+        this.feedback.liveNotice("咨询转已完成，请填写小结");
         this.#endLocal(this.call?.id);
       } else {
-        this.notice = "咨询转已完成，客户已接回";
+        this.feedback.liveNotice("咨询转已完成，客户已接回");
       }
     } else if (msg.type === "call.answered" && msg.payload?.call_id) {
       void this.#syncCalls();
     } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.call?.id) {
-      this.notice = "交换服务已恢复，正在重新连接媒体…";
+      this.feedback.liveNotice("交换服务已恢复，正在重新连接媒体…");
       void this.#syncCalls().then(() => this.#rejoinMedia(this.call?.session_type !== "audio"));
     }
   }
 
   async #doCheckIn() {
+    const __fbEpoch = this.feedback.begin();
     try {
       await this.#ensureCheckedIn(true);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
@@ -256,44 +271,48 @@ export class AgentApp extends LitElement {
     const session = await checkIn(this.me.id, this.selectedQueues);
     this.me = { ...this.me, session };
     if (session.queue_ids?.length) this.selectedQueues = [...session.queue_ids];
-    this.error = "";
+    this.feedback.clear();
     return session;
   }
 
   async #doCheckOut() {
+    const __fbEpoch = this.feedback.begin();
     try {
       await checkOut(this.me.id);
       this.me = { ...this.me, session: { ...this.me.session, state: "offline", queue_ids: [] } };
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #toggleBusy() {
+    const __fbEpoch = this.feedback.begin();
     const next = this.me.session?.state === "busy" ? "idle" : "busy";
     try {
       const sess = await setAgentState(this.me.id, next, next === "busy" ? this.busyReason || "break" : "");
       this.me = { ...this.me, session: sess };
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #setIdle() {
+    const __fbEpoch = this.feedback.begin();
     try {
       const sess = await setAgentState(this.me.id, "idle", "");
       this.me = { ...this.me, session: sess };
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   /** 接听当前来电并为坐席通话腿建立 WebRTC 会话。 */
   async #answer() {
+    const __fbEpoch = this.feedback.begin();
     if (this.#mediaConnecting) return;
     this.#mediaConnecting = true;
     try {
-      if (this.me?.terminal_type === "sip") { this.notice = "请在 SIP 话机接听"; return; }
+      if (this.me?.terminal_type === "sip") { this.feedback.ok("请在 SIP 话机接听", __fbEpoch); return; }
       const incomingId = this.incoming.call_id;
       await answerCall(incomingId);
       const call = await getCall(incomingId);
@@ -317,11 +336,11 @@ export class AgentApp extends LitElement {
       this.#remote = session.remoteStream;
       this.#remoteAudio = session.remoteAudioStream;
       this.cameraUnavailable = session.cameraUnavailable;
-      this.error = "";
+      this.feedback.clear();
       this.#bindVideos();
       this.#startTimer();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     } finally {
       this.#mediaConnecting = false;
     }
@@ -390,6 +409,7 @@ export class AgentApp extends LitElement {
 
   /** 媒体类型变化或断线恢复时重新协商当前通话。 */
   async #rejoinMedia(video) {
+    const __fbEpoch = this.feedback.begin();
     if (!this.call || this.me?.terminal_type === "sip" || this.#mediaConnecting) return;
     const leg = (this.call.legs || []).find((l) => l.agent_id === this.me?.id) || this.call.legs?.[1];
     if (!leg) return;
@@ -409,11 +429,11 @@ export class AgentApp extends LitElement {
       this.#remote = session.remoteStream;
       this.#remoteAudio = session.remoteAudioStream;
       this.cameraUnavailable = session.cameraUnavailable;
-      this.error = "";
+      this.feedback.clear();
       this.call = { ...this.call, session_type: video ? "mixed" : "audio" };
       this.#bindVideos();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     } finally {
       this.#mediaConnecting = false;
     }
@@ -430,17 +450,18 @@ export class AgentApp extends LitElement {
   }
 
   async #dial() {
+    const __fbEpoch = this.feedback.begin();
     try {
       if (!this.dest.trim()) {
-        this.error = "请输入目标号码";
+        this.feedback.fail("请输入目标号码", __fbEpoch);
         return;
       }
       await this.#ensureCheckedIn();
-      if (this.me?.terminal_type === "sip") { this.notice = "已自动签入，请从已注册的 SIP 话机拨号"; return; }
+      if (this.me?.terminal_type === "sip") { this.feedback.ok("已自动签入，请从已注册的 SIP 话机拨号", __fbEpoch); return; }
       const call = await outboundCall(this.dest.trim());
       this.call = call;
       this.nav = "desk";
-      this.error = "";
+      this.feedback.clear();
       const leg = (call.legs || []).find((l) => l.agent_id === this.me?.id);
       setCallContext({ call_id: call.id, leg_id: leg?.id || "", queue_id: call.queue_id || "" });
       reportEvent("call.outbound_created", { state: call.state });
@@ -459,22 +480,24 @@ export class AgentApp extends LitElement {
         this.#startTimer();
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #hold() {
+    const __fbEpoch = this.feedback.begin();
     this.held = !this.held;
     try {
       await holdCall(this.call.id, this.held);
     } catch (e) {
       this.held = !this.held;
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   /** 根据页面选择的目标和模式发起转接。 */
   async #xfer() {
+    const __fbEpoch = this.feedback.begin();
     try {
       const target = this.agents.find((a) => a.extension === this.dest);
       const mode = this.xferMode || "blind";
@@ -483,23 +506,25 @@ export class AgentApp extends LitElement {
         target ? { mode, target_agent_id: target.id } : { mode: "blind", target_queue_id: this.dest },
       );
       this.consulting = mode === "consult";
-      this.notice = mode === "consult" ? "咨询转振铃中，客户已保持" : "已盲转";
+      this.feedback.ok(mode === "consult" ? "咨询转振铃中，客户已保持" : "已盲转", __fbEpoch);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #completeXfer() {
+    const __fbEpoch = this.feedback.begin();
     try {
       await completeTransfer(this.call.id);
       this.consulting = false;
-      this.notice = "咨询转已完成";
+      this.feedback.ok("咨询转已完成", __fbEpoch);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #share() {
+    const __fbEpoch = this.feedback.begin();
     try {
       if (!this.#pc?.getSenders().some((s) => s.track?.kind === "video")) {
         await this.#rejoinMedia(true);
@@ -513,38 +538,42 @@ export class AgentApp extends LitElement {
         screenShare(this.call.id, false, leg?.id);
       };
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #askVideo() {
+    const __fbEpoch = this.feedback.begin();
     try {
       await requestVideo(this.call.id);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #downgrade() {
+    const __fbEpoch = this.feedback.begin();
     try {
       await downgradeVideo(this.call.id);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #conf() {
+    const __fbEpoch = this.feedback.begin();
     try {
       const target = this.agents.find((a) => a.extension === this.dest);
       if (!target) throw new Error("请先填写对方分机");
       await conferenceInvite(this.call.id, target.id);
-      this.notice = "已邀请第三人，对方振铃中";
+      this.feedback.ok("已邀请第三人，对方振铃中", __fbEpoch);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #listen() {
+    const __fbEpoch = this.feedback.begin();
     try {
       const id = this.incoming?.call_id || this.dest;
       const out = await listenCall(id);
@@ -564,11 +593,12 @@ export class AgentApp extends LitElement {
       this.#bindVideos();
       this.#startTimer();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #preview() {
+    const __fbEpoch = this.feedback.begin();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -577,7 +607,7 @@ export class AgentApp extends LitElement {
       this.#local = stream;
       this.#bindVideos();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
@@ -587,6 +617,7 @@ export class AgentApp extends LitElement {
   }
 
   async #submitWrap() {
+    const __fbEpoch = this.feedback.begin();
     const id = this.call?.id || this.pendingWrapId;
     try {
       await wrapUp(id, this.wrapNotes);
@@ -596,34 +627,36 @@ export class AgentApp extends LitElement {
       } catch {
         /* 通话中提交小结时状态仍为 on_call */
       }
-      this.notice = "小结已提交，已示闲";
+      this.feedback.ok("小结已提交，已示闲", __fbEpoch);
       this.pendingWrapId = "";
       this.wrapNotes = "";
       clearCallContext();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #makeLink() {
+    const __fbEpoch = this.feedback.begin();
     try {
       const qid = this.selectedQueues[0] || this.queues[0]?.id;
       const s = await createGuestSession(qid, 3600, this.guestMedia);
       this.guestLink = new URL(s.guest_url, location.origin).href;
       this.guestExpiresAt = s.expires_at || "";
-      this.error = "";
+      this.feedback.clear();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #copyGuestLink() {
     if (!this.guestLink) return;
+    const __fbEpoch = this.feedback.begin();
     try {
       await navigator.clipboard.writeText(this.guestLink);
-      this.notice = "访客链接已复制";
+      this.feedback.ok("访客链接已复制", __fbEpoch);
     } catch {
-      this.error = "复制失败，请手动复制链接";
+      this.feedback.fail("复制失败，请手动复制链接", __fbEpoch);
     }
   }
 
@@ -657,16 +690,18 @@ export class AgentApp extends LitElement {
   }
 
   async #onMicChange(id) {
+    const __fbEpoch = this.feedback.begin();
     this.audioDeviceId = id;
     if (!this.#pc || !this.call) return;
     try {
       await replaceInputDevice(this.#pc, this.#local, "audio", id);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #onCamChange(id) {
+    const __fbEpoch = this.feedback.begin();
     this.videoDeviceId = id;
     if (!this.#pc || !this.call) return;
     try {
@@ -677,17 +712,18 @@ export class AgentApp extends LitElement {
       await replaceInputDevice(this.#pc, this.#local, "video", id);
       this.cameraUnavailable = false;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
   async #onSpeakerChange(id) {
+    const __fbEpoch = this.feedback.begin();
     this.speakerDeviceId = id;
     const remoteV = this.renderRoot.querySelector("#remote-audio");
     try {
       await applyAudioOutput(remoteV, id);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
@@ -704,7 +740,8 @@ export class AgentApp extends LitElement {
   }
 
   async #logout() {
-    try { await logout(); } catch (e) { this.error = e.message; }
+    const __fbEpoch = this.feedback.begin();
+    try { await logout(); } catch (e) { this.feedback.fail(e, __fbEpoch); }
     clearAccessToken();
     this.#ws.disconnect();
     this.#endLocal();
@@ -734,6 +771,7 @@ export class AgentApp extends LitElement {
   }
 
   #navigate(id) {
+    this.feedback.begin();
     this.nav = id;
     if (id === "desk" && this.#pc) this.#bindVideos();
   }

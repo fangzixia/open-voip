@@ -2,12 +2,29 @@ package configpub
 
 import (
 	"context"
+	"strings"
 
 	"uuid"
 
 	"open-call/internal/errs"
 	"open-call/internal/ports"
 )
+
+// normalizeDID 与 Switch NormalizeDID 一致：仅保留数字，首位可保留 +。
+func normalizeDID(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for i, r := range value {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			continue
+		}
+		if r == '+' && i == 0 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // DIDDTO DID 路由。
 type DIDDTO struct {
@@ -46,6 +63,7 @@ func (s *SnapshotService) UpsertDID(ctx context.Context, trunkID, did, targetTyp
 	if trunkID == "" {
 		trunkID = "*"
 	}
+	did = normalizeDID(did)
 	if did == "" || (targetType != "queue" && targetType != "ivr" && targetType != "reject") {
 		return DIDDTO{}, errs.InvalidRequest("did 或 target_type 无效")
 	}
@@ -56,8 +74,12 @@ func (s *SnapshotService) UpsertDID(ctx context.Context, trunkID, did, targetTyp
 		return DIDDTO{}, errs.InvalidRequest("target_id 必填")
 	}
 	if targetType == "queue" {
-		if _, err := s.sw.GetQueueConfig(ctx, targetID); err != nil {
+		q, err := s.sw.GetQueueConfig(ctx, targetID)
+		if err != nil {
 			return DIDDTO{}, errs.InvalidRequest("目标队列不存在")
+		}
+		if q.VideoEnabled {
+			return DIDDTO{}, errs.InvalidRequest("电话 DID 不能路由到视频队列")
 		}
 	}
 	if targetType == "ivr" {
@@ -69,7 +91,7 @@ func (s *SnapshotService) UpsertDID(ctx context.Context, trunkID, did, targetTyp
 	existing, _ := s.sw.ListDIDConfigs(ctx)
 	var id string
 	for _, row := range existing {
-		if row.TrunkID == trunkID && row.DID == did {
+		if row.TrunkID == trunkID && normalizeDID(row.DID) == did {
 			id = row.ID
 			break
 		}
@@ -95,6 +117,9 @@ func (s *SnapshotService) BindQueueIVR(ctx context.Context, queueID, flowID stri
 	q, err := s.sw.GetQueueConfig(ctx, queueID)
 	if err != nil {
 		return err
+	}
+	if q.VideoEnabled {
+		return errs.InvalidRequest("IVR 只能绑定语音队列")
 	}
 	if flowID != "" {
 		flow, err := s.sw.GetIVRFlow(ctx, flowID)

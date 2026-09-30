@@ -1,5 +1,6 @@
 import { NAV, renderApp } from "./views/shell.js";
 import { bindApiFeedback } from "../shared/http-client.js";
+import { FeedbackController } from "../shared/feedback.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { LitElement } from "lit";
 import { getCall, guestJoin, guestJoinToken, hangupCall, listGuestQueues, respondVideo, sendDtmf, setCallVersion } from "../shared/api.js";
@@ -47,6 +48,7 @@ export class GuestApp extends LitElement {
   #timer = null;
   #started = 0;
   #waitTimer = null;
+  feedback = new FeedbackController(this);
 
   constructor() {
     super();
@@ -90,7 +92,7 @@ export class GuestApp extends LitElement {
         if (this.queues[0]) this.selected = { queue: this.queues[0], video: false, vip: false };
       })
       .catch((e) => {
-        this.error = e instanceof Error ? e.message : String(e);
+        this.feedback.liveError(e instanceof Error ? e.message : String(e));
       });
   }
 
@@ -106,11 +108,12 @@ export class GuestApp extends LitElement {
 
   /** 检查媒体权限后加入队列，并连接业务事件和等待音频。 */
   async #start(queue, video, vip = false) {
+    const __fbEpoch = this.feedback.begin();
     reportEvent("call.starting", { kind: video ? "video" : "audio" });
-    this.error = "";
+    this.feedback.clear();
     const userId = this.userId.trim();
     if (video && !userId) {
-      this.error = "发起视频通话前，请填写您的用户标识。";
+      this.feedback.fail("发起视频通话前，请填写您的用户标识。", __fbEpoch);
       return;
     }
     this.wantVideo = video;
@@ -130,7 +133,7 @@ export class GuestApp extends LitElement {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints(), video });
       stream.getTracks().forEach((t) => t.stop());
     } catch {
-      this.error = video ? "摄像头/麦克风权限被拒绝，可改选语音服务。" : "麦克风权限被拒绝，请在浏览器设置中允许后重试。";
+      this.feedback.fail(video ? "摄像头/麦克风权限被拒绝，可改选语音服务。" : "麦克风权限被拒绝，请在浏览器设置中允许后重试。", __fbEpoch);
       this.step = "pick";
       this.nav = "service";
       clearInterval(this.#waitTimer);
@@ -147,7 +150,7 @@ export class GuestApp extends LitElement {
       this.#ws.subscribe((msg) => this.#onWs(msg));
       if (["ivr", "queued", "ringing"].includes(join.state)) await this.#enterMedia(false);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
       this.step = "pick";
       this.nav = "service";
       clearInterval(this.#waitTimer);
@@ -171,7 +174,7 @@ export class GuestApp extends LitElement {
       this.permissionHint = msg.payload?.message || "请留言";
       if (!this.#pc) await this.#enterMedia(false);
     } else if (msg.type === "recording.notice") {
-      this.notice = msg.payload?.message || "";
+      this.feedback.liveNotice(msg.payload?.message || "");
     } else if (msg.type === "video.requested") {
       this.videoAsk = msg.payload;
     } else if (msg.type === "video.accepted") {
@@ -181,7 +184,7 @@ export class GuestApp extends LitElement {
       this.wantVideo = false;
       await this.#rejoin(false);
     } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.join?.call_id) {
-      this.notice = "正在重新连接通话…";
+      this.feedback.liveNotice("正在重新连接通话…");
       void getCall(this.join.call_id).then((view) => {
         if (view?.version != null) setCallVersion(view.version);
         return this.#rejoin(this.wantVideo);
@@ -193,22 +196,26 @@ export class GuestApp extends LitElement {
   }
 
   async #startToken() {
-    this.error = "";
+    const __fbEpoch = this.feedback.begin();
     this.permissionHint = this.wantVideo ? "正在申请摄像头和麦克风权限…" : "正在申请麦克风权限…";
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints(), video: this.wantVideo });
       stream.getTracks().forEach((track) => track.stop());
       await this.#joinToken(this.inviteToken, this.inviteMedia);
     } catch (e) {
-      this.error = e?.name === "NotAllowedError"
-        ? "摄像头或麦克风权限被拒绝，请在浏览器设置中允许后重试。"
-        : e instanceof Error ? e.message : String(e);
+      this.feedback.fail(
+        e?.name === "NotAllowedError"
+          ? "摄像头或麦克风权限被拒绝，请在浏览器设置中允许后重试。"
+          : e instanceof Error ? e.message : String(e),
+        __fbEpoch,
+      );
       this.step = "invite";
     }
   }
 
   /** 使用邀请令牌入会，随后接收当前通话的事件和媒体。 */
   async #joinToken(token, media = "") {
+    const __fbEpoch = this.feedback.begin();
     this.step = "wait";
     this.nav = "queue";
     try {
@@ -223,7 +230,7 @@ export class GuestApp extends LitElement {
       if (["ivr", "queued", "ringing"].includes(join.state)) await this.#enterMedia(false);
       if (join.state === "active") await this.#enterMedia(true);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
       this.step = "pick";
       this.nav = "service";
     }
@@ -285,7 +292,7 @@ export class GuestApp extends LitElement {
         void this.#playRemoteAudio();
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.liveError(e);
     } finally {
       this.#mediaPromise = null;
     }
@@ -317,11 +324,12 @@ export class GuestApp extends LitElement {
   }
 
   async #dtmf(d) {
+    const __fbEpoch = this.feedback.begin();
     if (!this.join?.call_id || !this.join?.leg_id) return;
     try {
       await sendDtmf(this.join.call_id, this.join.leg_id, d);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
@@ -346,20 +354,21 @@ export class GuestApp extends LitElement {
   }
 
   async #switchCamera() {
+    const __fbEpoch = this.feedback.begin();
     if (!this.#pc || !this.wantVideo) return;
     try {
       const { videoInputs } = await listMediaDevices();
       if (videoInputs.length < 2) {
-        this.notice = "当前仅检测到一个摄像头";
+        this.feedback.ok("当前仅检测到一个摄像头", __fbEpoch);
         return;
       }
       const index = videoInputs.findIndex((item) => item.deviceId === this.videoDeviceId);
       const next = videoInputs[(index + 1) % videoInputs.length];
       await replaceInputDevice(this.#pc, this.#local, "video", next.deviceId);
       this.videoDeviceId = next.deviceId;
-      this.notice = "摄像头已切换";
+      this.feedback.ok("摄像头已切换", __fbEpoch);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.feedback.fail(e, __fbEpoch);
     }
   }
 
@@ -385,6 +394,7 @@ export class GuestApp extends LitElement {
   }
 
   #go(id) {
+    this.feedback.begin();
     this.nav = id;
     if (id === "talk" && this.step === "talk") {
       this.updateComplete.then(() => {
@@ -402,12 +412,13 @@ export class GuestApp extends LitElement {
   }
 
   async #respondVideo(accept) {
+    const __fbEpoch = this.feedback.begin();
     if (!this.join?.call_id) return;
     try {
       await respondVideo(this.join.call_id, accept);
       this.videoAsk = null;
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.feedback.fail(error, __fbEpoch);
     }
   }
 

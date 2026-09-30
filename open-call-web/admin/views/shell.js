@@ -19,7 +19,7 @@ import { renderRuntime } from "./runtime.js";
 export const NAV = [
   { id: "overview", label: "总览", group: "功能导航" },
   { id: "runtime", label: "活跃通话", group: "话务管理" },
-  { id: "queues", label: "队列", group: "话务管理" },
+  { id: "queues", label: "语音/视频队列", group: "话务管理" },
   { id: "agents", label: "坐席", group: "话务管理" },
   { id: "dids", label: "呼入号码", group: "话务管理" },
   { id: "cdr", label: "通话记录", group: "话务管理" },
@@ -76,13 +76,13 @@ export function renderApp(host, operations) {
         ["bridgeForm", "me", "openCalls", "runtimeCall"],
         ["createBridge", "endBridge", "loadRuntime", "replaceBridge", "selectRuntimeCall", "setBridgeForm"]) : ""}
       ${host.nav === "queues" ? page(renderQueues,
-        ["agents", "me", "newQueue", "queues", "skillName", "skills"],
+        ["agents", "me", "newVideoQueue", "newVoiceQueue", "queues", "skillName", "skills"],
         ["addSkill", "bindAll", "bindSkill", "createQueue", "setBindAgentId", "setBindSkillId", "setSkillName", "toggleVip", "updateNewQueue"]) : ""}
       ${host.nav === "agents" ? page(renderAgents,
         ["agents", "hist", "me", "utils"],
         ["force", "navigate", "setForceAgentId"]) : ""}
       ${host.nav === "dids" ? page(renderDids,
-        ["didForm", "dids", "me"], ["saveDid", "updateDidForm"]) : ""}
+        ["didForm", "dids", "ivrs", "me", "queues"], ["saveDid", "updateDidForm"]) : ""}
       ${host.nav === "cdr" ? page(renderCdrPage,
         ["cdrCaller", "cdrResult", "me", "qaCallId", "qaLabel", "wrapUps"],
         ["exportCdr", "filteredCdr", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}

@@ -1,6 +1,6 @@
 import { html } from "lit";
 
-/** 音频和视频服务共用的队列卡片。 */
+/** 语音或视频服务队列卡片。 */
 export function renderServiceCard(queue, { selected, onPick, onStart }) {
   const video = !!queue.video_enabled;
   return html`<div class="svc-card ${selected ? "selected" : ""}" role="button" tabindex="0"

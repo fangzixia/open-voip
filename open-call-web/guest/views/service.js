@@ -21,10 +21,12 @@ export function renderInviteView(state, actions) {
 
 export function renderPickView(state, actions) {
     const sel = state.selected;
+    const voiceQueues = state.queues.filter((q) => !q.video_enabled);
+    const videoQueues = state.queues.filter((q) => q.video_enabled);
     return html`
       <div class="panel">
         <h3 class="page-title">选择服务</h3>
-        ${state.queues.some((q) => q.video_enabled) ? html`
+        ${videoQueues.length ? html`
           <label>
             用户标识
             <input
@@ -38,19 +40,33 @@ export function renderPickView(state, actions) {
           </label>
           <p class="hint">该标识将作为本次视频通话的访客身份信息。</p>
         ` : ""}
-        <div class="svc-grid">
-          ${!state.queues.length ? html`<div class="empty-state">暂无可用服务，请稍后重试</div>` : ""}
-          ${[...state.queues.filter((q) => !q.video_enabled), ...state.queues.filter((q) => q.video_enabled)]
-            .map((q) => renderServiceCard(q, {
-              selected: sel?.queue?.id === q.id && !!sel.video === !!q.video_enabled,
+        ${!state.queues.length ? html`<div class="empty-state">暂无可用服务，请稍后重试</div>` : ""}
+        ${voiceQueues.length ? html`
+          <h4 class="section-title">语音服务</h4>
+          <p class="hint">麦克风通话；与电话呼入共用语音队列。</p>
+          <div class="svc-grid">
+            ${voiceQueues.map((q) => renderServiceCard(q, {
+              selected: sel?.queue?.id === q.id && !sel.video,
               onPick: (queue, video) => actions.pick(queue, video, false),
               onStart: (queue, video) => actions.start(queue, video),
             }))}
-        </div>
+          </div>
+        ` : ""}
+        ${videoQueues.length ? html`
+          <h4 class="section-title">视频服务</h4>
+          <p class="hint">需摄像头；仅限本页访客入口，不会由电话呼入进入。</p>
+          <div class="svc-grid">
+            ${videoQueues.map((q) => renderServiceCard(q, {
+              selected: sel?.queue?.id === q.id && !!sel.video,
+              onPick: (queue, video) => actions.pick(queue, video, false),
+              onStart: (queue, video) => actions.start(queue, video),
+            }))}
+          </div>
+        ` : ""}
         ${state.queues.some((q) => q.priority_enabled)
           ? html`<p class="hint">部分队列支持 VIP 优先。</p>
               ${state.queues
-                .filter((q) => q.priority_enabled)
+                .filter((q) => q.priority_enabled && !q.video_enabled)
                 .map((q) => html`<button class="secondary" @click=${() => actions.start(q, false, true)}>${q.name} · VIP 语音</button>`)}`
           : ""}
       </div>

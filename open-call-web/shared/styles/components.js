@@ -8,6 +8,99 @@ export const componentStyles = css`
     font-weight: 600;
   }
 
+  .section-title {
+    margin: 16px 0 6px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ov-space-4);
+  }
+
+  .page-desc {
+    margin: 0;
+    color: var(--ov-text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .page-body,
+  .page-sections {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ov-space-4);
+  }
+
+  .page-form {
+    margin-bottom: var(--ov-space-3);
+  }
+
+  .page-form:last-child,
+  .page-list:last-child {
+    margin-bottom: 0;
+  }
+
+  .page-list + .page-form,
+  .page-form + .page-list {
+    margin-top: var(--ov-space-2);
+  }
+
+  .field-hint,
+  .field .hint {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .page-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: var(--ov-space-4);
+    align-items: start;
+  }
+
+  .page-split-master,
+  .page-split-detail {
+    min-width: 0;
+  }
+
+  .page-split-below {
+    margin-top: 0;
+  }
+
+  .page-dash-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--ov-space-4);
+    align-items: start;
+  }
+
+  .page-dash-cards > .panel {
+    margin-bottom: 0;
+  }
+
+  .page-raw {
+    margin: var(--ov-space-3) 0 0;
+    max-height: 240px;
+    overflow: auto;
+    font-size: 12px;
+  }
+
+  .page-media {
+    display: block;
+    width: 100%;
+    max-width: 720px;
+    margin-top: var(--ov-space-3);
+  }
+
+  .page-ivr {
+    min-height: 0;
+  }
+
   .split {
     display: grid;
     grid-template-columns: 1.4fr 1fr;
@@ -105,17 +198,35 @@ export const componentStyles = css`
     font-weight: 500;
   }
 
+  .field-label {
+    display: block;
+    margin: 0;
+    color: rgba(0, 0, 0, 0.85);
+    font-weight: 500;
+    line-height: 22px;
+  }
+
   .field {
     margin-bottom: 12px;
   }
 
-  input,
+  .field > input,
+  .field > select,
+  .field > textarea {
+    display: block;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
   select,
   textarea {
     width: 100%;
     max-width: 100%;
     padding: 4px 11px;
     border: 1px solid #d9d9d9;
+  }
+
+  select {
+    padding-right: 32px;
   }
 
   textarea {
@@ -131,17 +242,69 @@ export const componentStyles = css`
   }
 
   .check {
-    display: flex;
+    position: relative;
+    display: inline-flex;
     align-items: center;
     gap: 8px;
-    font-weight: 400;
     margin: 6px 0;
+    padding: 2px 0;
+    color: var(--ov-text);
+    font-weight: 400;
+    line-height: 1.4;
+    cursor: pointer;
+    user-select: none;
   }
 
-  .check input {
-    width: auto;
-    height: auto;
-    margin: 0;
+  .check-box {
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--ov-border-strong);
+    border-radius: 4px;
+    background: var(--ov-surface);
+    transition: border-color 0.16s, background 0.16s, box-shadow 0.16s;
+  }
+
+  .check-box::after {
+    content: "";
+    display: block;
+    width: 4px;
+    height: 8px;
+    margin: 1px auto 0;
+    border: solid transparent;
+    border-width: 0 1.5px 1.5px 0;
+    transform: scale(0) rotate(45deg);
+    transition: transform 0.12s ease-out, border-color 0.12s;
+  }
+
+  .check:hover .check-box {
+    border-color: var(--ov-primary);
+  }
+
+  .check input:checked + .check-box {
+    border-color: var(--ov-primary);
+    background: var(--ov-primary);
+  }
+
+  .check input:checked + .check-box::after {
+    border-color: #fff;
+    transform: scale(1) rotate(45deg);
+  }
+
+  .check input:focus-visible + .check-box {
+    border-color: var(--ov-primary);
+    box-shadow: var(--ov-focus);
+  }
+
+  .check-label {
+    color: var(--ov-text-secondary);
+    font-size: 13px;
+  }
+
+  .check:hover .check-label,
+  .check input:checked ~ .check-label {
+    color: var(--ov-text);
   }
 
   .row {
@@ -155,13 +318,29 @@ export const componentStyles = css`
     display: flex;
     flex-wrap: wrap;
     gap: 12px 16px;
-    align-items: flex-end;
+    align-items: flex-start;
     margin-bottom: 12px;
+    /* 标签行高 + 字段内 gap，用于把裸按钮对齐到输入框 */
+    --ov-form-control-offset: calc(22px + 4px);
   }
 
   .form-inline .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
     margin: 0;
-    min-width: 180px;
+    min-width: 160px;
+    flex: 0 1 200px;
+  }
+
+  .form-inline .field-wide {
+    flex: 1 1 280px;
+    min-width: 220px;
+  }
+
+  /* 有字段时，直接子级按钮自动对齐到控件行，无需额外包裹 */
+  .form-inline:has(.field) > button {
+    margin-top: var(--ov-form-control-offset);
   }
 
   .error {
@@ -410,11 +589,24 @@ export const componentStyles = css`
     height: auto;
   }
 
-  input:focus,
+  input:not([type="checkbox"]):not([type="radio"]):focus,
   select:focus,
   textarea:focus {
     border-color: #9895e5;
     box-shadow: var(--ov-focus);
+  }
+
+  .check input {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 1px;
+    height: 1px;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    border: 0;
+    pointer-events: none;
   }
 
   table {
@@ -562,7 +754,9 @@ export const componentStyles = css`
   }
 
   @media (max-width: 960px) {
-    .split {
+    .split,
+    .page-split,
+    .page-dash-cards {
       grid-template-columns: 1fr;
     }
   }

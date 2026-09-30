@@ -2,6 +2,10 @@
 import { html } from "lit";
 
 export function renderCheckbox(label, checked, onChange) {
-  return html`<label class="check"><input type="checkbox" .checked=${checked}
-    @change=${(event) => onChange(event.target.checked)} />${label}</label>`;
+  return html`<label class="check">
+    <input type="checkbox" .checked=${!!checked}
+      @change=${(event) => onChange(event.target.checked)} />
+    <span class="check-box" aria-hidden="true"></span>
+    <span class="check-label">${label}</span>
+  </label>`;
 }

@@ -2,6 +2,7 @@ import {
   bindIdentity, createUser, deleteRole, listIdentities, patchUser, revokeUserSessions,
   saveGroupMapping, saveRole, setUserRoles, unbindIdentity,
 } from "../../shared/api.js";
+import { runFeedbackAction } from "../../shared/feedback.js";
 
 export function newIdentityUserDraft() {
   return { username: "", login_name: "", employee_no: "", password: "", roles: [], role: "agent", extension: "", terminal_type: "webrtc", video_capable: true };
@@ -25,16 +26,11 @@ export function identityActions(host, reload) {
       host.identities = (await listIdentities(host.selectedUser)).items || [];
     }
   };
-  const run = async (request) => {
-    try {
-      await request();
-      await reload();
-      await refreshIdentities();
-      host.error = "";
-    } catch (error) {
-      host.error = error instanceof Error ? error.message : String(error);
-    }
-  };
+  const run = (request) => runFeedbackAction(host.feedback, async () => {
+    await request();
+    await reload();
+    await refreshIdentities();
+  });
   return {
     updateNewIdentityUser: (patch) => { host.newIdentityUser = { ...host.newIdentityUser, ...patch }; },
     toggleNewUserRole: (role, checked) => {
@@ -47,7 +43,7 @@ export function identityActions(host, reload) {
       const draft = host.newIdentityUser;
       const canReadRoles = host.me?.permissions?.includes("roles.read");
       if (canReadRoles && !draft.roles.length) {
-        host.error = "请至少选择一个角色";
+        host.feedback.fail("请至少选择一个角色");
         return;
       }
       return run(async () => {
@@ -67,8 +63,7 @@ export function identityActions(host, reload) {
         terminal_type: user?.terminal_type || "webrtc",
         video_capable: !!user?.video_capable,
       };
-      try { await refreshIdentities(); }
-      catch (error) { host.error = error instanceof Error ? error.message : String(error); }
+      await runFeedbackAction(host.feedback, () => refreshIdentities());
     },
     saveUsername: (id, username) => run(() => patchUser(id, { username })),
     saveLoginName: (id, login_name) => run(() => patchUser(id, { login_name })),

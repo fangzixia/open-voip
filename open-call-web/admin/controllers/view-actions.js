@@ -4,12 +4,17 @@ export function adminViewActions(host, operations) {
   return {
     ...operations,
     navigate: (id) => {
+      if (host.feedback) host.feedback.begin();
+      else { host.error = ""; host.notice = ""; }
       host.nav = id;
       if (id === "runtime" && typeof host.loadRuntime === "function") void host.loadRuntime();
     },
     setUsername: (value) => { host.username = value; },
     setPassword: (value) => { host.password = value; },
-    updateNewQueue: (patch) => { host.newQueue = { ...host.newQueue, ...patch }; },
+    updateNewQueue: (video, patch) => {
+      const key = video ? "newVideoQueue" : "newVoiceQueue";
+      host[key] = { ...host[key], ...patch };
+    },
     updateDidForm: (patch) => { host.didForm = { ...host.didForm, ...patch }; },
     setSkillName: (value) => { host.skillName = value; },
     setBindAgentId: (value) => { host.bindAgentId = value; },

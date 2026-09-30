@@ -1,5 +1,6 @@
 import { getAccessToken, getRefreshToken, setAuthTokens, clearAccessToken } from "./auth-store.js";
 import { createId, getCallContext } from "./call-context.js";
+import { currentFeedbackEpoch } from "./feedback.js";
 import { reportEvent } from "./observability.js";
 import { getRuntimeConfig } from "./runtime-config.js";
 
@@ -39,7 +40,7 @@ async function currentToken(base) {
   try { return await refreshing; } catch {
     clearAccessToken();
     const error = new ApiError(401, "登录已失效，请重新登录", null, "UNAUTHORIZED");
-    apiEvents.dispatchEvent(new CustomEvent("unauthorized", { detail: error }));
+    apiEvents.dispatchEvent(new CustomEvent("unauthorized", { detail: { message: error.message, epoch: currentFeedbackEpoch(), error } }));
     throw error;
   }
 }
@@ -71,6 +72,7 @@ export async function request(path, options = {}) {
   let responseRequestId = "";
   let responseTraceId = "";
   const startedAt = Date.now();
+  const feedbackEpoch = currentFeedbackEpoch();
   try {
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     responseRequestId = res.headers.get("X-Request-ID") || requestId;
@@ -94,7 +96,7 @@ export async function request(path, options = {}) {
       if (res.status === 401 && token && token === getAccessToken()) {
         clearAccessToken();
         error.message = messages[401];
-        apiEvents.dispatchEvent(new CustomEvent("unauthorized", { detail: error }));
+        apiEvents.dispatchEvent(new CustomEvent("unauthorized", { detail: { message: error.message, epoch: feedbackEpoch, error } }));
       }
       throw error;
     }
@@ -105,7 +107,9 @@ export async function request(path, options = {}) {
       timedOut ? "请求超时，请稍后重试" : controller.signal.aborted ? "请求已取消" : "网络连接失败，请检查网络或服务状态",
       null, timedOut ? "TIMEOUT" : controller.signal.aborted ? "CANCELED" : "NETWORK_ERROR", responseRequestId || requestId, responseTraceId);
     reportEvent("http.failed", { code: error.code, duration_ms: Date.now() - startedAt, error_name: error.name });
-    if (error.code !== "CANCELED") apiEvents.dispatchEvent(new CustomEvent("error", { detail: error }));
+    if (error.code !== "CANCELED") {
+      apiEvents.dispatchEvent(new CustomEvent("error", { detail: { message: error.message, epoch: feedbackEpoch, error } }));
+    }
     throw error;
   } finally {
     clearTimeout(timer);
@@ -113,10 +117,20 @@ export async function request(path, options = {}) {
   }
 }
 
-// 组件统一订阅请求错误，事件回调中发起的请求也能显示一致的错误提示。
+// 组件统一订阅请求错误；仅当请求发起时的 feedback epoch 仍有效时写入横幅。
 export function bindApiFeedback(component, onUnauthorized) {
-  const onError = event => { component.error = event.detail.message; };
-  const onAuth = event => { onUnauthorized?.(); component.error = event.detail.message; };
+  const onError = (event) => {
+    const { message, epoch } = event.detail || {};
+    if (component.feedback?.fail) component.feedback.fail(message, epoch);
+    else component.error = message;
+  };
+  const onAuth = (event) => {
+    onUnauthorized?.();
+    const detail = event.detail || {};
+    const message = detail.message || "登录已失效，请重新登录";
+    if (component.feedback?.fail) component.feedback.fail(message, detail.epoch);
+    else component.error = message;
+  };
   apiEvents.addEventListener("error", onError);
   apiEvents.addEventListener("unauthorized", onAuth);
   return () => {

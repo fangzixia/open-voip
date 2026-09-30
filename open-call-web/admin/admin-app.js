@@ -2,6 +2,7 @@
 import { NAV, renderApp } from "./views/shell.js";
 import { identityActions, newIdentityUserDraft } from "./controllers/identity.js";
 import { bindApiFeedback } from "../shared/http-client.js";
+import { FeedbackController, runFeedbackAction } from "../shared/feedback.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
 import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
@@ -9,11 +10,26 @@ import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-
 import { appStyles } from "../shared/styles/index.js";
 import "../shared/components/ivr/ivr-editor.js";
 
+function blankQueueForm(video = false) {
+  return {
+    name: "",
+    video_enabled: !!video,
+    max_wait_sec: 300,
+    strategy: "longest_idle",
+    overflow_policy: "hangup",
+    overflow_queue_id: "",
+    recording_policy: video ? "video_composite" : "audio",
+    announce_recording: true,
+    wait_prompt: "您前面还有 {position} 位，请稍候",
+    priority_enabled: false,
+    listen_announce: false,
+  };
+}
 
 export class AdminApp extends LitElement {
   static properties = {
     error: { type: String },
- notice: { type: String },
+    notice: { type: String },
     username: { type: String },
     password: { type: String },
     authed: { type: Boolean },
@@ -28,7 +44,8 @@ export class AdminApp extends LitElement {
     ivrs: { type: Array },
     hooks: { type: Array },
     hookUrl: { type: String },
-    newQueue: { type: Object },
+    newVoiceQueue: { type: Object },
+    newVideoQueue: { type: Object },
     agents: { type: Array },
     utils: { type: Array },
     dids: { type: Array },
@@ -54,6 +71,7 @@ export class AdminApp extends LitElement {
   static styles = appStyles;
 
   #clockTimer = null;
+  feedback = new FeedbackController(this);
 
   constructor() {
     super();
@@ -72,19 +90,8 @@ export class AdminApp extends LitElement {
     this.ivrs = [];
     this.hooks = [];
     this.hookUrl = "https://crm.internal/webhook";
-    this.newQueue = {
-      name: "",
-      video_enabled: false,
-      max_wait_sec: 300,
-      strategy: "longest_idle",
-      overflow_policy: "hangup",
-      overflow_queue_id: "",
-      recording_policy: "audio",
-      announce_recording: true,
-      wait_prompt: "您前面还有 {position} 位，请稍候",
-      priority_enabled: false,
-      listen_announce: false,
-    };
+    this.newVoiceQueue = blankQueueForm(false);
+    this.newVideoQueue = blankQueueForm(true);
     this.agents = [];
     this.utils = [];
     this.dids = [];
@@ -109,12 +116,19 @@ export class AdminApp extends LitElement {
     this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
   }
 
+  #run(fn) {
+    return runFeedbackAction(this.feedback, fn);
+  }
+
   connectedCallback() {
     super.connectedCallback();
     this._unbindApi = bindApiFeedback(this, () => { this.authed = false; });
     this.#tickClock();
     this.#clockTimer = setInterval(() => this.#tickClock(), 1000);
-    authOptions().then((v) => { this.authOptions = v || {}; }).catch(() => { this.authOptions = { unavailable: true }; this.error = "无法读取登录方式"; });
+    authOptions().then((v) => { this.authOptions = v || {}; }).catch((e) => {
+      this.authOptions = { unavailable: true };
+      this.feedback.liveError(e instanceof Error ? e.message : "无法读取登录方式");
+    });
     const ticket = popSSOTicket();
     if (ticket) this.#completeSSO(ticket);
     else if (this.authed) this.#load();
@@ -132,29 +146,35 @@ export class AdminApp extends LitElement {
 
   async #login(ev) {
     ev.preventDefault();
-    try {
+    await this.#run(async () => {
       const tokens = await login(this.username, this.password);
       setAuthTokens(tokens, { persist: true });
       this.authed = true;
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #completeSSO(ticket) {
-    try { const tokens = await exchangeSSOTicket(ticket); setAuthTokens(tokens, { persist: true }); this.authed = true; await this.#load(); }
-    catch (e) { this.error = e instanceof Error ? e.message : String(e); }
+    await this.#run(async () => {
+      const tokens = await exchangeSSOTicket(ticket);
+      setAuthTokens(tokens, { persist: true });
+      this.authed = true;
+      await this.#load();
+    });
   }
 
   async #logout() {
-    try { await logout(); } catch (e) { this.error = e.message; }
-    finally { clearAccessToken(); this.authed = false; this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true })); }
+    await this.#run(async () => {
+      try { await logout(); } finally {
+        clearAccessToken();
+        this.authed = false;
+        this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true }));
+      }
+    });
   }
 
   /** 加载管理端总览所需的队列、坐席、话单和配置数据。 */
   async #load() {
-    this.error = "";
     this.me = await authMe();
     const allow = (code) => this.me?.permissions?.includes(code);
     const navPermission = { overview: "status.read", runtime: "calls.read", queues: "queues.read", agents: "agents.read", dids: "dids.read", cdr: "cdr.read", recordings: "recordings.read", ivr: "ivr.read", webhooks: "webhooks.read", audit: "audit.read", identity: "users.read" };
@@ -175,111 +195,89 @@ export class AdminApp extends LitElement {
     }));
   }
 
-  async #createQueue(ev) {
+  async #createQueue(ev, video = false) {
     ev.preventDefault();
-    try {
-      await createQueue(this.newQueue);
+    const key = video ? "newVideoQueue" : "newVoiceQueue";
+    await this.#run(async () => {
+      await createQueue({ ...this[key], video_enabled: !!video });
+      this[key] = blankQueueForm(!!video);
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #bindAll(queueId) {
     const ids = this.users.filter((u) => u.agent_id).map((u) => u.agent_id);
-    try {
+    await this.#run(async () => {
       await bindQueueAgents(queueId, ids);
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #addHook() {
-    try {
+    await this.#run(async () => {
       await createWebhook(this.hookUrl, ["*"]);
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #addSkill() {
-    try {
+    await this.#run(async () => {
       await createSkill(this.skillName || "通用");
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #bindSkill() {
     if (!this.bindAgentId || !this.bindSkillId) return;
-    try {
+    await this.#run(async () => {
       await bindAgentSkills(this.bindAgentId, [this.bindSkillId]);
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #playRec(id) {
-    try {
+    await this.#run(async () => {
       const blob = await fetchRecordingBlob(id);
       if (this.playUrl) URL.revokeObjectURL(this.playUrl);
       this.playUrl = URL.createObjectURL(blob);
       this.playType = blob.type;
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #downloadRec(id, format = "") {
-    try {
+    await this.#run(async () => {
       await downloadRecording(id, format);
-      this.error = "";
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #saveDid(ev) {
     ev.preventDefault();
-    try {
+    await this.#run(async () => {
       await upsertDid(this.didForm);
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #qa(ev) {
     ev.preventDefault();
-    try {
+    await this.#run(async () => {
       await addQaMark(this.qaCallId, 0, this.qaLabel);
-      this.error = "";
       this.qaLabel = "";
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #force() {
-    try {
+    await this.#run(async () => {
       await forceCheckout(this.forceAgentId);
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #toggleVip(q) {
-    try {
+    await this.#run(async () => {
       await patchQueue(q.id, { ...q, priority_enabled: !q.priority_enabled });
       await this.#load();
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   /** 根据当前筛选条件生成页面显示的话单集合。 */
@@ -304,57 +302,47 @@ export class AdminApp extends LitElement {
   }
 
   async #loadRuntime() {
-    try {
+    await this.#run(async () => {
       this.openCalls = await listOpenCalls();
-      this.error = "";
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #selectRuntimeCall(callId) {
-    try {
+    await this.#run(async () => {
       this.runtimeCall = await getCall(callId);
       this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
-      this.error = "";
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+    });
   }
 
   async #createBridge() {
     const { leg_a: a, leg_b: b } = this.bridgeForm;
     if (!this.runtimeCall?.id || !a || !b) return;
-    try {
+    await this.#run(async (epoch) => {
       await createBridge(this.runtimeCall.id, a, b);
-      this.notice = "已请求建立桥接";
-      await this.#selectRuntimeCall(this.runtimeCall.id);
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+      this.feedback.ok("已请求建立桥接", epoch);
+      this.runtimeCall = await getCall(this.runtimeCall.id);
+      this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
+    });
   }
 
   async #replaceBridge() {
     const { bridge_id, leg_a: a, leg_b: b } = this.bridgeForm;
     if (!this.runtimeCall?.id || !bridge_id || !a || !b) return;
-    try {
+    await this.#run(async (epoch) => {
       await replaceBridge(this.runtimeCall.id, bridge_id, a, b);
-      this.notice = "桥接腿已替换";
-      await this.#selectRuntimeCall(this.runtimeCall.id);
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+      this.feedback.ok("桥接腿已替换", epoch);
+      this.runtimeCall = await getCall(this.runtimeCall.id);
+      this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
+    });
   }
 
   async #endBridge() {
     const { bridge_id } = this.bridgeForm;
     if (!this.runtimeCall?.id || !bridge_id) return;
-    try {
+    await this.#run(async (epoch) => {
       await endBridge(this.runtimeCall.id, bridge_id);
-      this.notice = "桥接已拆除";
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
-    }
+      this.feedback.ok("桥接已拆除", epoch);
+    });
   }
 
   render() {
