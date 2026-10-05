@@ -16,8 +16,9 @@ go run ./cmd/open-switch -config deploy/config.example.yml
 
 **部署约束：单实例。** 通话 FSM、媒体房间、SIP registrar 与事件投递均在进程内存；多进程共享同一数据库会分裂状态，不支持双活。滚动升级请先排空通话或接受重启挂断。
 
-视频录像需要 FFmpeg。设置 `recordings.ffmpeg_path` 为可执行文件路径，或将 FFmpeg 加入 `PATH`；
-`recordings.video_format` 可选 `webm`（VP8/Opus）或 `mp4`（H.264/AAC）。每通视频呼叫保存一份同时含画面和声音的文件。
+视频录像需要 FFmpeg。在 `recordings.video` 中设置 `ffmpeg_path`（或将 FFmpeg 加入 `PATH`），
+`format` 可选 `webm`（VP8/Opus）或 `mp4`（H.264/AAC）。纯音频与 IVR 提示音使用 `recordings.audio.dir`。
+每通视频呼叫保存一份同时含画面和声音的文件。
 下载接口可通过 `format=webm|mp4` 临时转换为另一种格式，不会长期保存第二份成品。
 
 ## 测试

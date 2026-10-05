@@ -23,7 +23,16 @@ type ivrRuntime struct {
 	timeout         time.Duration
 	invalidAttempts int
 	actionID        string
+	started         time.Time
+	hops            int
+	awaitingAnswer  bool
 }
+
+// IVR 允许环（如“按 0 重听”），用跳转次数和总时长兜底，防止无出口的环无限占用线路。
+const (
+	maxIVRHops     = 100
+	maxIVRDuration = 30 * time.Minute
+)
 
 type ivrDoc struct {
 	Start string             `json:"start"`
@@ -45,6 +54,16 @@ type ivrNode struct {
 	Next        string            `json:"next"`
 	Open        string            `json:"open"`
 	Closed      string            `json:"closed"`
+	Schedule    string            `json:"schedule,omitempty"`
+	WaitingGt   int               `json:"waiting_gt,omitempty"`
+	Busy        string            `json:"busy,omitempty"`
+}
+
+func (s *Service) injectCustomerAudio(ctx context.Context, callID string, src dto.AudioSource) error {
+	s.mu.Lock()
+	leg := customerLeg(s.calls[callID])
+	s.mu.Unlock()
+	return s.deps.Media.InjectAudio(ctx, callID, leg, src)
 }
 
 // bootIVR 读取流程的最新发布快照，确保运行中的呼叫使用固定版本。
@@ -86,15 +105,35 @@ func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports
 	if err := s.deps.Media.CreateRoom(ctx, callID, opts); err != nil {
 		return err
 	}
-	bot := ports.CallLegRecord{ID: uuid.New().String(), CallID: callID, Role: dto.LegRoleIVRBot, CreatedAt: time.Now().UTC()}
-	_ = s.deps.Calls.InsertLeg(ctx, bot)
 	s.mu.Lock()
 	rt := s.calls[callID]
+	hasBot := false
 	if rt != nil {
-		rt.legs = append(rt.legs, bot)
+		for _, l := range rt.legs {
+			if l.Role == dto.LegRoleIVRBot {
+				hasBot = true
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+	if !hasBot {
+		bot := ports.CallLegRecord{ID: uuid.New().String(), CallID: callID, Role: dto.LegRoleIVRBot, CreatedAt: time.Now().UTC()}
+		_ = s.deps.Calls.InsertLeg(ctx, bot)
+		s.mu.Lock()
+		rt = s.calls[callID]
+		if rt != nil {
+			rt.legs = append(rt.legs, bot)
+		}
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	rt = s.calls[callID]
+	if rt != nil {
 		rt.ivr = &ivrRuntime{
 			doc: doc, flowID: snap.FlowID, flowVersion: snap.Version,
 			node: doc.Start, entered: time.Now().UTC(), timeout: 15 * time.Second,
+			started: time.Now().UTC(),
 		}
 	}
 	s.mu.Unlock()
@@ -116,8 +155,37 @@ func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports
 	}
 	s.syncIVRSession(ctx, callID)
 	_ = s.publishCall(ctx, callID, "routing.entered_ivr", "", map[string]any{"call_id": callID, "snapshot_id": snap.SnapshotID, "flow_id": snap.FlowID})
+	// 呼入 SIP 在 200 OK 之前播放的提示音话机不会播出，首个节点等应答后再执行。
+	deferred := s.deps.Media.DeferUntilAnswered(callID, func() {
+		actx, unlock := s.command(context.Background(), callID)
+		defer unlock()
+		s.beginIVR(actx, callID)
+	})
+	if deferred {
+		s.mu.Lock()
+		if rt := s.calls[callID]; rt != nil && rt.ivr != nil {
+			rt.ivr.awaitingAnswer = true
+		}
+		s.mu.Unlock()
+		return nil
+	}
 	s.runIVRNode(ctx, callID)
 	return nil
+}
+
+// beginIVR 在呼叫应答后执行首个节点，节点计时与总时长都从应答时刻起算。
+func (s *Service) beginIVR(ctx context.Context, callID string) {
+	s.mu.Lock()
+	rt := s.calls[callID]
+	if rt == nil || rt.ivr == nil || !rt.ivr.awaitingAnswer {
+		s.mu.Unlock()
+		return
+	}
+	now := time.Now().UTC()
+	rt.ivr.awaitingAnswer = false
+	rt.ivr.entered, rt.ivr.started = now, now
+	s.mu.Unlock()
+	s.runIVRNode(ctx, callID)
 }
 
 // tickIVR 在节点超时后沿默认或下一节点继续，没有目标时转入排队。
@@ -126,6 +194,17 @@ func (s *Service) tickIVR(ctx context.Context, callID string) {
 	rt := s.calls[callID]
 	s.mu.Unlock()
 	if rt == nil || rt.ivr == nil {
+		return
+	}
+	s.mu.Lock()
+	waiting := rt.ivr.awaitingAnswer
+	s.mu.Unlock()
+	if waiting {
+		return
+	}
+	if !rt.ivr.started.IsZero() && time.Since(rt.ivr.started) > maxIVRDuration {
+		s.emitCall(ctx, callID, "command.failed", "", map[string]any{"call_id": callID, "reason": "ivr_timeout"})
+		_ = s.Hangup(ctx, callID, dto.HangupReasonTimeout)
 		return
 	}
 	to := rt.ivr.timeout
@@ -145,6 +224,9 @@ func (s *Service) tickIVR(ctx context.Context, callID string) {
 	if node.Type == "play" {
 		next = node.Next
 	}
+	if node.Type == "csat" {
+		next = node.Default
+	}
 	if next == "" {
 		_ = s.enterQueue(ctx, callID)
 		return
@@ -163,6 +245,18 @@ func (s *Service) onDTMF(ctx context.Context, callID, digit string) {
 		return
 	}
 	node := rt.ivr.doc.Nodes[rt.ivr.node]
+	if node.Type == "csat" {
+		if digit >= "1" && digit <= "5" {
+			score, _ := strconv.Atoi(digit)
+			s.recordCsat(ctx, callID, score)
+			if node.Next != "" {
+				s.gotoIVR(ctx, callID, node.Next)
+			} else {
+				_ = s.Hangup(ctx, callID, dto.HangupReasonNormal)
+			}
+		}
+		return
+	}
 	if node.Type != "menu" || node.Choices == nil {
 		return
 	}
@@ -197,12 +291,17 @@ func (s *Service) gotoIVR(ctx context.Context, callID, nodeID string) {
 		s.mu.Unlock()
 		return
 	}
-	if rt != nil && rt.ivr != nil {
-		rt.ivr.node = nodeID
-		rt.ivr.entered = time.Now().UTC()
-		rt.ivr.invalidAttempts = 0
-		rt.ivr.actionID = ""
+	rt.ivr.hops++
+	if rt.ivr.hops > maxIVRHops {
+		s.mu.Unlock()
+		s.emitCall(ctx, callID, "command.failed", "", map[string]any{"call_id": callID, "reason": "ivr_hop_limit"})
+		_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+		return
 	}
+	rt.ivr.node = nodeID
+	rt.ivr.entered = time.Now().UTC()
+	rt.ivr.invalidAttempts = 0
+	rt.ivr.actionID = ""
 	s.mu.Unlock()
 	s.runIVRNode(ctx, callID)
 }
@@ -220,18 +319,19 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		_ = s.enterQueue(ctx, callID)
 		return
 	}
-	if node.Type == "play" || node.Type == "menu" {
-		if err := s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"}); err != nil {
+	if node.Type == "play" || node.Type == "menu" || (node.Type == "csat" && node.File != "") {
+		if err := s.injectCustomerAudio(ctx, callID, dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"}); err != nil {
 			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
 			return
 		}
 	}
-	if node.Type == "play" || node.Type == "menu" {
+	if node.Type == "play" || node.Type == "menu" || node.Type == "csat" {
 		seconds := node.TimeoutSec
 		if seconds == 0 {
-			if node.Type == "menu" {
+			switch node.Type {
+			case "menu", "csat":
 				seconds = 8
-			} else {
+			default:
 				seconds = 2
 			}
 		}
@@ -259,17 +359,36 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		if err := s.routeQueue(ctx, callID, node.QueueID); err != nil {
 			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
 		}
-	case "time_check":
-		open := withinHours(s.deps.Config, ctx, node.QueueID)
+	case "time_condition":
+		open := withinHoursFromSchedule(node.Schedule, s.deps.Config.Now(ctx))
 		next := node.Open
 		if !open {
 			next = node.Closed
+		}
+		if next == "" {
+			_ = s.Hangup(ctx, callID, dto.HangupReasonNormal)
+			return
+		}
+		s.gotoIVR(ctx, callID, next)
+	case "queue_condition":
+		busy := s.queueConditionBusy(ctx, node)
+		next := node.Open
+		if busy {
+			next = node.Busy
+			if next == "" {
+				next = node.Closed
+			}
 		}
 		if next == "" {
 			_ = s.enterQueue(ctx, callID)
 			return
 		}
 		s.gotoIVR(ctx, callID, next)
+	case "voicemail":
+		if node.File != "" {
+			_ = s.injectCustomerAudio(ctx, callID, dto.AudioSource{FilePath: node.File, Loop: false})
+		}
+		s.startVoicemail(ctx, callID)
 	case "play":
 		// 放音节点由定时 tick 在播放时长结束后推进。
 	case "tts", "asr":
@@ -338,7 +457,7 @@ func (s *Service) enterQueue(ctx context.Context, callID string) error {
 		if !strings.HasSuffix(strings.ToLower(promptFile), ".wav") {
 			promptFile = ""
 		}
-		_ = s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{FilePath: promptFile, Loop: true})
+		_ = s.injectCustomerAudio(ctx, callID, dto.AudioSource{FilePath: promptFile, Loop: true})
 	}
 	_ = s.cdrUpsert(ctx, callID, "queued")
 	s.publishPosition(ctx, callID)
@@ -368,45 +487,51 @@ func (s *Service) publishPosition(ctx context.Context, callID string) {
 	_ = s.publishCall(ctx, callID, "queue.position_changed", "", map[string]any{"call_id": callID, "position": pos, "message": msg})
 }
 
-// withinHours 按队列时区判断营业窗口；无法读取或解析时拒绝营业。
+// withinHours 按队列 business_hours 判断营业窗口（入队等路径，非 IVR 节点）。
 func withinHours(cfg ports.ConfigSnapshotPort, ctx context.Context, queueID string) bool {
 	h, err := cfg.GetBusinessHours(ctx, queueID)
 	if err != nil {
 		return false
 	}
-	if h.WeekdayHours == "always" {
+	return withinHoursFromSchedule(h.WeekdayHours, cfg.Now(ctx))
+}
+
+func (s *Service) queueConditionBusy(ctx context.Context, node ivrNode) bool {
+	if node.QueueID == "" {
 		return true
 	}
-	var m map[string]string
-	if json.Unmarshal([]byte(h.WeekdayHours), &m) != nil {
-		return false
+	st, err := s.deps.Config.QueueStatus(ctx, node.QueueID)
+	if err != nil {
+		return true
 	}
-	now := cfg.Now(ctx)
-	if tz := m["timezone"]; tz != "" {
-		h.Timezone = tz
+	threshold := node.WaitingGt
+	if threshold < 0 {
+		threshold = 0
 	}
-	if h.Timezone != "" {
-		if loc, err := time.LoadLocation(h.Timezone); err == nil {
-			now = now.In(loc)
+	if int(st.Waiting) > threshold {
+		return true
+	}
+	return st.AvailableAgents == 0
+}
+
+func (s *Service) recordCsat(ctx context.Context, callID string, score int) {
+	if score < 1 || score > 5 {
+		return
+	}
+	s.mu.Lock()
+	rt := s.calls[callID]
+	agentID := ""
+	flowID := ""
+	if rt != nil {
+		agentID = rt.rec.AgentID
+		if rt.ivr != nil {
+			flowID = rt.ivr.flowID
 		}
 	}
-	key := strings.ToLower(now.Weekday().String()[:3])
-	win, ok := m[key]
-	if !ok {
-		win = m[strconv.Itoa(int(now.Weekday()))]
-	}
-	if holiday, exists := m[now.Format("2006-01-02")]; exists {
-		win = holiday
-	}
-	if win == "" || win == "closed" {
-		return false
-	}
-	parts := strings.Split(win, "-")
-	if len(parts) != 2 {
-		return false
-	}
-	cur := now.Format("15:04")
-	return cur >= parts[0] && cur < parts[1]
+	s.mu.Unlock()
+	_ = s.publishCall(ctx, callID, "call.csat_scored", agentID, map[string]any{
+		"call_id": callID, "score": score, "agent_id": agentID, "flow_id": flowID,
+	})
 }
 
 // CompleteBusinessAction 仅接受流程中已声明的业务结果，并驱动 IVR 跳转。

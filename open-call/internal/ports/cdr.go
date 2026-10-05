@@ -45,6 +45,6 @@ type CDRWriteRequest struct {
 
 // CDRRecorderPort 由 L4 cdr 实现，L3 禁止直接 SQL。
 type CDRRecorderPort interface {
-	// Upsert 创建或更新话单记录。
-	Upsert(ctx context.Context, req CDRWriteRequest) error
+	// Upsert 创建或更新话单记录；switchEventVersion 为 Switch 事件 version，用于乱序保护。
+	Upsert(ctx context.Context, req CDRWriteRequest, switchEventVersion int64) error
 }

@@ -158,35 +158,3 @@ func (m *pcmMix) writeWAV(path string) (int64, error) {
 	}
 	return int64(len(buf)), nil
 }
-
-func mulawToLinear(u byte) int16 {
-	u = ^u
-	sign := u & 0x80
-	exponent := (u >> 4) & 0x07
-	mantissa := int16(u & 0x0f)
-	sample := ((mantissa << 3) + 0x84) << exponent
-	sample -= 0x84
-	if sign != 0 {
-		return -sample
-	}
-	return sample
-}
-
-func alawToLinear(a byte) int16 {
-	a ^= 0x55
-	t := int16(a&0x0f) << 4
-	seg := (a & 0x70) >> 4
-	switch {
-	case seg == 0:
-		t += 8
-	case seg == 1:
-		t += 0x108
-	default:
-		t += 0x108
-		t <<= seg - 1
-	}
-	if a&0x80 != 0 {
-		return t
-	}
-	return -t
-}

@@ -124,7 +124,6 @@ export function renderIdentity(state, actions) {
   `;
 
   return renderPageSplit({
-    description: "管理登录用户、坐席资料、角色权限与外部身份映射。左侧选用户，右侧编辑详情。",
     master,
     detail,
     below,

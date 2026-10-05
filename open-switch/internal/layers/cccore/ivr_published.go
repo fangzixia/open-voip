@@ -13,12 +13,7 @@ import (
 
 // ListIVRFlows 列出激活配置中的已发布 IVR。
 func (s *Service) ListIVRFlows(ctx context.Context) ([]ports.IVRPublishedView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	_ = appID
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -33,12 +28,7 @@ func (s *Service) ListIVRFlows(ctx context.Context) ([]ports.IVRPublishedView, e
 
 // GetIVRFlow 读取激活配置中的已发布 IVR。
 func (s *Service) GetIVRFlow(ctx context.Context, flowID string) (ports.IVRPublishedView, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.IVRPublishedView{}, err
-	}
-	_ = appID
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return ports.IVRPublishedView{}, err
 	}
@@ -50,6 +40,19 @@ func (s *Service) GetIVRFlow(ctx context.Context, flowID string) (ports.IVRPubli
 		}
 	}
 	return ports.IVRPublishedView{}, errs.NotFound("IVR 流程不存在")
+}
+
+// ValidateIVRFlowPayload 校验 IVR JSON，不写库。
+func (s *Service) ValidateIVRFlowPayload(ctx context.Context, payloadJSON string) error {
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
+	if err != nil {
+		return err
+	}
+	queues := map[string]bool{}
+	for _, q := range bundle.Queues {
+		queues[q.ID] = true
+	}
+	return validateIVR(strings.TrimSpace(payloadJSON), queues)
 }
 
 // UpsertIVRFlow 将业务系统提交的有效 IVR payload 写入激活配置并生成新版本。

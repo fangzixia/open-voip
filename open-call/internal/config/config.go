@@ -136,11 +136,7 @@ type BootstrapConfig struct {
 }
 
 type SecurityConfig struct {
-	AllowedOrigins            []string `yaml:"allowed_origins"`
-	LoginRequestsPerMin       int      `yaml:"login_requests_per_min"`
-	GuestRequestsPerMin       int      `yaml:"guest_requests_per_min"`
-	AdminRequestsPerMin       int      `yaml:"admin_requests_per_min"`
-	ClientEventRequestsPerMin int      `yaml:"client_event_requests_per_min"`
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 func Load(path string) (*Config, error) {
@@ -199,6 +195,9 @@ func (c *Config) Validate() error {
 		problems = append(problems, "tls.enabled 为 true 时必须设置 cert_file 与 key_file")
 	}
 	for _, origin := range c.Security.AllowedOrigins {
+		if strings.TrimSpace(origin) == "*" {
+			continue
+		}
 		u, err := url.Parse(origin)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" {
 			problems = append(problems, "security.allowed_origins 包含无效来源: "+origin)
@@ -280,17 +279,8 @@ func (c *Config) applyDefaults() {
 	if c.Webhook.TimeoutSec <= 0 {
 		c.Webhook.TimeoutSec = 5
 	}
-	if c.Security.LoginRequestsPerMin <= 0 {
-		c.Security.LoginRequestsPerMin = 10
-	}
-	if c.Security.GuestRequestsPerMin <= 0 {
-		c.Security.GuestRequestsPerMin = 30
-	}
-	if c.Security.AdminRequestsPerMin <= 0 {
-		c.Security.AdminRequestsPerMin = 120
-	}
-	if c.Security.ClientEventRequestsPerMin <= 0 {
-		c.Security.ClientEventRequestsPerMin = 60
+	if len(c.Security.AllowedOrigins) == 0 {
+		c.Security.AllowedOrigins = []string{"*"}
 	}
 	if c.TTS.SampleRate == 0 {
 		c.TTS.SampleRate = 16000

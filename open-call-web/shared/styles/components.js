@@ -1,4 +1,4 @@
-// 本文件负责通用组件样式�?
+// Shared component styles.
 import { css } from "lit";
 
 export const componentStyles = css`
@@ -109,7 +109,7 @@ export const componentStyles = css`
   }
 
   .panel {
-    padding: var(--ov-space-5);
+    padding: var(--ov-space-4);
     margin-bottom: var(--ov-space-4);
     border: 1px solid var(--ov-border);
     border-radius: var(--ov-radius-lg);
@@ -320,7 +320,7 @@ export const componentStyles = css`
     gap: 12px 16px;
     align-items: flex-start;
     margin-bottom: 12px;
-    /* 标签行高 + 字段�?gap，用于把裸按钮对齐到输入�?*/
+    /* 标签行高 + 字段�?gap，用于把裸按钮对齝到输入�?*/
     --ov-form-control-offset: calc(22px + 4px);
   }
 
@@ -338,7 +338,7 @@ export const componentStyles = css`
     min-width: 220px;
   }
 
-  /* 有字段时，直接子级按钮自动对齐到控件行，无需额外包裹 */
+  /* 有字段时，直接孝级按钮自动对齝到控件行，无需额外包裹 */
   .form-inline:has(.field) > button {
     margin-top: var(--ov-form-control-offset);
   }

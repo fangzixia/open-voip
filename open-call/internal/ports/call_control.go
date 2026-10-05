@@ -24,8 +24,6 @@ type CallControlPort interface {
 	CompleteTransfer(ctx context.Context, callID string) error
 	// Outbound 坐席发起外呼或分机互拨。
 	Outbound(ctx context.Context, req dto.OutboundRequest) (callID string, err error)
-	// StartIVR 为已有 Call 绑定 IVR 运行时（快照 ID）。
-	StartIVR(ctx context.Context, callID, snapshotID string) error
 	// Hold 保持或恢复。
 	Hold(ctx context.Context, callID string, on bool) error
 	// RequestVideo 一方请求升视频。

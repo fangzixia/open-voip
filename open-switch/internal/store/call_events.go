@@ -52,34 +52,26 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 		raw = []byte("{}")
 	}
 	var createdAt time.Time
-	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 全局事务锁保证已提交行按 ID 有序；否则读游标可能跳过另一通话尚未提交的更小 ID。
-		var locked int64
-		if err := tx.Raw("SELECT 1 FROM (SELECT pg_advisory_xact_lock(67104231)) AS lock_held").Scan(&locked).Error; err != nil {
+	tx := s.DB.WithContext(ctx)
+	var seq int64
+	if ev.CallID != "" {
+		if err := tx.Raw(`UPDATE os_calls SET event_seq = event_seq + 1 WHERE id = ? RETURNING event_seq`, ev.CallID).Scan(&seq).Error; err != nil {
 			return err
 		}
-		var seq int64
-		if err := tx.Raw("SELECT COALESCE(MAX(seq), 0) + 1 FROM os_call_events WHERE call_id::text = ?", ev.CallID).Scan(&seq).Error; err != nil {
-			return err
-		}
-		createdAt = time.Now().UTC()
-		var callID any
-		if ev.CallID != "" {
-			callID = ev.CallID
-		}
-		var commandID any
-		if ev.CommandID != "" {
-			commandID = ev.CommandID
-		}
-		if err := tx.Raw("INSERT INTO os_call_events (call_id, seq, version, command_id, agent_id, target_only, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id", callID, seq, ev.Version, commandID, ev.AgentID, ev.TargetOnly, ev.Type, string(raw), createdAt).Scan(&ev.ID).Error; err != nil {
-			return err
-		}
-		ev.Seq = seq
-		return nil
-	})
-	if err != nil {
+	}
+	createdAt = time.Now().UTC()
+	var callID any
+	if ev.CallID != "" {
+		callID = ev.CallID
+	}
+	var commandID any
+	if ev.CommandID != "" {
+		commandID = ev.CommandID
+	}
+	if err := tx.Raw("INSERT INTO os_call_events (call_id, seq, version, command_id, agent_id, target_only, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id", callID, seq, ev.Version, commandID, agentUUIDPtr(ev.AgentID), ev.TargetOnly, ev.Type, string(raw), createdAt).Scan(&ev.ID).Error; err != nil {
 		return err
 	}
+	ev.Seq = seq
 	if s.AfterAppend != nil && ev.ID > 0 {
 		row := CallEventRow{
 			ID:         ev.ID,
@@ -96,7 +88,7 @@ func (s CallEvents) Append(ctx context.Context, ev *ports.CallEvent) error {
 			cid := ev.CommandID
 			row.CommandID = &cid
 		}
-		go s.AfterAppend(context.Background(), row)
+		s.AfterAppend(ctx, row)
 	}
 	return nil
 }

@@ -10,4 +10,6 @@ import (
 type RecordingPolicyPort interface {
 	// ForQueue 返回队列录音策略。queueID 为空时返回组织默认策略。
 	ForQueue(ctx context.Context, queueID string) (dto.RecordingPolicy, error)
+	// NotifyMessageForMode 返回与 mode（off/audio/video_composite）匹配的告知文案。
+	NotifyMessageForMode(ctx context.Context, mode string) string
 }

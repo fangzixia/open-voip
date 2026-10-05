@@ -16,7 +16,7 @@ database:
 ffmpeg_path: ""
 
 recordings:
-  # 录音元数据与策略；文件实体在 open-switch 的 recordings.dir。
+  # 录音元数据与策略；文件实体在 open-switch 的 recordings.audio.dir / recordings.video.dir。
   retain_days: 90
   notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
 
@@ -91,9 +91,4 @@ bootstrap:
 
 security:
   allowed_origins:
-    - "http://127.0.0.1:5173"
-    - "http://localhost:5173"
-  login_requests_per_min: 10
-  guest_requests_per_min: 30
-  admin_requests_per_min: 120
-  client_event_requests_per_min: 60
+    - "*"

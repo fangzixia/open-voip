@@ -19,9 +19,7 @@ func (s *Service) ringDevice(ctx context.Context, callID, agentID string) error 
 	if info.TerminalType != "sip" {
 		return nil
 	}
-	if media, ok := s.deps.Media.(interface{ PrepareSIP(string) }); ok {
-		media.PrepareSIP(callID)
-	}
+	s.deps.Media.PrepareSIP(callID)
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
 		return err
 	}

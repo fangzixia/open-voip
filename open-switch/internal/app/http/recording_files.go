@@ -31,7 +31,8 @@ func (d SwitchRouterDeps) handleRecordingFile(w http.ResponseWriter, r *http.Req
 		writeErr(w, errs.InvalidRequest("录音格式无效"))
 		return
 	}
-	root, err := os.OpenRoot(d.Config.Recordings.Dir)
+	recRoot := d.Config.Recordings.DirForExt(ext)
+	root, err := os.OpenRoot(recRoot)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -40,7 +41,15 @@ func (d SwitchRouterDeps) handleRecordingFile(w http.ResponseWriter, r *http.Req
 	name := callID + "-" + id + ext
 	if r.Method == http.MethodDelete {
 		for _, suffix := range []string{".wav", ".ogg", ".webm", ".mp4", ".ivf"} {
-			if err := root.Remove(callID + "-" + id + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			dir := d.Config.Recordings.DirForExt(suffix)
+			delRoot, openErr := os.OpenRoot(dir)
+			if openErr != nil {
+				writeErr(w, openErr)
+				return
+			}
+			err := delRoot.Remove(callID + "-" + id + suffix)
+			delRoot.Close()
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				writeErr(w, err)
 				return
 			}
@@ -58,7 +67,8 @@ func (d SwitchRouterDeps) handleRecordingFile(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if format != "" && "."+format != ext {
-		tempDir, err := os.MkdirTemp(d.Config.Recordings.Dir, ".recording-download-")
+		videoRoot := d.Config.Recordings.VideoDirPath()
+		tempDir, err := os.MkdirTemp(videoRoot, ".recording-download-")
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -68,7 +78,7 @@ func (d SwitchRouterDeps) handleRecordingFile(w http.ResponseWriter, r *http.Req
 			_ = os.Remove(converted)
 			_ = os.Remove(tempDir)
 		}()
-		if err := convertRecording(r, d.Config.Recordings.FFmpegPath, filepath.Join(d.Config.Recordings.Dir, name), converted, format); err != nil {
+		if err := convertRecording(r, d.Config.Recordings.Video.FFmpegPath, filepath.Join(recRoot, name), converted, format); err != nil {
 			writeErr(w, err)
 			return
 		}

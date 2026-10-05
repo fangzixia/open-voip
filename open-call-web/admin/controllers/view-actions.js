@@ -7,7 +7,7 @@ export function adminViewActions(host, operations) {
       if (host.feedback) host.feedback.begin();
       else { host.error = ""; host.notice = ""; }
       host.nav = id;
-      if (typeof host.loadNav === "function") void host.loadNav(id);
+      if (typeof operations.loadNav === "function") void operations.loadNav(id);
     },
     setUsername: (value) => { host.username = value; },
     setPassword: (value) => { host.password = value; },
@@ -23,8 +23,10 @@ export function adminViewActions(host, operations) {
     setHookUrl: (value) => { host.hookUrl = value; },
     setCdrCaller: (value) => { host.cdrCaller = value; },
     setCdrResult: (value) => { host.cdrResult = value; },
-    search: () => host.requestUpdate(),
-    resetCdr: () => { host.cdrCaller = ""; host.cdrResult = ""; },
+    search: () => operations.loadCdr?.(1),
+    resetCdr: () => { host.cdrCaller = ""; host.cdrResult = ""; return operations.loadCdr?.(1); },
+    cdrPrev: () => { if (host.cdrPage > 1) return operations.loadCdr?.(host.cdrPage - 1); },
+    cdrNext: () => { if (host.cdrPage * host.cdrPageSize < host.cdrTotal) return operations.loadCdr?.(host.cdrPage + 1); },
     setQaCallId: (value) => { host.qaCallId = value; },
     setQaLabel: (value) => { host.qaLabel = value; },
     setBridgeForm: (patch) => { host.bridgeForm = { ...host.bridgeForm, ...patch }; },

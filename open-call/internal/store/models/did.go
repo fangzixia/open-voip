@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// DIDRoute 遗留 DID 草稿模型（运行时以 Switch 为准；configio 导出仍用此结构）。
+// DIDRoute 配置导出/导入 JSON 结构（持久化在 Switch，open-call 无对应表）。
 type DIDRoute struct {
 	// ID 路由 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:DID 路由 ID"`

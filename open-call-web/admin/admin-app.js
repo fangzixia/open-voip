@@ -11,13 +11,14 @@ import { canOpenAdminPage, firstAdminPage } from "../shared/workspace-permission
 import { appStyles } from "../shared/styles/index.js";
 import "../shared/components/ivr/ivr-editor.js";
 
+const CDR_PAGE_SIZE = 50;
+
 /** 按导航页懒加载的数据作业：[hostKey, loader, field|null, permission] */
 const NAV_LOAD_JOBS = {
   overview: [
     ["status", fetchStatus, null, "status.read"],
     ["queues", listQueues, "items", "queues.read"],
     ["agents", listAgents, "items", "agents.read"],
-    ["cdr", listCdr, "items", "cdr.read"],
     ["live", fetchLiveReport, null, "reports.read"],
     ["hist", fetchHistoricalReport, null, "reports.read"],
   ],
@@ -38,7 +39,6 @@ const NAV_LOAD_JOBS = {
     ["ivrs", listIvr, null, "ivr.read"],
   ],
   cdr: [
-    ["cdr", listCdr, "items", "cdr.read"],
     ["wrapUps", listWrapUps, "items", "cdr.read"],
   ],
   recordings: [["recs", listRecordings, "items", "recordings.read"]],
@@ -109,6 +109,8 @@ export class AdminApp extends LitElement {
     nav: { type: String },
     cdrCaller: { type: String },
     cdrResult: { type: String },
+    cdrPage: { type: Number },
+    cdrTotal: { type: Number },
     clock: { type: String },
     authOptions: { type: Object }, me: { type: Object }, roles: { type: Array }, permissionsCatalog: { type: Array }, groupMappings: { type: Array }, selectedUser: { type: String }, identities: { type: Array }, newRole: { type: Object }, newMapping: { type: Object }, identityInput: { type: Object }, agentProfileDraft: { type: Object }, newIdentityUser: { type: Object },
     openCalls: { type: Array }, runtimeCall: { type: Object }, bridgeForm: { type: Object },
@@ -157,6 +159,9 @@ export class AdminApp extends LitElement {
     this.nav = "overview";
     this.cdrCaller = "";
     this.cdrResult = "";
+    this.cdrPage = 1;
+    this.cdrTotal = 0;
+    this.cdrPageSize = CDR_PAGE_SIZE;
     this.clock = "";
     this.authOptions = null; this.me = null; this.roles = []; this.permissionsCatalog = []; this.groupMappings = []; this.selectedUser = ""; this.identities = []; this.newRole = { id: "", name: "", permissions: [] }; this.newMapping = { group: "", roles: [] }; this.identityInput = { issuer: "", subject: "" }; this.agentProfileDraft = { extension: "", terminal_type: "webrtc", video_capable: false };     this.newIdentityUser = newIdentityUserDraft();
     this.openCalls = [];
@@ -255,11 +260,22 @@ export class AdminApp extends LitElement {
     }
     const allow = (code) => this.me?.permissions?.includes(code);
     const jobs = NAV_LOAD_JOBS[nav] || [];
-    await Promise.allSettled(jobs.filter(([, , , code]) => !code || allow(code)).map(async ([key, load, field]) => {
+    const tasks = jobs.filter(([, , , code]) => !code || allow(code)).map(async ([key, load, field]) => {
       const result = await load();
       if (!this.authed && !getAccessToken()) return;
       this[key] = field ? result?.[field] || [] : result;
-    }));
+    });
+    if ((nav === "overview" || nav === "cdr") && allow("cdr.read")) tasks.push(this.#loadCdr());
+    await Promise.allSettled(tasks);
+  }
+
+  /** 按当前筛选条件和页码从服务端拉取话单。 */
+  async #loadCdr(page = this.cdrPage) {
+    const result = await listCdr({ page, pageSize: CDR_PAGE_SIZE, caller: this.cdrCaller.trim(), result: this.cdrResult });
+    if (!this.authed && !getAccessToken()) return;
+    this.cdr = result?.items || [];
+    this.cdrTotal = result?.total || 0;
+    this.cdrPage = result?.page || page;
   }
 
   async #createQueue(ev, video = false) {
@@ -347,13 +363,9 @@ export class AdminApp extends LitElement {
     });
   }
 
-  /** 根据当前筛选条件生成页面显示的话单集合。 */
+  /** 当前页话单；筛选已在服务端完成。 */
   #filteredCdr() {
-    return (this.cdr || []).filter((c) => {
-      const callerOk = !this.cdrCaller || String(c.caller || "").includes(this.cdrCaller);
-      const resultOk = !this.cdrResult || String(c.result || "") === this.cdrResult;
-      return callerOk && resultOk;
-    });
+    return this.cdr || [];
   }
 
   #waiting() {
@@ -428,6 +440,7 @@ export class AdminApp extends LitElement {
       downloadRec: (...args) => this.#downloadRec(...args),
       exportCdr: () => downloadCdrCsv(),
       filteredCdr: (...args) => this.#filteredCdr(...args),
+      loadCdr: (page) => this.#run(() => this.#loadCdr(page)),
       force: (...args) => this.#force(...args),
       idleAgents: (...args) => this.#idleAgents(...args),
       load: (...args) => this.#load(...args),

@@ -2,16 +2,13 @@
 import { html, nothing } from "lit";
 import { renderPanel } from "./panel.js";
 
-/** 页壳：说明文案 + 内容区。 */
-export function renderPage({ description = "", children = nothing } = {}) {
-  return html`<div class="page">
-    ${description ? html`<p class="page-desc">${description}</p>` : nothing}
-    <div class="page-body">${children}</div>
-  </div>`;
+/** 页壳：内容区。 */
+export function renderPage({ children = nothing } = {}) {
+  return html`<div class="page"><div class="page-body">${children}</div></div>`;
 }
 
 /**
- * CRUD 区块：说明 → 表单 → 列表（顺序固定）。
+ * CRUD 区块：表单 → 列表（顺序固定）。
  * @param {{ title: string, hint?: string, form?: unknown, list?: unknown, footer?: unknown, className?: string }} section
  */
 export function renderCrudSection({ title, hint = "", form = null, list = null, footer = null, className = "" } = {}) {
@@ -23,24 +20,16 @@ export function renderCrudSection({ title, hint = "", form = null, list = null, 
   `, { className });
 }
 
-/**
- * 标准 CRUD 页：页说明 + 多个 CRUD 区块。
- * @param {{ description?: string, sections: object[] }} opts
- */
-export function renderPageCrud({ description = "", sections = [] } = {}) {
+/** 标准 CRUD 页：多个 CRUD 区块。 */
+export function renderPageCrud({ sections = [] } = {}) {
   return renderPage({
-    description,
     children: html`<div class="page-sections">${sections.map((section) => renderCrudSection(section))}</div>`,
   });
 }
 
-/**
- * 主从页：左列表 / 右详情。
- * @param {{ description?: string, master: unknown, detail: unknown, below?: unknown }} opts
- */
-export function renderPageSplit({ description = "", master = nothing, detail = nothing, below = nothing } = {}) {
+/** 主从页：左列表 / 右详情。 */
+export function renderPageSplit({ master = nothing, detail = nothing, below = nothing } = {}) {
   return renderPage({
-    description,
     children: html`
       <div class="page-split">
         <div class="page-split-master">${master}</div>
@@ -51,13 +40,9 @@ export function renderPageSplit({ description = "", master = nothing, detail = n
   });
 }
 
-/**
- * 总览页：KPI + 卡片区 + 可选底部。
- * @param {{ description?: string, kpis?: { label: string, value: unknown }[], cards?: unknown[], footer?: unknown }} opts
- */
-export function renderPageDashboard({ description = "", kpis = [], cards = [], footer = null } = {}) {
+/** 总览页：KPI + 卡片区 + 可选底部。 */
+export function renderPageDashboard({ kpis = [], cards = [], footer = null } = {}) {
   return renderPage({
-    description,
     children: html`
       ${kpis.length ? html`<div class="kpi-row">${kpis.map((k) => html`
         <div class="kpi"><span>${k.label}</span><strong>${k.value}</strong></div>

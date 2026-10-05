@@ -10,8 +10,8 @@ type Call struct {
 	ConfigVersion *int64
 	Caller        string
 	Callee        string
-	AgentID       string
-	OfferedAgent  string
+	AgentID      *string `gorm:"type:uuid;index;comment:已接听坐席 ID"`
+	OfferedAgent *string `gorm:"type:uuid;comment:振铃目标坐席 ID"`
 	AnsweredAt    *time.Time
 	// ID 全局通话 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:通话 ID 与媒体 Room 一致"`

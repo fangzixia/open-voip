@@ -14,7 +14,7 @@ import (
 
 // GetActiveConfiguration 返回当前激活的配置包；尚未激活时返回 Conflict。
 func (s *Service) GetActiveConfiguration(ctx context.Context) (ports.ActiveConfigurationView, error) {
-	bundle, view, err := s.loadActiveBundle(ctx, "")
+	bundle, view, err := s.loadActiveBundle(ctx)
 	if err != nil {
 		return ports.ActiveConfigurationView{}, err
 	}
@@ -23,15 +23,15 @@ func (s *Service) GetActiveConfiguration(ctx context.Context) (ports.ActiveConfi
 
 // GetActiveConfigurationSummary 仅返回激活版本元数据。
 func (s *Service) GetActiveConfigurationSummary(ctx context.Context) (ports.ConfigVersionView, error) {
-	version, err := activeVersion(s.db.WithContext(ctx), "")
+	version, err := activeVersion(s.db.WithContext(ctx))
 	if err != nil {
 		return ports.ConfigVersionView{}, err
 	}
 	return s.GetConfigVersion(ctx, version)
 }
 
-func (s *Service) loadActiveBundle(ctx context.Context, appID string) (ports.ConfigBundle, ports.ConfigVersionView, error) {
-	version, err := activeVersion(s.db.WithContext(ctx), "")
+func (s *Service) loadActiveBundle(ctx context.Context) (ports.ConfigBundle, ports.ConfigVersionView, error) {
+	version, err := activeVersion(s.db.WithContext(ctx))
 	if err != nil {
 		return ports.ConfigBundle{}, ports.ConfigVersionView{}, err
 	}
@@ -51,8 +51,8 @@ func (s *Service) loadActiveBundle(ctx context.Context, appID string) (ports.Con
 }
 
 // loadActiveBundleOrEmpty 无激活配置时返回空 bundle（用于首次写入）。
-func (s *Service) loadActiveBundleOrEmpty(ctx context.Context, appID string) (ports.ConfigBundle, error) {
-	bundle, _, err := s.loadActiveBundle(ctx, "")
+func (s *Service) loadActiveBundleOrEmpty(ctx context.Context) (ports.ConfigBundle, error) {
+	bundle, _, err := s.loadActiveBundle(ctx)
 	if err != nil {
 		if errors.Is(err, errs.ErrConflict) {
 			return ports.ConfigBundle{

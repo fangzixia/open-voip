@@ -20,11 +20,16 @@ type DTO struct {
 
 // Service 技能 CRUD（Switch 权威）。
 type Service struct {
-	sw ports.SwitchAdminPort
+	sw switchSkills
+}
+
+type switchSkills interface {
+	ports.SwitchSkillConfigPort
+	ports.SwitchAgentConfigPort
 }
 
 // NewService 创建技能服务。
-func NewService(sw ports.SwitchAdminPort) *Service { return &Service{sw: sw} }
+func NewService(sw switchSkills) *Service { return &Service{sw: sw} }
 
 // List 列出技能。
 func (s *Service) List(ctx context.Context) ([]DTO, error) {

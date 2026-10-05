@@ -5,7 +5,6 @@ import { renderPage } from "../../shared/components/page-layout.js";
 
 export function renderIvr(state, actions) {
   return renderPage({
-    description: "IVR 流程设计器：编辑草稿、发布版本，并绑定到呼入语音队列。",
     children: html`<div class="page-ivr"><ivr-flow-editor .flows=${state.ivrs} .queues=${state.queues} .service=${ivrService} @ivr-changed=${() => actions.load()}></ivr-flow-editor></div>`,
   });
 }

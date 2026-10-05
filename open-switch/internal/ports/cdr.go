@@ -39,8 +39,6 @@ type CDRWriteRequest struct {
 	ScreenShareCount int `json:"screen_share_count"`
 	// NotifyMessage 录音告知。
 	NotifyMessage string `json:"notify_message"`
-	// RetainDays 录音保留天数。
-	RetainDays int `json:"retain_days"`
 }
 
 // CDRRecorderPort 由 L4 cdr 实现，L3 禁止直接 SQL。

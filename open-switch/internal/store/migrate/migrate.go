@@ -1,6 +1,8 @@
 package migrate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path"
 	"sort"
@@ -24,8 +26,10 @@ const ensureMigrationsTableSQL = `
 CREATE TABLE IF NOT EXISTS os_schema_migrations (
   version BIGINT PRIMARY KEY,
   name TEXT NOT NULL,
+  checksum TEXT NOT NULL DEFAULT '',
   applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE os_schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT '';
 `
 
 // Migrate 按 embed SQL 版本顺序执行未应用的迁移。
@@ -62,18 +66,19 @@ func migrateLocked(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		applied, err := isApplied(db, version)
-		if err != nil {
-			return err
-		}
-		if applied {
-			continue
-		}
 		raw, err := sqlFiles.ReadFile(path.Join("sql", name))
 		if err != nil {
 			return fmt.Errorf("read %s: %w", name, err)
 		}
-		if err := applyFile(db, version, name, string(raw)); err != nil {
+		sum := checksumSQL(string(raw))
+		skip, err := migrationApplied(db, version, name, sum)
+		if err != nil {
+			return err
+		}
+		if skip {
+			continue
+		}
+		if err := applyFile(db, version, name, string(raw), sum); err != nil {
 			return err
 		}
 	}
@@ -94,15 +99,37 @@ func parseVersion(filename string) (int64, error) {
 	return v, nil
 }
 
-// isApplied 查询指定版本是否已写入本服务的迁移记录。
-func isApplied(db *gorm.DB, version int64) (bool, error) {
+func checksumSQL(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+func migrationApplied(db *gorm.DB, version int64, name, sum string) (bool, error) {
 	var n int64
-	err := db.Raw("SELECT COUNT(1) FROM os_schema_migrations WHERE version = ?", version).Scan(&n).Error
-	return n > 0, err
+	if err := db.Raw("SELECT COUNT(1) FROM os_schema_migrations WHERE version = ?", version).Scan(&n).Error; err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil
+	}
+	var row struct {
+		Name     string
+		Checksum string
+	}
+	if err := db.Raw("SELECT name, checksum FROM os_schema_migrations WHERE version = ?", version).Scan(&row).Error; err != nil {
+		return false, err
+	}
+	if row.Checksum == "" {
+		return true, nil
+	}
+	if row.Name != name || row.Checksum != sum {
+		return false, fmt.Errorf("迁移 %d (%s) 已应用，但嵌入文件校验和不一致；请追加新迁移，勿修改已发布 SQL", version, name)
+	}
+	return true, nil
 }
 
 // applyFile 在单事务内执行 SQL 文件并记录版本。
-func applyFile(db *gorm.DB, version int64, name, content string) error {
+func applyFile(db *gorm.DB, version int64, name, content, sum string) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		for _, stmt := range splitSQL(content) {
 			if err := tx.Exec(stmt).Error; err != nil {
@@ -110,8 +137,8 @@ func applyFile(db *gorm.DB, version int64, name, content string) error {
 			}
 		}
 		if err := tx.Exec(
-			"INSERT INTO os_schema_migrations (version, name) VALUES (?, ?)",
-			version, name,
+			"INSERT INTO os_schema_migrations (version, name, checksum) VALUES (?, ?, ?)",
+			version, name, sum,
 		).Error; err != nil {
 			return err
 		}

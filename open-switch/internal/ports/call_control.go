@@ -46,4 +46,6 @@ type CallControlPort interface {
 	ForceReleaseAgent(ctx context.Context, agentID, policy string) error
 	// GetCall 读取通话视图（L4 Guest 入队后取 leg，不经过 SignalingPort）。
 	GetCall(ctx context.Context, callID string) (CallView, error)
+	// StartSurvey 坐席转满意度 IVR，客户继续在线。
+	StartSurvey(ctx context.Context, callID, flowID string) error
 }

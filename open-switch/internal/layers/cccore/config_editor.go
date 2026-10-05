@@ -2,6 +2,11 @@ package cccore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+
+	"gorm.io/gorm"
 
 	"open-switch/internal/ports"
 )
@@ -11,12 +16,7 @@ const configMutationLockID int64 = 67104232
 
 // ApplyConfigMutation 读取当前激活配置（或空配置）、应用变更、校验并激活新版本。
 func (s *Service) ApplyConfigMutation(ctx context.Context, mutate func(*ports.ConfigBundle) error) (ports.ConfigVersionView, error) {
-	if err := s.db.WithContext(ctx).Exec("SELECT pg_advisory_lock(?)", configMutationLockID).Error; err != nil {
-		return ports.ConfigVersionView{}, err
-	}
-	defer func() { _ = s.db.WithContext(ctx).Exec("SELECT pg_advisory_unlock(?)", configMutationLockID).Error }()
-
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return ports.ConfigVersionView{}, err
 	}
@@ -26,11 +26,38 @@ func (s *Service) ApplyConfigMutation(ctx context.Context, mutate func(*ports.Co
 		}
 	}
 	bundle.Version = 0
-	stored, err := s.StoreConfig(ctx, bundle)
+	var stored ports.ConfigVersionView
+	var activated ports.ConfigVersionView
+	normalizeBundle(&bundle)
+	if err := validateBundle(bundle); err != nil {
+		return ports.ConfigVersionView{}, err
+	}
+	hashInput := bundle
+	hashInput.Version = 0
+	rawForHash, _ := json.Marshal(hashInput)
+	sum := sha256.Sum256(rawForHash)
+	checksum := hex.EncodeToString(sum[:])
+
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", configMutationLockID).Error; err != nil {
+			return err
+		}
+		row, err := s.storeConfigTx(ctx, tx, bundle, checksum)
+		if err != nil {
+			return err
+		}
+		stored = configView(row)
+		row, err = s.activateConfigTx(ctx, tx, stored.Version)
+		if err != nil {
+			return err
+		}
+		activated = configView(row)
+		return nil
+	})
 	if err != nil {
 		return ports.ConfigVersionView{}, err
 	}
-	return s.ActivateConfig(ctx, stored.Version)
+	return activated, nil
 }
 
 func findQueueIndex(bundle *ports.ConfigBundle, id string) int {

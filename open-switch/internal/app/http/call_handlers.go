@@ -48,6 +48,29 @@ func (d RouterDeps) handleCallAnswer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+func (d RouterDeps) handleCallSurvey(w http.ResponseWriter, r *http.Request) {
+	if err := d.authorizeCall(r, chi.URLParam(r, "callId")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	var body struct {
+		FlowID          string `json:"flow_id"`
+		ExpectedVersion int64  `json:"expected_version"`
+	}
+	_ = decodeJSON(r, &body)
+	ctx := callMutationContext(r, body.ExpectedVersion)
+	if err := d.CallControl.StartSurvey(ctx, chi.URLParam(r, "callId"), body.FlowID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	view, err := d.Signaling.GetCall(r.Context(), chi.URLParam(r, "callId"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 func (d RouterDeps) handleCallHangup(w http.ResponseWriter, r *http.Request) {
 	if err := d.authorizeCall(r, chi.URLParam(r, "callId")); err != nil {
 		writeErr(w, err)

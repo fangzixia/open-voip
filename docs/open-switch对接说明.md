@@ -193,8 +193,6 @@ GET  /configuration/active
 GET  /configuration/active/summary
 ```
 
-（兼容别名 `/config-versions/...`）
-
 `POST /configuration/versions` body：
 
 | 字段 | 类型 | 说明 |

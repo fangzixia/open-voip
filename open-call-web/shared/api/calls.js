@@ -4,7 +4,7 @@ import { apiFetch } from "./client.js";
 
 export async function getCall(callId) {
   const view = await apiFetch(`/api/v1/calls/${callId}`);
-  if (view?.version != null) setCallVersion(view.version);
+  if (view?.version != null) setCallVersion(view.version, callId);
   return view;
 }
 
@@ -115,6 +115,11 @@ export function outboundCall(destination) {
 
 export function holdCall(callId, on) {
   return callMutate(`/api/v1/calls/${callId}/hold`, { action: "hold", callId, method: "POST", body: { on } });
+}
+
+export function startSurvey(callId, flowId = "") {
+  const body = flowId ? { flow_id: flowId } : {};
+  return callMutate(`/api/v1/calls/${callId}/survey`, { action: "survey", callId, method: "POST", body });
 }
 
 export function transferCall(callId, body) {

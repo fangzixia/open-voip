@@ -108,6 +108,7 @@ export function renderStagePanel(model, actions, inCall) {
               </select>
               ${model.consulting ? html`<button @click=${() => actions.completeXfer()}>完成转接</button>` : ""}
               <button @click=${() => actions.conf()}>邀请三方</button>
+              <button @click=${() => actions.survey()}>转满意度</button>
               ${model.permissions?.includes("calls.wrap_up") ? html`<button @click=${() => actions.submitWrap()}>提交小结</button>` : ""}
             </div>
             <textarea class="wrap-notes" .value=${model.wrapNotes} @input=${(e) => actions.setWrapNotes(e.target.value)} placeholder="通话小结"></textarea>`

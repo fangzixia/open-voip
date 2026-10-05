@@ -25,7 +25,7 @@ type Agent struct {
 // TableName 指定表名。
 func (Agent) TableName() string { return "oc_agents" }
 
-// Skill 表示技能组，用于队列路由匹配。
+// Skill 配置导出/导入 JSON 结构（持久化在 Switch，open-call 无对应表）。
 type Skill struct {
 	// ID 主键 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:技能组 ID"`
@@ -35,7 +35,7 @@ type Skill struct {
 	CreatedAt time.Time `gorm:"comment:创建时间"`
 }
 
-// TableName 指定表名。
+// TableName 保留 GORM 表名以兼容旧迁移引用。
 func (Skill) TableName() string { return "oc_skills" }
 
 // AgentSkill 坐席与技能多对多关联。

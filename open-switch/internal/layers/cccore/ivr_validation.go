@@ -19,10 +19,13 @@ func validateIVR(payload string, queues map[string]bool) error {
 			Next    string            `json:"next"`
 			Default string            `json:"default"`
 			Invalid string            `json:"invalid"`
-			Open    string            `json:"open"`
-			Closed  string            `json:"closed"`
-			Timeout int               `json:"timeout_sec"`
-			Choices map[string]string `json:"choices"`
+			Open      string            `json:"open"`
+			Closed    string            `json:"closed"`
+			Busy      string            `json:"busy"`
+			Schedule  string            `json:"schedule"`
+			WaitingGt int               `json:"waiting_gt"`
+			Timeout   int               `json:"timeout_sec"`
+			Choices   map[string]string `json:"choices"`
 		} `json:"nodes"`
 	}
 	if json.Unmarshal([]byte(payload), &doc) != nil || doc.Start == "" || len(doc.Nodes) == 0 || len(doc.Nodes) > 100 {
@@ -40,6 +43,9 @@ func validateIVR(payload string, queues map[string]bool) error {
 				return errs.InvalidRequest("IVR 引用了不存在的队列")
 			}
 		case "play":
+			if node.Next == "" {
+				return errs.InvalidRequest("play 必须指定 next")
+			}
 			edges[id] = []string{node.Next}
 		case "menu", "business_action":
 			if len(node.Choices) == 0 {
@@ -47,6 +53,9 @@ func validateIVR(payload string, queues map[string]bool) error {
 			}
 			if node.Type == "business_action" && (strings.TrimSpace(node.Action) == "" || node.Timeout < 1) {
 				return errs.InvalidRequest("业务动作必须指定 action 与超时")
+			}
+			if node.Default == "" {
+				return errs.InvalidRequest("IVR 分支必须指定 default 超时去向")
 			}
 			edges[id] = []string{node.Default}
 			for key, target := range node.Choices {
@@ -58,11 +67,43 @@ func validateIVR(payload string, queues map[string]bool) error {
 			if node.Invalid != "" {
 				edges[id] = append(edges[id], node.Invalid)
 			}
-		case "time_check":
-			if !queues[node.QueueID] {
-				return errs.InvalidRequest("工作时间节点引用不存在的队列")
+		case "time_condition":
+			schedule := strings.TrimSpace(node.Schedule)
+			if schedule != "" && schedule != "always" {
+				if err := validateHours(schedule); err != nil {
+					return err
+				}
+			}
+			if node.Open == "" || node.Closed == "" {
+				return errs.InvalidRequest("时间判断必须配置营业与非营业去向")
 			}
 			edges[id] = []string{node.Open, node.Closed}
+		case "queue_condition":
+			if !queues[node.QueueID] {
+				return errs.InvalidRequest("排队判断引用了不存在的队列")
+			}
+			if node.Open == "" {
+				return errs.InvalidRequest("排队判断必须配置空闲去向")
+			}
+			if node.Busy == "" && node.Closed == "" {
+				return errs.InvalidRequest("排队判断必须配置忙碌去向")
+			}
+			edges[id] = []string{node.Open, node.Busy, node.Closed}
+		case "voicemail":
+		case "csat":
+			if node.Timeout < 0 || node.Timeout > 120 {
+				return errs.InvalidRequest("IVR 超时必须为 0–120 秒")
+			}
+			if node.Next != "" {
+				edges[id] = []string{node.Next}
+			}
+			if node.Default != "" {
+				if edges[id] == nil {
+					edges[id] = []string{node.Default}
+				} else {
+					edges[id] = append(edges[id], node.Default)
+				}
+			}
 		case "tts", "asr":
 			if node.Default == "" {
 				return errs.InvalidRequest("tts/asr 节点必须指定 default 兜底分支")
@@ -72,35 +113,33 @@ func validateIVR(payload string, queues map[string]bool) error {
 			return errs.InvalidRequest("不支持的 IVR 节点: " + node.Type)
 		}
 		for _, target := range edges[id] {
+			if target == "" {
+				continue
+			}
 			if _, ok := doc.Nodes[target]; !ok {
 				return errs.InvalidRequest("IVR 后续节点不存在")
 			}
 		}
 	}
-	visiting, done := map[string]bool{}, map[string]bool{}
-	var visit func(string) bool
-	visit = func(id string) bool {
-		if visiting[id] {
-			return false
-		}
-		if done[id] {
-			return true
-		}
-		if _, ok := doc.Nodes[id]; !ok {
-			return false
-		}
-		visiting[id] = true
+	seen := map[string]bool{doc.Start: true}
+	queue := []string{doc.Start}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
 		for _, next := range edges[id] {
-			if !visit(next) {
-				return false
+			if next == "" {
+				continue
+			}
+			if !seen[next] {
+				seen[next] = true
+				queue = append(queue, next)
 			}
 		}
-		visiting[id] = false
-		done[id] = true
-		return true
 	}
-	if !visit(doc.Start) || len(done) != len(doc.Nodes) {
-		return errs.InvalidRequest("IVR 包含循环或不可达节点")
+	for id := range doc.Nodes {
+		if !seen[id] {
+			return errs.InvalidRequest("IVR 存在不可达节点")
+		}
 	}
 	return nil
 }

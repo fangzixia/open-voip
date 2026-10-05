@@ -41,8 +41,11 @@ func Run(configPath string) error {
 	defer func() { _ = closeLogs() }()
 	slog.SetDefault(log)
 
-	if err := ensureDir(cfg.Recordings.Dir); err != nil {
-		return fmt.Errorf("录音目录: %w", err)
+	if err := ensureDir(cfg.Recordings.AudioDirPath()); err != nil {
+		return fmt.Errorf("音频录制目录: %w", err)
+	}
+	if err := ensureDir(cfg.Recordings.VideoDirPath()); err != nil {
+		return fmt.Errorf("录像目录: %w", err)
 	}
 
 	gormLog := logger.Warn
@@ -62,8 +65,9 @@ func Run(configPath string) error {
 	}
 
 	mediaSvc, err := media.NewService(media.Options{
-		ICE: cfg.ICE, TURN: cfg.TURN, RecordingsDir: cfg.Recordings.Dir,
-		VideoFormat: cfg.Recordings.VideoFormat, FFmpegPath: cfg.Recordings.FFmpegPath, SIP: cfg.SIP,
+		ICE: cfg.ICE, TURN: cfg.TURN,
+		AudioRecDir: cfg.Recordings.AudioDirPath(), VideoRecDir: cfg.Recordings.VideoDirPath(),
+		VideoFormat: cfg.Recordings.Video.Format, FFmpegPath: cfg.Recordings.Video.FFmpegPath, SIP: cfg.SIP,
 	})
 	if err != nil {
 		return fmt.Errorf("媒体层: %w", err)
@@ -76,9 +80,9 @@ func Run(configPath string) error {
 	commandStore := store.Commands{DB: db, Events: eventStore}
 	routingStore := store.RoutingSessions{DB: db}
 	ccCore := cccore.New(db, eventStore, cccore.Options{
-		RecordingMode: "off",
-		NotifyMessage: cfg.Recordings.NotifyMessage,
-		RetainDays:    cfg.Recordings.RetainDays,
+		RecordingMode:        "off",
+		AudioNotifyMessage:   cfg.Recordings.Audio.NotifyMessage,
+		VideoNotifyMessage:   cfg.Recordings.Video.NotifyMessage,
 	})
 	controlDeps := control.Deps{
 		BusinessActions: ccCore, Media: mediaSvc, ACD: ccCore, Config: ccCore, Agents: ccCore,
@@ -140,6 +144,7 @@ func Run(configPath string) error {
 		}
 		return id, "", nil
 	}
+	mediaSvc.SetSIPBindingStore(context.Background(), store.NewSIPBindingStore(db))
 	mediaSvc.SetInboundHandler(startInbound)
 	mediaSvc.SetDeviceHandler(func(ctx context.Context, _ string, destination, from, callID string) (string, string, error) {
 		known := false
@@ -211,14 +216,17 @@ func Run(configPath string) error {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
-	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
+	if err := callControl.Shutdown(shutdownCtx); err != nil {
+		log.Warn("关停前挂断活跃通话失败", "err", err)
+	}
+	cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
-	return callControl.Shutdown(shutdownCtx)
+	return nil
 }
 
 func ensureDir(path string) error {

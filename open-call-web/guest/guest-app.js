@@ -39,6 +39,8 @@ export class GuestApp extends LitElement {
   static styles = appStyles;
 
   #ws = new BusinessWebSocket();
+  /** @type {(() => void)|null} */
+  #wsUnsub = null;
   #pc = null;
   #local = null;
   #remote = null;
@@ -146,8 +148,9 @@ export class GuestApp extends LitElement {
       reportEvent("call.joined", { state: join.state });
       setAccessToken(join.token);
       this.step = "wait";
+      this.#wsUnsub?.();
       this.#ws.connect(join.token);
-      this.#ws.subscribe((msg) => this.#onWs(msg));
+      this.#wsUnsub = this.#ws.subscribe((msg) => this.#onWs(msg));
       if (["ivr", "queued", "ringing"].includes(join.state)) await this.#enterMedia(false);
     } catch (e) {
       this.feedback.fail(e, __fbEpoch);
@@ -225,8 +228,9 @@ export class GuestApp extends LitElement {
       reportEvent("call.joined", { state: join.state });
       setAccessToken(join.token);
       history.replaceState(null, "", location.pathname);
+      this.#wsUnsub?.();
       this.#ws.connect(join.token);
-      this.#ws.subscribe((msg) => this.#onWs(msg));
+      this.#wsUnsub = this.#ws.subscribe((msg) => this.#onWs(msg));
       if (["ivr", "queued", "ringing"].includes(join.state)) await this.#enterMedia(false);
       if (join.state === "active") await this.#enterMedia(true);
     } catch (e) {
@@ -376,6 +380,8 @@ export class GuestApp extends LitElement {
   #cleanup() {
     clearInterval(this.#timer);
     clearInterval(this.#waitTimer);
+    this.#wsUnsub?.();
+    this.#wsUnsub = null;
     this.#ws.disconnect();
     stopMedia(this.#pc, this.#local);
     this.#pc = null;

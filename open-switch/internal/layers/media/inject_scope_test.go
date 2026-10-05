@@ -10,7 +10,7 @@ import (
 
 // TestPromptPathValidation 确认仅接受 UUID.wav，并拒绝路径穿越。
 func TestPromptPathValidation(t *testing.T) {
-	s := &Service{recDir: t.TempDir()}
+	s := &Service{audioRecDir: t.TempDir(), videoRecDir: t.TempDir()}
 	ctx := context.Background()
 	asset := uuid.New().String() + ".wav"
 	got := s.resolvePrompt(ctx, asset)
@@ -20,7 +20,7 @@ func TestPromptPathValidation(t *testing.T) {
 	if filepath.Base(got) != asset {
 		t.Fatalf("unexpected path %q", got)
 	}
-	for _, path := range []string{"../" + asset, filepath.Join(s.recDir, asset), "private.wav"} {
+	for _, path := range []string{"../" + asset, filepath.Join(s.audioRecDir, asset), "private.wav"} {
 		if s.resolvePrompt(ctx, path) != "" {
 			t.Fatalf("accepted unsafe prompt %q", path)
 		}

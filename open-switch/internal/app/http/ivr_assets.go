@@ -26,7 +26,7 @@ type ivrAsset struct {
 }
 
 func (d SwitchRouterDeps) ivrAssetDir(r *http.Request) string {
-	return filepath.Join(d.Config.Recordings.Dir, "prompts", scope.AssetNamespace())
+	return filepath.Join(d.Config.Recordings.AudioDirPath(), "prompts", scope.AssetNamespace())
 }
 
 func (d SwitchRouterDeps) handleIVRAssets(w http.ResponseWriter, r *http.Request) {

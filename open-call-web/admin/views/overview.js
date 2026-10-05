@@ -10,7 +10,6 @@ import { renderStatusTag } from "../../shared/components/status-tag.js";
 export function renderOverview(state, actions) {
   const sipOk = state.status?.sip_listening ?? state.status?.sip_ok ?? true;
   return renderPageDashboard({
-    description: "实时坐席、排队与话单概览。详细配置请从侧栏进入对应菜单。",
     kpis: [
       { label: "在线坐席", value: state.live?.agents_online ?? 0 },
       { label: "排队", value: actions.waiting() },

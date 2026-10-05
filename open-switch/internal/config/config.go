@@ -52,17 +52,23 @@ type DatabaseConfig struct {
 	DSN string `yaml:"dsn"`
 }
 
-// RecordingsConfig 定义录音文件根目录。
+// RecordingsConfig 纯音频与录像的独立配置块。
 type RecordingsConfig struct {
-	// Dir 本地绝对或相对路径，需可写。
-	Dir string `yaml:"dir"`
-	// VideoFormat 视频通话成品格式：webm 或 mp4。
-	VideoFormat string `yaml:"video_format"`
-	// FFmpegPath FFmpeg 可执行文件路径；为空时从 PATH 查找。
-	FFmpegPath string `yaml:"ffmpeg_path"`
-	// RetainDays 保留天数，purge API 按此删除；0 表示不自动过期。
-	RetainDays int `yaml:"retain_days"`
-	// NotifyMessage 录音告知文案（REC-03）。
+	Audio AudioRecordingSettings `yaml:"audio"`
+	Video VideoRecordingSettings `yaml:"video"`
+}
+
+// AudioRecordingSettings 纯音频录制与 IVR 提示音目录。
+type AudioRecordingSettings struct {
+	Dir           string `yaml:"dir"`
+	NotifyMessage string `yaml:"notify_message"`
+}
+
+// VideoRecordingSettings 录像存储、合成与告知文案。
+type VideoRecordingSettings struct {
+	Dir           string `yaml:"dir"`
+	Format        string `yaml:"format"`
+	FFmpegPath    string `yaml:"ffmpeg_path"`
 	NotifyMessage string `yaml:"notify_message"`
 }
 
@@ -216,11 +222,15 @@ func (c *Config) Validate() error {
 	} else if u, err := url.Parse(cb); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		errs = append(errs, "integration.events_callback_url 必须为绝对 http(s) URL")
 	}
-	if strings.TrimSpace(c.Recordings.Dir) == "" {
-		errs = append(errs, "recordings.dir 不能为空")
+	if strings.TrimSpace(c.Recordings.AudioDirPath()) == "" {
+		errs = append(errs, "recordings.audio.dir 不能为空")
 	}
-	if c.Recordings.VideoFormat != "webm" && c.Recordings.VideoFormat != "mp4" {
-		errs = append(errs, "recordings.video_format 必须为 webm 或 mp4")
+	if strings.TrimSpace(c.Recordings.VideoDirPath()) == "" {
+		errs = append(errs, "recordings.video.dir 不能为空")
+	}
+	videoFormat := strings.TrimSpace(c.Recordings.Video.Format)
+	if videoFormat != "webm" && videoFormat != "mp4" {
+		errs = append(errs, "recordings.video.format 必须为 webm 或 mp4")
 	}
 	level := strings.ToLower(strings.TrimSpace(c.Log.Level))
 	if level != "debug" && level != "info" && level != "warn" && level != "error" {
@@ -343,16 +353,7 @@ func (c *Config) applyDefaults() {
 		c.ICE.UDPPortMin = 10000
 		c.ICE.UDPPortMax = 20000
 	}
-	if c.Recordings.RetainDays == 0 {
-		c.Recordings.RetainDays = 90
-	}
-	if strings.TrimSpace(c.Recordings.VideoFormat) == "" {
-		c.Recordings.VideoFormat = "webm"
-	}
-	if strings.TrimSpace(c.Recordings.NotifyMessage) == "" {
-		c.Recordings.NotifyMessage = "本通话可能会被录音或录像，继续即表示您已知悉。"
-	}
-
+	c.Recordings.normalize()
 	if strings.TrimSpace(c.SIP.UserAgent) == "" {
 		c.SIP.UserAgent = "open-voip"
 	}

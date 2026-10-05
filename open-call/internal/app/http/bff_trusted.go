@@ -115,7 +115,7 @@ func isSwitchWrite(path string) bool {
 	}
 	for _, suffix := range []string{
 		"/hangup", "/decline", "/hold", "/transfer", "/transfer/complete",
-		"/video/request", "/video/respond", "/video/downgrade", "/screen-share", "/conference", "/dtmf",
+		"/video/request", "/video/respond", "/video/downgrade", "/screen-share", "/conference", "/dtmf", "/survey",
 	} {
 		if strings.HasSuffix(path, suffix) {
 			return true

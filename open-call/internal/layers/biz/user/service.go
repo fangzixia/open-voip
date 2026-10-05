@@ -75,11 +75,11 @@ type ListResult struct {
 // Service 用户与坐席账号 CRUD。
 type Service struct {
 	db *gorm.DB
-	sw ports.SwitchAdminPort
+	sw ports.SwitchAgentConfigPort
 }
 
 // NewService 创建用户服务。
-func NewService(db *gorm.DB, sw ports.SwitchAdminPort) *Service {
+func NewService(db *gorm.DB, sw ports.SwitchAgentConfigPort) *Service {
 	return &Service{db: db, sw: sw}
 }
 
@@ -361,10 +361,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 	var ag models.Agent
 	if err := s.db.WithContext(ctx).Where("user_id = ?", id).First(&ag).Error; err == nil {
 		if syncErr := s.syncAgent(ctx, ag); syncErr != nil {
-			// 再试一次；仍失败则明确告知库已改、Switch 未齐，避免静默孤儿。
-			if syncErr = s.syncAgent(ctx, ag); syncErr != nil {
-				return DTO{}, errs.Internal(fmt.Sprintf("用户资料已保存，但同步坐席到交换服务失败，请重试保存: %v", syncErr))
-			}
+			_ = enqueueAgentSync(s.db.WithContext(ctx), ag.ID)
 		}
 	}
 	return s.Get(ctx, id)
@@ -372,13 +369,14 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 
 // Delete 删除用户及关联坐席。
 func (s *Service) Delete(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	var switchAgentID string
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var ag models.Agent
 		if err := tx.Where("user_id = ?", id).First(&ag).Error; err == nil {
-			if s.sw != nil {
-				_ = s.sw.DeleteAgentConfig(ctx, ag.ID)
+			switchAgentID = ag.ID
+			if err := tx.Delete(&ag).Error; err != nil {
+				return err
 			}
-			tx.Delete(&ag)
 		}
 		res := tx.Delete(&models.User{}, "id = ?", id)
 		if res.Error != nil {
@@ -389,6 +387,15 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if switchAgentID != "" && s.sw != nil {
+		if err := s.sw.DeleteAgentConfig(ctx, switchAgentID); err != nil {
+			return errs.Internal(fmt.Sprintf("用户已从业务库删除，但交换服务坐席删除失败，请重试: %v", err))
+		}
+	}
+	return nil
 }
 
 // ResetPassword 生成临时密码。

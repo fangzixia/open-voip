@@ -72,4 +72,8 @@ type CallPersistencePort interface {
 	ListLegs(ctx context.Context, callID string) ([]CallLegRecord, error)
 	// GetLeg 按通话与腿 ID 读取。
 	GetLeg(ctx context.Context, callID, legID string) (CallLegRecord, error)
+	// DeleteLeg 删除通话腿。
+	DeleteLeg(ctx context.Context, callID, legID string) error
+	// Unfinished 列出尚未结束的通话，供重启恢复使用。
+	Unfinished(ctx context.Context) ([]CallRecord, error)
 }

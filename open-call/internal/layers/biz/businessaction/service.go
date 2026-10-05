@@ -2,6 +2,7 @@
 package businessaction
 
 import (
+	"sort"
 	"context"
 	"errors"
 	"fmt"
@@ -96,12 +97,14 @@ func outcomeKeys(raw any) []string {
 		for k := range v {
 			keys = append(keys, k)
 		}
+		sort.Strings(keys)
 		return keys
 	case map[string]string:
 		keys := make([]string, 0, len(v))
 		for k := range v {
 			keys = append(keys, k)
 		}
+		sort.Strings(keys)
 		return keys
 	default:
 		return nil

@@ -52,7 +52,7 @@ func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
-	h := WrapSwitchBFF(config.IntegrationConfig{SwitchBaseURL: upstream.URL}, bffAuth{}, http.NotFoundHandler())
+	h := WrapSwitchBFF(config.IntegrationConfig{SwitchBaseURL: upstream.URL}, bffAuth{}, http.NotFoundHandler(), nil, nil)
 	cases := []struct {
 		path, body string
 		want       int
@@ -100,7 +100,7 @@ func TestBFFAuthenticatesAndReplacesForgedIdentity(t *testing.T) {
 	}))
 	defer upstream.Close()
 	local := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusAccepted) })
-	h := WrapSwitchBFF(config.IntegrationConfig{SwitchBaseURL: upstream.URL}, bffAuth{}, local)
+	h := WrapSwitchBFF(config.IntegrationConfig{SwitchBaseURL: upstream.URL}, bffAuth{}, local, nil, nil)
 	for _, token := range []string{"", "invalid", "readonly", "valid"} {
 		req := httptest.NewRequest("POST", "/api/v1/calls/call/hangup", nil)
 		req.Header.Set("X-Principal", `{"UserID":"forged","Role":"admin"}`)

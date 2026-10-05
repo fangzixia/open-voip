@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
 	"os"
@@ -53,10 +52,43 @@ type room struct {
 	promptSeq   atomic.Uint64
 	enableVideo bool
 	sipAudio    bool
+	mixAudio    bool
+	mixer       *roomMixer
 	sipRTP      map[*sipRTP]struct{}
 	peers       map[string]*peer
 	dtmf        map[string]ports.DTMFHandler
 	rec         *recorder
+
+	dtmfMu      sync.Mutex
+	dtmfPending []func()
+	dtmfRunning bool
+}
+
+// enqueueDTMF 让按键回调脱离 RTP 读循环异步执行，同一房间内仍保持按键顺序；
+// 队列空闲后工作协程自行退出，无需随房间关闭回收。
+func (r *room) enqueueDTMF(fn func()) {
+	r.dtmfMu.Lock()
+	r.dtmfPending = append(r.dtmfPending, fn)
+	if r.dtmfRunning {
+		r.dtmfMu.Unlock()
+		return
+	}
+	r.dtmfRunning = true
+	r.dtmfMu.Unlock()
+	go func() {
+		for {
+			r.dtmfMu.Lock()
+			if len(r.dtmfPending) == 0 {
+				r.dtmfRunning = false
+				r.dtmfMu.Unlock()
+				return
+			}
+			next := r.dtmfPending[0]
+			r.dtmfPending = r.dtmfPending[1:]
+			r.dtmfMu.Unlock()
+			next()
+		}
+	}()
 }
 
 func (r *room) canForward(from, to string) bool {
@@ -88,14 +120,14 @@ type recorder struct {
 	bytes     int64
 	ended     *time.Time
 	started   time.Time
-	retainTo  *time.Time
 }
 
 // Options 媒体层启动选项。
 type Options struct {
 	ICE           config.ICEConfig
 	TURN          config.TURNConfig
-	RecordingsDir string
+	AudioRecDir   string
+	VideoRecDir   string
 	VideoFormat   string
 	FFmpegPath    string
 	SIP           config.SIPConfig
@@ -107,7 +139,8 @@ type Service struct {
 	apiPCMU       *webrtc.API
 	ice           []webrtc.ICEServer
 	turn          config.TURNConfig
-	recDir        string
+	audioRecDir   string
+	videoRecDir   string
 	videoFormat   string
 	ffmpegPath    string
 	sip           *sipUA
@@ -116,6 +149,7 @@ type Service struct {
 	recByID       map[string]*recorder
 	sipPending    map[string]bool
 	sipRTPPending map[string]map[*sipRTP]struct{}
+	answers       answerGate
 }
 
 // NewService 根据 ICE/TURN/录音目录创建媒体服务。
@@ -212,7 +246,8 @@ func NewService(opt Options) (*Service, error) {
 		apiPCMU:       apiPCMU,
 		ice:           iceServers,
 		turn:          opt.TURN,
-		recDir:        opt.RecordingsDir,
+		audioRecDir:   opt.AudioRecDir,
+		videoRecDir:   opt.VideoRecDir,
 		videoFormat:   opt.VideoFormat,
 		ffmpegPath:    opt.FFmpegPath,
 		rooms:         map[string]*room{},
@@ -249,13 +284,19 @@ func (s *Service) CreateRoom(ctx context.Context, callID string, opts dto.RoomOp
 	rtpSess := s.sipRTPPending[callID]
 	delete(s.sipPending, callID)
 	delete(s.sipRTPPending, callID)
+	mix := !opts.Direct
 	s.rooms[callID] = &room{
 		direct:      opts.Direct,
 		enableVideo: opts.EnableVideo || opts.SessionType == dto.SessionTypeVideo || opts.SessionType == dto.SessionTypeMixed,
-		sipAudio:    sipAudio || rtpSess != nil,
+		sipAudio:    sipAudio || rtpSess != nil || mix,
+		mixAudio:    mix,
+		mixer:       nil,
 		sipRTP:      rtpSess,
 		peers:       map[string]*peer{},
 		dtmf:        map[string]ports.DTMFHandler{},
+	}
+	if mix {
+		s.rooms[callID].mixer = newRoomMixer()
 	}
 	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "room.created", "create", "ok", "", started, "video", opts.EnableVideo)
 	return nil
@@ -341,11 +382,12 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 
 	r.mu.RLock()
 	sipAudio := r.sipAudio
+	mixAudio := r.mixAudio
 	enableVideo := r.enableVideo
 	r.mu.RUnlock()
 
 	api := s.api
-	if sipAudio && s.apiPCMU != nil {
+	if (sipAudio || mixAudio) && s.apiPCMU != nil {
 		api = s.apiPCMU
 	}
 	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: s.iceServers()})
@@ -354,7 +396,7 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 	}
 
 	audioCap := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}
-	if sipAudio {
+	if sipAudio || mixAudio {
 		audioCap = webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}
 	}
 	audioOut, err := webrtc.NewTrackLocalStaticRTP(audioCap, "audio", "sfu-audio-"+legID)
@@ -368,7 +410,7 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 	}
 
 	var audioSamp *webrtc.TrackLocalStaticSample
-	if !sipAudio {
+	if !sipAudio && !mixAudio {
 		audioSamp, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
 			MimeType: webrtc.MimeTypePCMU, ClockRate: 8000,
 		}, "moh", "sfu-moh-"+legID)
@@ -594,10 +636,21 @@ func (s *Service) SetHold(ctx context.Context, callID, legID string, on bool) er
 	if r == nil {
 		return errs.NotFound("媒体房间不存在")
 	}
+	var holdMusicSeq uint64
+	startHoldMusic := false
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if p := r.peers[legID]; p != nil {
 		p.held = on
+		if on {
+			holdMusicSeq = r.promptSeq.Add(1)
+			startHoldMusic = true
+		} else {
+			r.promptSeq.Add(1)
+		}
+		r.mu.Unlock()
+		if startHoldMusic {
+			go s.playWaitingTone(callID, legID, true, holdMusicSeq)
+		}
 		return nil
 	}
 	for rt := range r.sipRTP {
@@ -605,10 +658,21 @@ func (s *Service) SetHold(ctx context.Context, callID, legID string, on bool) er
 		if rt.legID == legID {
 			rt.held = on
 			rt.mu.Unlock()
+			if on {
+				holdMusicSeq = r.promptSeq.Add(1)
+				startHoldMusic = true
+			} else {
+				r.promptSeq.Add(1)
+			}
+			r.mu.Unlock()
+			if startHoldMusic {
+				go s.playWaitingTone(callID, legID, true, holdMusicSeq)
+			}
 			return nil
 		}
 		rt.mu.Unlock()
 	}
+	r.mu.Unlock()
 	return errs.NotFound("媒体腿不存在")
 }
 
@@ -635,7 +699,6 @@ func (s *Service) InjectAudio(ctx context.Context, callID, botLegID string, sour
 	if r == nil {
 		return errs.NotFound("媒体房间不存在")
 	}
-	_ = botLegID
 	path := s.resolvePrompt(ctx, source.FilePath)
 	if source.FilePath != "" {
 		if path == "" {
@@ -651,11 +714,11 @@ func (s *Service) InjectAudio(ctx context.Context, callID, botLegID string, sour
 			return errs.InvalidRequest("语音素材内容无效")
 		}
 		seq := r.promptSeq.Add(1)
-		go s.playPCMToRoom(callID, pcm, rate, source.Loop, seq)
+		go s.playPCMToRoom(callID, botLegID, pcm, rate, source.Loop, seq)
 		return nil
 	}
 	seq := r.promptSeq.Add(1)
-	go s.playWaitingTone(callID, source.Loop, seq)
+	go s.playWaitingTone(callID, botLegID, source.Loop, seq)
 	return nil
 }
 
@@ -687,6 +750,11 @@ func (s *Service) SendDTMF(ctx context.Context, callID, legID string, digit dto.
 	}
 	r.mu.RLock()
 	h := r.dtmf[legID]
+	for rt := range r.sipRTP {
+		if rt.legID == legID {
+			rt.sendRFC4733(string(digit))
+		}
+	}
 	r.mu.RUnlock()
 	if h != nil {
 		h(ctx, digit)
@@ -703,8 +771,13 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 	if r == nil {
 		return "", errs.NotFound("媒体房间不存在")
 	}
-	if err := os.MkdirAll(s.recDir, 0o750); err != nil {
+	if err := os.MkdirAll(s.audioRecDir, 0o750); err != nil {
 		return "", err
+	}
+	if policy.Mode == "video_composite" {
+		if err := os.MkdirAll(s.videoRecDir, 0o750); err != nil {
+			return "", err
+		}
 	}
 	id := uuid.New().String()
 	r.mu.RLock()
@@ -717,18 +790,14 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 	if sipAudio {
 		ext = ".wav"
 	}
-	audioPath := filepath.Join(s.recDir, callID+"-"+id+ext)
-	var until *time.Time
-	if policy.RetainDays > 0 {
-		until = new(time.Now().UTC().Add(time.Duration(policy.RetainDays) * 24 * time.Hour))
-	}
+	audioPath := filepath.Join(s.audioRecDir, callID+"-"+id+ext)
 	startedAt := time.Now().UTC()
 	rec := &recorder{
 		id: id, callID: callID, path: audioPath, audioPath: audioPath, mode: policy.Mode,
-		started: startedAt, retainTo: until,
+		started: startedAt,
 	}
 	if policy.Mode == "video_composite" {
-		videoRec, err := newVideoRecording(s.recDir, callID, id, s.videoFormat, s.ffmpegPath, startedAt)
+		videoRec, err := newVideoRecording(s.videoRecDir, callID, id, s.videoFormat, s.ffmpegPath, startedAt)
 		if err != nil {
 			return "", err
 		}
@@ -871,122 +940,6 @@ func (s *Service) getPeer(callID, legID string) *peer {
 	return r.peers[legID]
 }
 
-// forward 将输入 RTP 轨道转发给房间内其他通话腿，并写入录音。
-func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
-	buf := make([]byte, 1500)
-	pkt := &rtp.Packet{}
-	for {
-		n, _, err := remote.Read(buf)
-		if err != nil {
-			return
-		}
-		r := s.getRoom(callID)
-		if r == nil {
-			return
-		}
-		r.mu.RLock()
-		unmarshaled := pkt.Unmarshal(buf[:n]) == nil
-		if unmarshaled && r.rec != nil {
-			cp := *pkt
-			cp.Payload = append([]byte{}, pkt.Payload...)
-			r.rec.writeRTP(fromLeg, remote.Kind(), remote.Codec().MimeType, &cp)
-		}
-		from := r.peers[fromLeg]
-		muted := false
-		held := false
-		if from != nil {
-			held = from.held
-			if remote.Kind() == webrtc.RTPCodecTypeAudio {
-				muted = from.audioMuted
-			} else {
-				muted = from.videoMuted
-			}
-			if from.role == dto.LegRoleSupervisor {
-				muted = true
-			}
-		}
-		for id, p := range r.peers {
-			if id == fromLeg || muted || held || p.held || !r.canForward(fromLeg, id) {
-				continue
-			}
-			var out *webrtc.TrackLocalStaticRTP
-			if remote.Kind() == webrtc.RTPCodecTypeAudio {
-				out = p.audioOut
-			} else {
-				out = p.videoOut
-			}
-			if out != nil {
-				_, _ = out.Write(buf[:n])
-			}
-		}
-		if unmarshaled && !muted && !held && remote.Kind() == webrtc.RTPCodecTypeAudio && r.sipRTP != nil {
-			outPkt := *pkt
-			outPkt.Payload = append([]byte{}, pkt.Payload...)
-			outPkt.Extension = false
-			outPkt.Extensions = nil
-			outPkt.Padding = false
-			if raw, err := outPkt.Marshal(); err == nil {
-				for rt := range r.sipRTP {
-					if !rt.blocked() && r.canForward(fromLeg, rt.legID) {
-						rt.writePCMU(raw)
-					}
-				}
-			}
-		}
-		r.mu.RUnlock()
-	}
-}
-
-// readDTMF 从 WebRTC RTP 轨道提取电话按键事件并通知订阅者。
-func (s *Service) readDTMF(callID, legID string, remote *webrtc.TrackRemote) {
-	buf := make([]byte, 1500)
-	last := byte(255)
-	for {
-		n, _, err := remote.Read(buf)
-		if err != nil {
-			return
-		}
-		if n < 1 {
-			continue
-		}
-		pkt := &rtp.Packet{}
-		if err := pkt.Unmarshal(buf[:n]); err != nil || len(pkt.Payload) < 1 {
-			continue
-		}
-		event := pkt.Payload[0] & 0x7f
-		end := len(pkt.Payload) > 1 && pkt.Payload[1]&0x80 != 0
-		if !end || event == last {
-			continue
-		}
-		last = event
-		digit := dtmfEvent(event)
-		r := s.getRoom(callID)
-		if r == nil {
-			return
-		}
-		r.mu.RLock()
-		h := r.dtmf[legID]
-		r.mu.RUnlock()
-		if h != nil && digit != "" {
-			h(context.Background(), dto.DTMFDigit(digit))
-		}
-	}
-}
-
-func dtmfEvent(ev byte) string {
-	if ev <= 9 {
-		return string('0' + ev)
-	}
-	switch ev {
-	case 10:
-		return "*"
-	case 11:
-		return "#"
-	default:
-		return ""
-	}
-}
-
 func (s *Service) playTone(callID, legID string, dur time.Duration) {
 	p := s.getPeer(callID, legID)
 	if p == nil || p.audioSamp == nil {
@@ -1003,7 +956,7 @@ func (s *Service) playTone(callID, legID string, dur time.Duration) {
 	}
 }
 
-func (s *Service) playToneToRoom(callID string, dur time.Duration, seq uint64) {
+func (s *Service) playToneToRoom(callID, targetLegID string, dur time.Duration, seq uint64) {
 	deadline := time.Now().Add(dur)
 	payload := mulawToneFrame()
 	for time.Now().Before(deadline) {
@@ -1012,9 +965,21 @@ func (s *Service) playToneToRoom(callID string, dur time.Duration, seq uint64) {
 			return
 		}
 		r.mu.RLock()
-		for _, p := range r.peers {
+		for legID, p := range r.peers {
+			if targetLegID != "" && legID != targetLegID {
+				continue
+			}
 			if p.audioSamp != nil {
 				_ = p.audioSamp.WriteSample(media.Sample{Data: payload, Duration: 20 * time.Millisecond})
+			}
+		}
+		for rt := range r.sipRTP {
+			if targetLegID != "" && rt.legID != targetLegID {
+				continue
+			}
+			pkt := rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SSRC: 1}, Payload: payload}
+			if raw, err := pkt.Marshal(); err == nil {
+				rt.writePCMU(raw)
 			}
 		}
 		r.mu.RUnlock()
@@ -1110,7 +1075,7 @@ func (rec *recorder) snapshot() ports.RecordingMeta {
 	defer rec.mu.Unlock()
 	return ports.RecordingMeta{
 		ID: rec.id, CallID: rec.callID, FilePath: rec.path, MediaType: rec.mode,
-		StartedAt: rec.started, EndedAt: rec.ended, RetainUntil: rec.retainTo, FileSize: rec.bytes,
+		StartedAt: rec.started, EndedAt: rec.ended, FileSize: rec.bytes,
 	}
 }
 
@@ -1123,33 +1088,6 @@ func mulawToneFrame() []byte {
 	}
 	return out
 }
-
-func linearToMulaw(sample int16) byte {
-	const (
-		bias = 0x84
-		clip = 32635
-	)
-	pcm := int(sample)
-	sign := byte(0)
-	if pcm < 0 {
-		sign = 0x80
-		pcm = -pcm
-	}
-	if pcm > clip {
-		pcm = clip
-	}
-	pcm += bias
-	exp := byte(7)
-	mask := 0x4000
-	for exp > 0 && pcm&mask == 0 {
-		mask >>= 1
-		exp--
-	}
-	mant := byte((pcm >> (exp + 3)) & 0x0F)
-	return ^(sign | (exp << 4) | mant)
-}
-
-var _ = io.EOF
 
 func (s *Service) stunURLs() []string {
 	var urls []string

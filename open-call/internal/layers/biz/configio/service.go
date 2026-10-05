@@ -88,11 +88,11 @@ type ImportReport struct {
 // Service 提供业务配置的完整导出、预检查和事务导入。
 type Service struct {
 	db *gorm.DB
-	sw ports.SwitchAdminPort
+	sw ports.SwitchConfigVersionPort
 }
 
 // NewService 创建配置导入导出服务。
-func NewService(db *gorm.DB, sw ports.SwitchAdminPort) *Service { return &Service{db: db, sw: sw} }
+func NewService(db *gorm.DB, sw ports.SwitchConfigVersionPort) *Service { return &Service{db: db, sw: sw} }
 
 // Export 导出用户、坐席、路由、绑定、IVR 版本及 Webhook 配置。
 func (s *Service) Export(ctx context.Context) (Bundle, error) {
@@ -121,6 +121,9 @@ func (s *Service) Export(ctx context.Context) (Bundle, error) {
 		return out, err
 	}
 	if err := s.db.WithContext(ctx).Order("id").Find(&out.Webhooks).Error; err != nil {
+		return out, err
+	}
+	if err := s.db.WithContext(ctx).Order("id").Find(&out.IVRFlows).Error; err != nil {
 		return out, err
 	}
 	if s.sw != nil {

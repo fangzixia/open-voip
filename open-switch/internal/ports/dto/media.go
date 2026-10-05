@@ -61,8 +61,6 @@ type RecordingPolicy struct {
 	NotifyGuest bool `json:"notify_guest"`
 	// NotifyMessage 告知文案。
 	NotifyMessage string `json:"notify_message"`
-	// RetainDays 保留天数。
-	RetainDays int `json:"retain_days"`
 }
 
 // AudioSource IVR 放音源描述。

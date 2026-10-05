@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// Queue 遗留队列镜像（运行时以 Switch 为准，open-call 不再直写）。
+// Queue 配置导出/导入 JSON 结构（持久化在 Switch，open-call 无对应表）。
 type Queue struct {
 	// ID 队列 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:队列 ID"`
@@ -22,6 +22,8 @@ type Queue struct {
 	OverflowQueueID *string `gorm:"type:uuid;comment:溢出目标队列 ID"`
 	// IVRFlowID 绑定的 IVR 流程，可空。
 	IVRFlowID *string `gorm:"type:uuid;index;comment:绑定 IVR 流程 ID"`
+	// PostCallIVRFlowID 满意度 IVR 流程，可空。
+	PostCallIVRFlowID *string `gorm:"type:uuid;comment:满意度 IVR 流程 ID"`
 	// WaitPrompt 排队文案模板，可含 {position}。
 	WaitPrompt string `gorm:"size:256;comment:排队提示文案"`
 	// AnnounceRecording 入队/接通前是否告知录音。

@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"open-switch/internal/datetime"
+	"open-switch/internal/retrydelay"
 	"open-switch/internal/store"
 )
 
@@ -25,6 +26,7 @@ type Dispatcher struct {
 	Log         *slog.Logger
 
 	once sync.Once
+	wake chan struct{}
 }
 
 func (d *Dispatcher) Start(ctx context.Context) {
@@ -35,8 +37,19 @@ func (d *Dispatcher) Start(ctx context.Context) {
 		if d.Log == nil {
 			d.Log = slog.Default()
 		}
+		d.wake = make(chan struct{}, 1)
 		go d.retryLoop(ctx)
 	})
+}
+
+func (d *Dispatcher) notifyWake() {
+	if d.wake == nil {
+		return
+	}
+	select {
+	case d.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (d *Dispatcher) Enqueue(ctx context.Context, row store.CallEventRow) {
@@ -46,8 +59,8 @@ func (d *Dispatcher) Enqueue(ctx context.Context, row store.CallEventRow) {
 	_ = d.DB.WithContext(ctx).Exec(`
 INSERT INTO os_integrator_event_deliveries (event_id, status, attempts, next_retry_at, last_error, updated_at)
 VALUES (?, 'pending', 0, NOW(), '', NOW())
-ON CONFLICT (event_id) DO NOTHING`, row.ID).Error
-	go d.deliverOne(context.Background(), row)
+	ON CONFLICT (event_id) DO NOTHING`, row.ID).Error
+	d.notifyWake()
 }
 
 func (d *Dispatcher) retryLoop(ctx context.Context) {
@@ -59,6 +72,7 @@ func (d *Dispatcher) retryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-d.wake:
 		}
 	}
 }
@@ -139,8 +153,7 @@ SELECT attempts FROM os_integrator_event_deliveries WHERE event_id=?`,
 	if !scheduleRetry || attempts >= 12 {
 		status = "failed"
 	} else {
-		delay := time.Duration(1<<min(attempts, 6)) * time.Second
-		next = next.Add(delay)
+		next = next.Add(retrydelay.Exponential(min(attempts, 6), 64*time.Second))
 	}
 	_ = d.DB.WithContext(ctx).Exec(`
 UPDATE os_integrator_event_deliveries

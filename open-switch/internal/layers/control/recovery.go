@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"open-switch/internal/ports"
 	"open-switch/internal/ports/dto"
@@ -13,64 +14,81 @@ func (s *Service) setAgentState(ctx context.Context, callID, agentID, from, to, 
 	return s.deps.Agents.SetCallState(ctx, callID, agentID, from, to, reason)
 }
 
-// 媒体会话无法跨进程存活。在接受新呼叫前先结束孤儿通话，
-// 并可靠落库最终话单与坐席释放。
+// Recover 结束所有未终态通话。媒体无法跨进程恢复，不做 IVR/排队/振铃复活。
 func (s *Service) Recover(ctx context.Context) error {
-	source, ok := s.deps.Calls.(interface {
-		Unfinished(context.Context) ([]ports.CallRecord, error)
-	})
-	if !ok {
-		return nil
-	}
-	records, err := source.Unfinished(ctx)
+	records, err := s.deps.Calls.Unfinished(ctx)
 	if err != nil {
 		return err
 	}
 	for _, rec := range records {
-		appCtx := ctx
-		legs, err := s.deps.Calls.ListLegs(appCtx, rec.ID)
-		if err != nil {
-			return err
-		}
-		if rec.State == stateIVR && s.deps.IVRSessions != nil {
-			sess, err := s.deps.IVRSessions.GetIVRSession(appCtx, rec.ID)
-			if err == nil {
-				if err := s.recoverIVRCall(appCtx, rec, legs, sess); err != nil {
-					slog.Warn("IVR 恢复失败，将结束通话", "call_id", rec.ID, "error", err)
-				} else {
-					continue
-				}
-			}
-		}
-		if rec.State == stateQueued && rec.QueueID != nil {
-			if err := s.recoverQueuedCall(appCtx, rec, legs); err != nil {
-				slog.Warn("排队恢复失败，将结束通话", "call_id", rec.ID, "error", err)
-			} else {
-				continue
-			}
-		}
-		if rec.State == stateRinging {
-			if err := s.recoverRingingCall(appCtx, rec, legs); err != nil {
-				slog.Warn("振铃恢复失败，将结束通话", "call_id", rec.ID, "error", err)
-			} else {
-				continue
-			}
-		}
-		if rec.State == stateActive || rec.State == stateHeld || rec.State == stateTransferring {
-			if err := s.recoverActiveCall(appCtx, rec, legs); err != nil {
-				slog.Warn("已接通恢复失败，将结束通话", "call_id", rec.ID, "error", err)
-			} else {
-				continue
-			}
-		}
-		rt := &runtimeCall{rec: rec, legs: legs, caller: rec.Caller, callee: rec.Callee, activeAgent: rec.AgentID, offeredAgent: rec.OfferedAgent, answeredAt: rec.AnsweredAt}
-		s.mu.Lock()
-		s.calls[rec.ID] = rt
-		s.mu.Unlock()
-		if err := s.Hangup(appCtx, rec.ID, dto.HangupReasonError); err != nil {
-			return err
+		if err := s.Hangup(ctx, rec.ID, dto.HangupReasonError); err != nil {
+			slog.Warn("结束孤儿通话", "call_id", rec.ID, "err", err)
 		}
 	}
+	return nil
+}
+
+// hangupPersistOnly 在无内存运行时时，仅通过持久化层结束通话（进程重启恢复路径）。
+func (s *Service) hangupPersistOnly(ctx context.Context, callID string, rec ports.CallRecord, reason dto.HangupReason) error {
+	if rec.State == stateEnded {
+		return nil
+	}
+	now := time.Now().UTC()
+	rec.State = stateEnded
+	rec.EndedAt = &now
+	rec.UpdatedAt = now
+	result := "abandoned"
+	if rec.AnsweredAt != nil {
+		result = "answered"
+	}
+	if rec.AnsweredAt == nil && reason == dto.HangupReasonError {
+		result = "failed"
+	}
+	if s.deps.Agents != nil {
+		if rec.AgentID != "" {
+			from := "on_call"
+			if rec.AnsweredAt == nil {
+				from = "ringing"
+			}
+			_ = s.setAgentState(ctx, callID, rec.AgentID, from, "idle", "hangup")
+		}
+		if rec.OfferedAgent != "" && rec.OfferedAgent != rec.AgentID {
+			_ = s.setAgentState(ctx, callID, rec.OfferedAgent, "ringing", "idle", "hangup")
+		}
+	}
+	if err := s.deps.Calls.UpdateCall(ctx, rec); err != nil {
+		return err
+	}
+	if s.deps.CDR != nil {
+		queueID := ""
+		if rec.QueueID != nil {
+			queueID = *rec.QueueID
+		}
+		_ = s.deps.CDR.Upsert(ctx, ports.CDRWriteRequest{
+			CallID:      callID,
+			Direction:   rec.Direction,
+			QueueID:     queueID,
+			AgentID:     rec.AgentID,
+			Caller:      rec.Caller,
+			Callee:      rec.Callee,
+			SessionType: rec.SessionType,
+			Result:      result,
+			StartedAt:   rec.CreatedAt,
+			AnsweredAt:  rec.AnsweredAt,
+			EndedAt:     rec.EndedAt,
+		})
+	}
+	if s.deps.IVRSessions != nil {
+		_ = s.deps.IVRSessions.DeleteIVRSession(ctx, callID)
+	}
+	if s.deps.Media != nil {
+		_ = s.deps.Media.CloseRoom(ctx, callID)
+	}
+	_ = s.publishCall(ctx, callID, "call.ended", rec.AgentID, map[string]any{
+		"call_id": callID,
+		"reason":  string(reason),
+		"result":  result,
+	})
 	return nil
 }
 

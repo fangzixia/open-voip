@@ -8,7 +8,6 @@ export function renderHooks(state, actions) {
   const rows = Array.isArray(state.hooks) ? state.hooks : [];
   const canWrite = state.me?.permissions?.includes("webhooks.write");
   return renderPageCrud({
-    description: "订阅 Switch / 业务事件回调。保存后新事件将推送到配置的 URL。",
     sections: [{
       title: "Webhook 订阅",
       form: canWrite ? html`<div class="form-inline">

@@ -36,6 +36,8 @@ type QueueSnapshot struct {
 	ListenAnnounce bool `json:"listen_announce"`
 	// PriorityEnabled 是否允许 VIP/高优先级入队。
 	PriorityEnabled bool `json:"priority_enabled"`
+	// PostCallIVRFlowID 坐席转满意度时启动的 IVR 流程。
+	PostCallIVRFlowID string `json:"post_call_ivr_flow_id,omitempty"`
 }
 
 // IVRNodeSnapshot IVR 节点简化表示（第一阶段细化）。
@@ -95,4 +97,6 @@ type ConfigSnapshotPort interface {
 	ResolveDID(ctx context.Context, trunkID, did string) (DIDRouteSnapshot, error)
 	// Now 返回用于时间判断的「当前时间」（便于测试注入）。
 	Now(ctx context.Context) time.Time
+	// QueueStatus 读取队列实时排队与签入状态（IVR 排队判断）。
+	QueueStatus(ctx context.Context, queueID string) (QueueStatusView, error)
 }

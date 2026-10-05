@@ -31,6 +31,9 @@ export function renderAppShell({
     <div class="layout">
       <header class="topbar">
         ${renderBrand(subtitle)}
+        ${!minimal && breadcrumb
+          ? html`<div class="breadcrumb breadcrumb-topbar" aria-label="当前位置">${subtitle} / <strong>${breadcrumb}</strong></div>`
+          : nothing}
         <span class="spacer"></span>
         ${topbar}
       </header>
@@ -53,7 +56,6 @@ export function renderAppShell({
           )}
         </nav>`}
         <main class="content ${minimal ? "content-minimal" : ""}" id="main-content">
-          ${minimal ? nothing : html`<div class="breadcrumb">${subtitle} / <strong>${breadcrumb}</strong></div>`}
           ${content}
         </main>
       </div>

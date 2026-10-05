@@ -39,7 +39,6 @@ function renderTargetSelect(state, actions) {
 export function renderDids(state, actions) {
   const canWrite = state.me?.permissions?.includes("dids.write");
   return renderPageCrud({
-    description: "保存仅更新草稿。发布会将 DID、队列、坐席、工作时间和 IVR 快照整体激活；正在进行的通话继续使用原版本。同中继 + 同 DID 再次保存会覆盖原路由。电话呼入只能进语音队列。",
     sections: [{
       title: "呼入号码路由",
       form: canWrite ? html`<form @submit=${(e) => actions.saveDid(e)}>

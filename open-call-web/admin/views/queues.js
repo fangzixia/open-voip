@@ -80,7 +80,6 @@ export function renderQueues(state, actions) {
     });
   }
   return renderPageCrud({
-    description: "语音与视频分属不同服务入口：电话呼入只进语音队列；视频仅出现在访客端。",
     sections,
   });
 }

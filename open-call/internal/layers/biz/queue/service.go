@@ -25,6 +25,7 @@ type DTO struct {
 	OverflowQueueID       string   `json:"overflow_queue_id,omitempty"`
 	RecordingPolicy       string   `json:"recording_policy"`
 	IVRFlowID             string   `json:"ivr_flow_id,omitempty"`
+	PostCallIVRFlowID     string   `json:"post_call_ivr_flow_id,omitempty"`
 	WaitPrompt            string   `json:"wait_prompt,omitempty"`
 	AnnounceRecording     bool     `json:"announce_recording"`
 	PriorityEnabled       bool     `json:"priority_enabled"`
@@ -45,6 +46,7 @@ type CreateInput struct {
 	OverflowQueueID       string   `json:"overflow_queue_id"`
 	RecordingPolicy       string   `json:"recording_policy"`
 	IVRFlowID             string   `json:"ivr_flow_id"`
+	PostCallIVRFlowID     string   `json:"post_call_ivr_flow_id"`
 	WaitPrompt            string   `json:"wait_prompt"`
 	AnnounceRecording     bool     `json:"announce_recording"`
 	PriorityEnabled       bool     `json:"priority_enabled"`
@@ -65,6 +67,7 @@ type UpdateInput struct {
 	OverflowQueueID       *string   `json:"overflow_queue_id"`
 	RecordingPolicy       *string   `json:"recording_policy"`
 	IVRFlowID             *string   `json:"ivr_flow_id"`
+	PostCallIVRFlowID     *string   `json:"post_call_ivr_flow_id"`
 	WaitPrompt            *string   `json:"wait_prompt"`
 	AnnounceRecording     *bool     `json:"announce_recording"`
 	PriorityEnabled       *bool     `json:"priority_enabled"`
@@ -164,7 +167,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	}
 	cfg := createToSwitch(in)
 	cfg.ID = uuid.New().String()
-	if err := s.validateReferences(ctx, cfg.ID, in.OverflowQueueID, in.IVRFlowID, in.SkillIDs); err != nil {
+	if err := s.validateReferences(ctx, cfg.ID, in.OverflowQueueID, in.IVRFlowID, in.PostCallIVRFlowID, in.SkillIDs); err != nil {
 		return DTO{}, err
 	}
 	created, err := s.sw.CreateQueueConfig(ctx, cfg)
@@ -200,17 +203,8 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		}
 		merged.DispatchStrategy = *in.Strategy
 	}
-	if in.Name != nil {
-		merged.Name = strings.TrimSpace(*in.Name)
-	}
 	if in.VideoEnabled != nil {
 		merged.VideoEnabled = *in.VideoEnabled
-	}
-	if in.MaxWaitSec != nil {
-		merged.MaxWaitSec = *in.MaxWaitSec
-	}
-	if in.Strategy != nil {
-		merged.DispatchStrategy = *in.Strategy
 	}
 	if in.OverflowPolicy != nil {
 		merged.OverflowAction = strings.TrimSpace(*in.OverflowPolicy)
@@ -239,6 +233,9 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 	if in.IVRFlowID != nil {
 		merged.IVRFlowID = strings.TrimSpace(*in.IVRFlowID)
 	}
+	if in.PostCallIVRFlowID != nil {
+		merged.PostCallIVRFlowID = strings.TrimSpace(*in.PostCallIVRFlowID)
+	}
 	if in.ForceHangupOnCheckout != nil {
 		merged.ForceHangupOnCheckout = *in.ForceHangupOnCheckout
 	}
@@ -253,7 +250,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 	if err := validateQueueValues(merged.RecordingPolicy, merged.OverflowAction, merged.AfterHoursAction, merged.BusinessHoursJSON); err != nil {
 		return DTO{}, err
 	}
-	if err := s.validateReferences(ctx, id, merged.OverflowQueueID, merged.IVRFlowID, skills); err != nil {
+	if err := s.validateReferences(ctx, id, merged.OverflowQueueID, merged.IVRFlowID, merged.PostCallIVRFlowID, skills); err != nil {
 		return DTO{}, err
 	}
 	updated, err := s.sw.UpdateQueueConfig(ctx, id, merged)
@@ -343,7 +340,7 @@ func validateQueueValues(recording, overflow, after, hours string) error {
 	return nil
 }
 
-func (s *Service) validateReferences(ctx context.Context, queueID, overflowID, ivrID string, skills []string) error {
+func (s *Service) validateReferences(ctx context.Context, queueID, overflowID, ivrID, postCallIVRID string, skills []string) error {
 	if overflowID != "" {
 		if overflowID == queueID {
 			return errs.InvalidRequest("队列不能溢出到自身")
@@ -355,6 +352,11 @@ func (s *Service) validateReferences(ctx context.Context, queueID, overflowID, i
 	if ivrID != "" {
 		if _, err := s.sw.GetIVRFlow(ctx, ivrID); err != nil {
 			return errs.InvalidRequest("ivr_flow_id 尚未发布到 Switch")
+		}
+	}
+	if postCallIVRID != "" {
+		if _, err := s.sw.GetIVRFlow(ctx, postCallIVRID); err != nil {
+			return errs.InvalidRequest("post_call_ivr_flow_id 尚未发布到 Switch")
 		}
 	}
 	if len(skills) > 0 {

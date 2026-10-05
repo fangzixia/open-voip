@@ -54,6 +54,19 @@ func (f *fakePersist) ListLegs(_ context.Context, callID string) ([]ports.CallLe
 	defer f.mu.Unlock()
 	return append([]ports.CallLegRecord{}, f.legs[callID]...), nil
 }
+func (f *fakePersist) DeleteLeg(_ context.Context, callID, legID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	legs := f.legs[callID]
+	for i, l := range legs {
+		if l.ID == legID {
+			f.legs[callID] = append(legs[:i], legs[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
 func (f *fakePersist) GetLeg(_ context.Context, callID, legID string) (ports.CallLegRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -98,6 +111,9 @@ func (fakeCfg) ResolveDID(context.Context, string, string) (ports.DIDRouteSnapsh
 	return ports.DIDRouteSnapshot{}, errs.NotFound("DID 未配置")
 }
 func (fakeCfg) Now(context.Context) time.Time { return time.Now().UTC() }
+func (fakeCfg) QueueStatus(_ context.Context, queueID string) (ports.QueueStatusView, error) {
+	return ports.QueueStatusView{QueueID: queueID}, nil
+}
 
 type fakeAgents struct {
 	mu     sync.Mutex
@@ -157,6 +173,9 @@ type fakeMedia struct {
 	stops      int
 	lastPolicy dto.RecordingPolicy
 	sipOK      bool
+	holdAnswer bool
+	answerFns  []func()
+	injects    int
 }
 
 func (f *fakeMedia) CreateRoom(context.Context, string, dto.RoomOptions) error {
@@ -180,6 +199,7 @@ func (f *fakeMedia) RequestRenegotiation(context.Context, string, string, bool) 
 	return nil
 }
 func (f *fakeMedia) InjectAudio(context.Context, string, string, dto.AudioSource) error {
+	f.injects++
 	return nil
 }
 func (f *fakeMedia) StopInjectedAudio(context.Context, string) error { return nil }
@@ -209,6 +229,15 @@ func (f *fakeMedia) LeaveRoom(context.Context, string, string) error          { 
 func (f *fakeMedia) SendDTMF(context.Context, string, string, dto.DTMFDigit) error {
 	return nil
 }
+func (f *fakeMedia) PrepareSIP(string)   {}
+func (f *fakeMedia) UnbridgeLegs(string) {}
+func (f *fakeMedia) DeferUntilAnswered(_ string, fn func()) bool {
+	if f.holdAnswer {
+		f.answerFns = append(f.answerFns, fn)
+		return true
+	}
+	return false
+}
 func (f *fakeMedia) RecordingInfo(context.Context, string) (ports.RecordingMeta, error) {
 	return ports.RecordingMeta{ID: "rec1"}, nil
 }
@@ -229,6 +258,12 @@ func (r recPolicy) ForQueue(context.Context, string) (dto.RecordingPolicy, error
 		return dto.RecordingPolicy{Mode: "off"}, nil
 	}
 	return r.policy, nil
+}
+func (r recPolicy) NotifyMessageForMode(_ context.Context, mode string) string {
+	if mode == r.policy.Mode {
+		return r.policy.NotifyMessage
+	}
+	return ""
 }
 
 type fakeEvents struct{ types []string }
@@ -446,7 +481,7 @@ func TestConsultTransferKeepsOriginal(t *testing.T) {
 
 func TestRecordingStartsOnActiveNotOnHold(t *testing.T) {
 	svc, media, _, ev := newTestService("ag1")
-	svc.deps.RecordingPolicy = recPolicy{policy: dto.RecordingPolicy{Mode: "audio", NotifyGuest: true, NotifyMessage: "告知", RetainDays: 30}}
+	svc.deps.RecordingPolicy = recPolicy{policy: dto.RecordingPolicy{Mode: "audio", NotifyGuest: true, NotifyMessage: "告知"}}
 	ctx := context.Background()
 	id, err := svc.StartInbound(ctx, dto.InboundRequest{QueueID: "q1"})
 	if err != nil {
@@ -455,7 +490,7 @@ func TestRecordingStartsOnActiveNotOnHold(t *testing.T) {
 	if err := svc.Answer(ctx, id, "ag1"); err != nil {
 		t.Fatal(err)
 	}
-	if media.starts != 1 || media.lastPolicy.Mode != "audio" || media.lastPolicy.RetainDays != 30 {
+	if media.starts != 1 || media.lastPolicy.Mode != "audio" {
 		t.Fatalf("answer recording starts=%d policy=%+v", media.starts, media.lastPolicy)
 	}
 	noticed := false
@@ -487,7 +522,7 @@ func TestRecordingStartsOnActiveNotOnHold(t *testing.T) {
 func TestRecordingStartsOnSIPOutbound(t *testing.T) {
 	svc, media, _, _ := newTestService("ag1")
 	media.sipOK = true
-	svc.deps.RecordingPolicy = recPolicy{policy: dto.RecordingPolicy{Mode: "audio", RetainDays: 90, NotifyMessage: "告知"}}
+	svc.deps.RecordingPolicy = recPolicy{policy: dto.RecordingPolicy{Mode: "audio", NotifyMessage: "告知"}}
 	ctx := context.Background()
 	id, err := svc.Outbound(ctx, dto.OutboundRequest{AgentID: "ag1", Destination: "bob"})
 	if err != nil {

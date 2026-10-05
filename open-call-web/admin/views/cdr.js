@@ -38,12 +38,24 @@ export function renderCdrTable(state, actions, rows) {
   ], rows, { emptyMessage: "暂无话单", showCount: true, label: "通话记录" });
 }
 
+export function renderCdrPager(state, actions) {
+  const pages = Math.max(1, Math.ceil((state.cdrTotal || 0) / (state.cdrPageSize || 50)));
+  const page = state.cdrPage || 1;
+  return html`
+    <div class="form-inline">
+      <button type="button" class="secondary" ?disabled=${page <= 1} @click=${() => actions.cdrPrev()}>上一页</button>
+      <span class="topbar-meta">第 ${page} / ${pages} 页，共 ${state.cdrTotal || 0} 条</span>
+      <button type="button" class="secondary" ?disabled=${page >= pages} @click=${() => actions.cdrNext()}>下一页</button>
+    </div>
+  `;
+}
+
 export function renderCdrPage(state, actions) {
   const rows = actions.filteredCdr();
   const sections = [{
     title: "通话记录",
     form: renderCdrQuery(state, actions),
-    list: renderCdrTable(state, actions, rows),
+    list: html`${renderCdrTable(state, actions, rows)}${renderCdrPager(state, actions)}`,
   }, {
     title: "通话小结",
     list: renderDataTable([
@@ -66,7 +78,6 @@ export function renderCdrPage(state, actions) {
     });
   }
   return renderPageCrud({
-    description: "按主叫与结果筛选话单，查看小结与质检标记。",
     sections,
   });
 }

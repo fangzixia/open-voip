@@ -110,6 +110,15 @@ func (d SwitchRouterDeps) handleAgentSession(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, view)
 }
 
+func (d SwitchRouterDeps) handleAgentSessionList(w http.ResponseWriter, r *http.Request) {
+	items, err := d.Admin.ListAgentSessions(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (d SwitchRouterDeps) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 	view, err := d.Admin.QueueStatus(r.Context(), chi.URLParam(r, "queueId"))
 	if err != nil {

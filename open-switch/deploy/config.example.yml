@@ -11,11 +11,14 @@ database:
   dsn: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_switch port=5432 sslmode=disable"
 
 recordings:
-  dir: "./data/recordings"
-  video_format: "webm"
-  ffmpeg_path: ""
-  retain_days: 90
-  notify_message: "本通话可能会被录音或录像，继续即表示您已知悉。"
+  audio:
+    dir: "./data/recordings/audio"
+    notify_message: "本通话可能会被录音，继续即表示您已知悉。"
+  video:
+    dir: "./data/recordings/video"
+    format: "webm"
+    ffmpeg_path: ""
+    notify_message: "本通话可能会被录像，继续即表示您已知悉。"
 
 log:
   level: info

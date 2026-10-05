@@ -78,10 +78,34 @@ func validBase() *Config {
 	return &Config{
 		Server:      ServerConfig{Listen: ":8080"},
 		Database:    DatabaseConfig{DSN: "host=localhost"},
-		Recordings:  RecordingsConfig{Dir: "./data"},
+		Recordings: RecordingsConfig{
+			Audio: AudioRecordingSettings{Dir: "./data/audio"},
+			Video: VideoRecordingSettings{Dir: "./data/video", Format: "webm"},
+		},
 		Log:         LogConfig{Level: "info", Format: "json"},
 		ICE:         ICEConfig{UDPPortMin: 10000, UDPPortMax: 20000},
 		Integration: IntegrationConfig{EventsCallbackURL: "http://127.0.0.1:8080/internal/switch/events"},
+	}
+}
+
+func TestRecordingDirDefaults(t *testing.T) {
+	cfg := validBase()
+	cfg.Recordings = RecordingsConfig{
+		Audio: AudioRecordingSettings{Dir: "./a", NotifyMessage: "录音告知"},
+		Video: VideoRecordingSettings{Dir: "./v", Format: "mp4", NotifyMessage: "录像告知"},
+	}
+	cfg.applyDefaults()
+	if cfg.Recordings.DirForExt(".ogg") != "./a" || cfg.Recordings.DirForExt(".mp4") != "./v" {
+		t.Fatalf("split dirs: ogg=%q mp4=%q", cfg.Recordings.DirForExt(".ogg"), cfg.Recordings.DirForExt(".mp4"))
+	}
+	if cfg.Recordings.NotifyMessageForMode("audio") != "录音告知" || cfg.Recordings.NotifyMessageForMode("video_composite") != "录像告知" {
+		t.Fatalf("notify messages: audio=%q video=%q", cfg.Recordings.NotifyMessageForMode("audio"), cfg.Recordings.NotifyMessageForMode("video_composite"))
+	}
+	cfg2 := validBase()
+	cfg2.Recordings.Video.Format = ""
+	cfg2.applyDefaults()
+	if cfg2.Recordings.Video.Format != "webm" {
+		t.Fatalf("default video format=%q", cfg2.Recordings.Video.Format)
 	}
 }
 

@@ -1,10 +1,8 @@
-# Open VoIP
-
-内网 Web 呼叫中心。
+# 内网 Web 呼叫中心。
 
 ```
 open-voip/
-  docs/           # 需求、架构、API；含 open-switch 对接说明
+  docs/           # 需求、架构、API；含 open-switch 对接说明、服务器部署速查
   open-switch/    # 软交换（媒体 + 呼叫控制 + Switch API）
   open-call/      # 呼叫中心（业务 + BFF + Switch 客户端）
   open-call-web/  # Lit 坐席 / 访客 / 管理端
@@ -17,3 +15,4 @@ open-voip/
 - 前端：[open-call-web/README.md](open-call-web/README.md)
 
 - 双服务边界、SIP 中继与坐席配置、上线验收：[SIP 上线验收](docs/sip-production-acceptance.md)。
+- 服务器一键发布与 SSH 调试：[server-deploy-quickstart.md](docs/server-deploy-quickstart.md)。

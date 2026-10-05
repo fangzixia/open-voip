@@ -6,7 +6,7 @@ import { FeedbackController, runFeedbackAction } from "../shared/feedback.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, sendDtmf, setAgentState, startSSO, setCallVersion, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
+import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, sendDtmf, setAgentState, startSSO, setCallVersion, startSurvey, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
 import { listMediaDevices } from "../shared/webrtc.js";
@@ -61,6 +61,8 @@ export class AgentApp extends LitElement {
   static styles = appStyles;
 
   #ws = new BusinessWebSocket();
+  /** @type {(() => void)|null} */
+  #wsUnsub = null;
   #timer = null;
   #startedAt = 0;
   #clockTimer = null;
@@ -197,9 +199,10 @@ export class AgentApp extends LitElement {
   }
 
   #connectWs() {
+    this.#wsUnsub?.();
     this.#ws.disconnect();
     this.#ws.connect();
-    this.#ws.subscribe((msg) => this.#onWs(msg));
+    this.#wsUnsub = this.#ws.subscribe((msg) => this.#onWs(msg));
     void this.#syncCalls();
   }
 
@@ -214,7 +217,7 @@ export class AgentApp extends LitElement {
       if (!active && this.call) this.#endLocal(this.call.id);
       if (active) {
         this.call = active;
-        if (active.version != null) setCallVersion(active.version);
+        if (active?.version != null) setCallVersion(active.version, active.id);
         const activeLeg = active.legs?.find((item) => item.agent_id === this.me.id);
         setCallContext({ call_id: active.id, leg_id: activeLeg?.id || "", queue_id: active.queue_id || "" });
         if (["active", "held"].includes(active.state) && !this.media.pc && this.me.terminal_type !== "sip") await this.media.rejoin(active.session_type !== "audio");
@@ -316,7 +319,8 @@ export class AgentApp extends LitElement {
       this.nav = "desk";
       const video = call.session_type === "video" || call.session_type === "mixed";
       const leg = (call.legs || []).find((l) => l.agent_id === this.me?.id) || call.legs?.[1];
-      setCallContext({ call_id: call.id, leg_id: leg?.id || "", queue_id: call.queue_id || "" });
+      if (!leg?.id) throw new Error("未找到坐席通话腿");
+      setCallContext({ call_id: call.id, leg_id: leg.id, queue_id: call.queue_id || "" });
       reportEvent("call.answered");
       await this.media.start({
         callId: call.id,
@@ -356,6 +360,17 @@ export class AgentApp extends LitElement {
     this.#endLocal(id);
   }
 
+  async #survey() {
+    const id = this.call?.id;
+    if (!id) return;
+    await this.#run(async (epoch) => {
+      const view = await startSurvey(id);
+      if (view?.version != null) setCallVersion(view.version);
+      this.#endLocal(id);
+      this.feedback.ok("已转满意度调查", epoch);
+    });
+  }
+
   /** 记录最近通话并释放本地媒体与界面状态。 */
   #endLocal(endedId) {
     const wrapId = endedId || this.call?.id;
@@ -375,6 +390,11 @@ export class AgentApp extends LitElement {
     this.media.stop();
     this.cameraUnavailable = false;
     this.audioPlaybackBlocked = false;
+    this.held = false;
+    this.audioMuted = false;
+    this.videoMuted = false;
+    this.sharing = false;
+    this.videoAsk = null;
     this.call = null;
     this.incoming = null;
     this.elapsed = 0;
@@ -535,6 +555,7 @@ export class AgentApp extends LitElement {
   }
 
   #startTimer() {
+    this.#stopTimer();
     this.#startedAt = Date.now();
     this.#timer = setInterval(() => {
       this.elapsed = Math.floor((Date.now() - this.#startedAt) / 1000);
@@ -550,6 +571,8 @@ export class AgentApp extends LitElement {
     await this.#run(async () => {
       try { await logout(); } finally {
         clearAccessToken();
+        this.#wsUnsub?.();
+        this.#wsUnsub = null;
         this.#ws.disconnect();
         this.#endLocal();
         this.pendingWrapId = "";
@@ -605,6 +628,7 @@ export class AgentApp extends LitElement {
       downgrade: (...args) => this.#downgrade(...args),
       dtmf: (...args) => this.#dtmf(...args),
       hangup: (...args) => this.#hangup(...args),
+      survey: (...args) => this.#survey(...args),
       hold: (...args) => this.#hold(...args),
       listen: (...args) => this.#listen(...args),
       login: (...args) => this.#login(...args),

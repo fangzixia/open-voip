@@ -1,8 +1,12 @@
 // 话单、小结与导出。
 import { apiFetch } from "./client.js";
 
-export function listCdr() {
-  return apiFetch("/api/v1/cdr?page=1&page_size=50");
+/** 服务端过滤 + 分页；返回 { items, page, page_size, total }。 */
+export function listCdr({ page = 1, pageSize = 50, caller = "", result = "" } = {}) {
+  const q = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (caller) q.set("caller", caller);
+  if (result) q.set("result", result);
+  return apiFetch(`/api/v1/cdr?${q}`);
 }
 
 export function listWrapUps(callId) {

@@ -7,8 +7,10 @@ describe("call-mutation", () => {
   });
 
   it("adds expected_version and idempotency headers", async () => {
+    const { setCallContext } = await import("./call-context.js");
     const { setCallVersion, callCommandBody, callCommandHeaders } = await import("./call-mutation.js");
-    setCallVersion(3);
+    setCallContext({ call_id: "c1" });
+    setCallVersion(3, "c1");
     assert.deepEqual(callCommandBody({ on: true }), { on: true, expected_version: 3 });
     assert.equal(callCommandHeaders("hold", "c1")["Idempotency-Key"], "hold-c1-v3");
   });

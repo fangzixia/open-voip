@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test admin/controllers/*.test.js shared/*.test.js shared/components/*.test.js shared/components/ivr/*.test.js",
+    "lint": "eslint .",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
@@ -12,6 +13,9 @@
     "lit": "^3.3.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
     "vite": "^8.3.1"
   }
 }

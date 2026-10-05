@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"uuid"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"open-call/internal/datetime"
@@ -15,6 +17,18 @@ import (
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
+
+const maxProjectionFailures = 12
+
+var switchOutboxWake = make(chan struct{}, 1)
+
+// WakeSwitchOutbox 通知后台投递循环立即处理出站队列。
+func WakeSwitchOutbox() {
+	select {
+	case switchOutboxWake <- struct{}{}:
+	default:
+	}
+}
 
 // runSwitchOutboxDelivery 投递已投影的出站事件（Switch HTTP callback 为主路径）。
 func runSwitchOutboxDelivery(ctx context.Context, db *gorm.DB, sink ports.CallEventPublisher, log *slog.Logger) {
@@ -27,9 +41,41 @@ func runSwitchOutboxDelivery(ctx context.Context, db *gorm.DB, sink ports.CallEv
 		select {
 		case <-ctx.Done():
 			return
+		case <-switchOutboxWake:
 		case <-ticker.C:
 		}
 	}
+}
+
+func projectionDeadLetter(db *gorm.DB, eventID int64) bool {
+	var n int64
+	_ = db.Raw(`SELECT COUNT(1) FROM oc_switch_event_projection_failures WHERE event_id=? AND dead_letter_at IS NOT NULL`, eventID).Scan(&n).Error
+	return n > 0
+}
+
+func recordProjectionFailure(db *gorm.DB, eventID int64, err error) bool {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+		if len(msg) > 500 {
+			msg = msg[:500]
+		}
+	}
+	var failures int
+	_ = db.Raw(`
+INSERT INTO oc_switch_event_projection_failures (event_id, failures, last_error, updated_at)
+VALUES (?, 1, ?, NOW())
+ON CONFLICT (event_id) DO UPDATE SET
+  failures = oc_switch_event_projection_failures.failures + 1,
+  last_error = EXCLUDED.last_error,
+  updated_at = NOW(),
+  dead_letter_at = CASE WHEN oc_switch_event_projection_failures.failures + 1 >= ? THEN NOW() ELSE oc_switch_event_projection_failures.dead_letter_at END
+RETURNING failures`, eventID, msg, maxProjectionFailures).Scan(&failures).Error
+	return failures >= maxProjectionFailures
+}
+
+func clearProjectionFailure(db *gorm.DB, eventID int64) {
+	_ = db.Exec(`DELETE FROM oc_switch_event_projection_failures WHERE event_id=?`, eventID).Error
 }
 
 // CommitSwitchEvent 在同一事务中写入收件箱、业务投影、出站载荷并推进水印。
@@ -57,6 +103,7 @@ func CommitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event, _ p
 		if err := projectSwitchEvent(ctx, tx, ev); err != nil {
 			return err
 		}
+		clearProjectionFailure(tx, ev.ID)
 		callID := ev.CallID
 		if ev.TargetOnly {
 			// 仅面向坐席的事件不携带 call_id，避免客户侧 WebSocket 订阅收到。
@@ -85,23 +132,26 @@ func CommitSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event, _ p
 
 // DeliverSwitchEvents 向 Hub 发布未投递的出站事件；至少投递一次，崩溃后可凭稳定 event_id 重放。
 func DeliverSwitchEvents(ctx context.Context, db *gorm.DB, sink ports.CallEventPublisher) error {
-	var rows []models.SwitchEventOutbox
-	if err := db.WithContext(ctx).Where("delivered_at IS NULL").Order("event_id").Limit(100).Find(&rows).Error; err != nil {
-		return err
-	}
-	for _, row := range rows {
-		var ev ports.CallEvent
-		if err := json.Unmarshal([]byte(row.Payload), &ev); err != nil {
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rows []models.SwitchEventOutbox
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("delivered_at IS NULL").Order("event_id").Limit(100).Find(&rows).Error; err != nil {
 			return err
 		}
-		if err := sink.PublishCallEvent(ctx, ev); err != nil {
-			return err
+		for _, row := range rows {
+			var ev ports.CallEvent
+			if err := json.Unmarshal([]byte(row.Payload), &ev); err != nil {
+				return err
+			}
+			if err := sink.PublishCallEvent(ctx, ev); err != nil {
+				return err
+			}
+			if err := tx.Model(&models.SwitchEventOutbox{}).Where("event_id=?", row.EventID).Update("delivered_at", time.Now().UTC()).Error; err != nil {
+				return err
+			}
 		}
-		if err := db.WithContext(ctx).Model(&models.SwitchEventOutbox{}).Where("event_id=?", row.EventID).Update("delivered_at", time.Now().UTC()).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // projectSwitchEvent 将技术类事件投影到业务库（话单、录音元数据、坐席状态历史）；幂等，投递失败后重放不会重复写入。
@@ -116,13 +166,41 @@ func projectSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event) er
 		if err := datetime.UnmarshalCurrent(raw, &req); err != nil {
 			return err
 		}
-		return cdr.NewRecorderService(db).Upsert(ctx, req)
+		return cdr.NewRecorderService(db).Upsert(ctx, req, ev.Version)
 	case "recording.saved":
 		var rec ports.RecordingMeta
 		if err := datetime.UnmarshalCurrent(raw, &rec); err != nil {
 			return err
 		}
 		return recmeta.NewService(db).Save(ctx, rec)
+	case "call.csat_scored":
+		var payload struct {
+			CallID  string `json:"call_id"`
+			Score   int    `json:"score"`
+			AgentID string `json:"agent_id"`
+			FlowID  string `json:"flow_id"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return err
+		}
+		if payload.CallID == "" || payload.Score < 1 || payload.Score > 5 {
+			return nil
+		}
+		at, err := datetime.Parse(ev.CreatedAt)
+		if err != nil {
+			return err
+		}
+		row := models.CallCsat{ID: uuid.New().String(), CallID: payload.CallID, Score: payload.Score, ScoredAt: at}
+		if payload.AgentID != "" {
+			row.AgentID = &payload.AgentID
+		}
+		if payload.FlowID != "" {
+			row.FlowID = &payload.FlowID
+		}
+		return db.WithContext(ctx).Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "call_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"score", "scored_at", "agent_id", "flow_id"}),
+		}).Create(&row).Error
 	case "agent.routing_state_changed":
 		var payload struct {
 			State  string

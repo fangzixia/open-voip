@@ -1,6 +1,7 @@
 // IVR 流程可视化编辑器：草稿编辑、校验、模拟与发布绑定。
 import { LitElement, html, nothing } from "lit";
 import { NODE_TYPES, validateIVR, simulateIVR, layoutIVR } from "./ivr-model.js";
+import { randomId } from "../../random-id.js";
 import { ivrEditorStyles } from "./views/ivr-styles.js";
 import { renderIvrLayout } from "./views/ivr-layout.js";
 
@@ -12,7 +13,7 @@ export class IVRFlowEditor extends LitElement {
     flows: { type: Array }, queues: { type: Array }, assets: { type: Array }, versions: { type: Array },
     selectedId: { type: String }, selectedNode: { type: String }, flowName: { type: String }, draft: { type: Object },
     dirty: { type: Boolean }, creating: { type: Boolean }, busy: { type: Boolean }, notice: { type: String }, problem: { type: String },
-    testDigits: { type: String }, testOpen: { type: Boolean }, simulation: { type: Object }, previewUrl: { type: String }, previewBusy: { type: Boolean }, bindingQueueId: { type: String },
+    testDigits: { type: String }, testOpen: { type: Boolean }, testQueueBusy: { type: Boolean }, simulation: { type: Object }, previewUrl: { type: String }, previewBusy: { type: Boolean }, bindingQueueId: { type: String },
     linkDraft: { type: Object },
     ttsOptions: { type: Object },
     ttsAssetName: { type: String },
@@ -25,7 +26,7 @@ export class IVRFlowEditor extends LitElement {
   constructor() {
     super(); this.flows=[]; this.queues=[]; this.assets=[]; this.versions=[]; this.selectedId=""; this.selectedNode="";
     this.flowName=""; this.draft=blank(); this.dirty=false; this.creating=false; this.busy=false; this.notice=""; this.problem="";
-    this.testDigits="1"; this.testOpen=true; this.simulation=null; this.previewUrl=""; this.previewBusy=false; this.bindingQueueId="";
+    this.testDigits="1"; this.testOpen=true; this.testQueueBusy=false; this.simulation=null; this.previewUrl=""; this.previewBusy=false; this.bindingQueueId="";
     this.linkDraft=null; this.pointerDrag=null; this.dragPoint=null; this.service=null;
     this.ttsOptions=null; this.ttsAssetName=""; this.ttsText=""; this.ttsVoice="";
   }
@@ -61,8 +62,9 @@ export class IVRFlowEditor extends LitElement {
   mutate(fn) { const draft=copy(this.draft); draft.nodes ||= {}; fn(draft); this.draft=draft; this.dirty=true; this.problem=""; this.notice=""; this.simulation=null; }
   updateNode(key,value) { if (!this.selectedNode) return; this.mutate(d=>{ d.nodes[this.selectedNode][key]=value; }); }
   addNode(type, position = null) {
-    const id=`node_${crypto.randomUUID().slice(0,8)}`;
-    const defaults={ business_action:{type,action:"",timeout_sec:10,choices:{yes:"",no:""},default:""}, play:{type,prompt:"",file:"",timeout_sec:2,next:""}, menu:{type,prompt:"",file:"",timeout_sec:8,max_retries:2,choices:{},default:"",invalid:""}, time_check:{type,open:"",closed:""}, route_queue:{type,queue_id:this.queues[0]?.id||"",session_type:"audio"}, hangup:{type} };
+    const id=`node_${randomId().slice(0, 8)}`;
+    const defaultSchedule='{"timezone":"Asia/Shanghai","mon":"09:00-18:00","tue":"09:00-18:00","wed":"09:00-18:00","thu":"09:00-18:00","fri":"09:00-18:00","sat":"closed","sun":"closed"}';
+    const defaults={ business_action:{type,action:"",timeout_sec:10,choices:{yes:"",no:""},default:""}, play:{type,prompt:"",file:"",timeout_sec:2,next:""}, menu:{type,prompt:"",file:"",timeout_sec:8,max_retries:2,choices:{},default:"",invalid:""}, time_condition:{type,schedule:defaultSchedule,open:"",closed:""}, queue_condition:{type,queue_id:this.queues[0]?.id||"",waiting_gt:0,open:"",busy:""}, voicemail:{type,prompt:"",file:""}, csat:{type,prompt:"",file:"",timeout_sec:8,next:"",default:""}, route_queue:{type,queue_id:this.queues[0]?.id||"",session_type:"audio"}, hangup:{type} };
     this.mutate(d=>{ d.nodes[id]=defaults[type]; if (!d.start) d.start=id; if (position) { d.layout ||= {}; d.layout[id]=position; } }); this.selectedNode=id;
   }
   /** 删除节点时一并清理起点、布局及其他节点指向它的分支。 */
@@ -72,7 +74,7 @@ export class IVRFlowEditor extends LitElement {
       delete d.nodes[id]; if (d.start===id) d.start=Object.keys(d.nodes)[0]||"";
       if (d.layout) delete d.layout[id];
       for (const n of Object.values(d.nodes)) {
-        for (const key of ["next","default","invalid","open","closed"]) if (n[key]===id) n[key]="";
+        for (const key of ["next","default","invalid","open","closed","busy"]) if (n[key]===id) n[key]="";
         for (const [digit,target] of Object.entries(n.choices||{})) if (target===id) delete n.choices[digit];
       }
     }); this.selectedNode=this.draft.start;
@@ -92,11 +94,18 @@ export class IVRFlowEditor extends LitElement {
   }
   onPaletteDrag(event,type) {
     event.dataTransfer.effectAllowed="copy";
+    event.dataTransfer.setData("text/plain",type);
     event.dataTransfer.setData("application/x-ivr-node",type);
   }
+  onCanvasDragOver(event) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect="copy";
+  }
   onCanvasDrop(event) {
-    event.preventDefault(); event.currentTarget.classList.remove("drag-over");
-    const type=event.dataTransfer.getData("application/x-ivr-node");
+    event.preventDefault();
+    event.stopPropagation();
+    this.renderRoot.querySelector(".canvas")?.classList.remove("drag-over");
+    const type=event.dataTransfer.getData("application/x-ivr-node")||event.dataTransfer.getData("text/plain");
     if (NODE_TYPES[type]) this.addNode(type,this.canvasPoint(event));
   }
   startPointer(event,kind,id) {
@@ -127,7 +136,7 @@ export class IVRFlowEditor extends LitElement {
       const target=Object.entries(positions).find(([id,p])=>id!==drag.id && Math.abs(p.x-point.x)<80 && Math.abs(p.y-point.y)<35)?.[0];
       if (target) {
         const source=this.draft.nodes[drag.id];
-        const branch=source.type==="play"?"next":source.type==="time_check"?"open":Object.keys(source.choices||{})[0]?`choice:${Object.keys(source.choices)[0]}`:"default";
+        const branch=source.type==="play"?"next":source.type==="time_condition"?"open":source.type==="queue_condition"?"open":Object.keys(source.choices||{})[0]?`choice:${Object.keys(source.choices)[0]}`:"default";
         this.linkDraft={from:drag.id,to:target,branch}; this.selectedNode=drag.id;
       }
     }
@@ -146,7 +155,7 @@ export class IVRFlowEditor extends LitElement {
   linkEditor() {
     const link=this.linkDraft; if (!link) return nothing;
     const source=this.draft.nodes[link.from];
-    const branches=source.type==="play"?[["next","下一步"]]:source.type==="time_check"?[["open","营业"],["closed","非营业"]]:source.type==="business_action"?[...Object.keys(source.choices||{}).map(k=>[`choice:${k}`,k]),["default","超时"]]:[
+    const branches=source.type==="play"?[["next","下一步"]]:source.type==="time_condition"?[["open","营业"],["closed","非营业"]]:source.type==="queue_condition"?[["open","空闲"],["busy","忙碌"]]:source.type==="csat"?[["next","打分后"],["default","超时"]]:source.type==="business_action"?[...Object.keys(source.choices||{}).map(k=>[`choice:${k}`,k]),["default","超时"]]:[
       ..."1234567890*#".split("").map(d=>[`choice:${d}`,`按 ${d}`]),["default","超时"],["invalid","无效按键"]
     ];
     return html`<div class="link-editor"><strong>连接 ${NODE_TYPES[source.type]} → ${NODE_TYPES[this.draft.nodes[link.to].type]}</strong>
@@ -256,7 +265,7 @@ export class IVRFlowEditor extends LitElement {
   runSimulation() {
     const issues=validateIVR(this.draft,this.queues,this.assets);
     if (issues.length) { this.problem=issues.join("；"); return; }
-    this.simulation=simulateIVR(this.draft,{digits:this.testDigits,open:this.testOpen}); this.problem="";
+    this.simulation=simulateIVR(this.draft,{digits:this.testDigits,open:this.testOpen,queueBusy:this.testQueueBusy}); this.problem="";
   }
   render() { return renderIvrLayout(this); }
 }

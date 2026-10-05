@@ -51,7 +51,7 @@ type RouterDeps struct {
 	Audit         *audit.Service
 	ConfigIO      *configio.Service
 	Snapshots     *configpub.SnapshotService
-	AgentRuntime  ports.SwitchAdminPort
+	AgentRuntime  ports.SwitchAgentRuntimePort
 	Hub           interface {
 		ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
@@ -78,33 +78,30 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	r.Get("/health", handleHealth)
 	r.Get("/health/live", handleHealth)
-	r.Get("/health/ready", deps.Status.handleReady)
+	r.Get("/health/ready", newReadyHandler(deps.Status))
 
 	r.Route("/api/v1", func(api chi.Router) {
 		if deps.SwitchEventHandler != nil {
 			api.Post("/integration/switch/events", deps.SwitchEventHandler)
 		}
 
-		api.With(middleware.RateLimit(deps.Config.Security.LoginRequestsPerMin)).Post("/auth/login", deps.handleLogin)
+		api.Post("/auth/login", deps.handleLogin)
 		api.Get("/auth/options", deps.handleAuthOptions)
-		api.With(middleware.RateLimit(deps.Config.Security.LoginRequestsPerMin)).Post("/auth/refresh", deps.handleRefresh)
+		api.Post("/auth/refresh", deps.handleRefresh)
 		if deps.OIDC != nil {
 			api.Get("/auth/oidc/start", deps.handleOIDCStart)
 			api.Get("/auth/oidc/callback", deps.handleOIDCCallback)
-			api.With(middleware.RateLimit(deps.Config.Security.LoginRequestsPerMin)).Post("/auth/oidc/exchange", deps.handleOIDCExchange)
+			api.Post("/auth/oidc/exchange", deps.handleOIDCExchange)
 		}
 
-		api.With(middleware.RateLimit(deps.Config.Security.GuestRequestsPerMin)).Get("/guest/queues", deps.handleGuestQueues)
-		api.With(middleware.RateLimit(deps.Config.Security.GuestRequestsPerMin)).Post("/guest/join", deps.handleGuestJoin)
+		api.Get("/guest/queues", deps.handleGuestQueues)
+		api.Post("/guest/join", deps.handleGuestJoin)
 
 		if deps.Hub != nil {
 			api.Get("/ws", deps.Hub.ServeHTTP)
 		}
 		if deps.Auth != nil {
-			api.With(
-				middleware.RateLimit(deps.Config.Security.ClientEventRequestsPerMin),
-				middleware.Auth(deps.Auth),
-			).Post("/client-events", deps.handleClientEvents)
+			api.With(middleware.Auth(deps.Auth)).Post("/client-events", deps.handleClientEvents)
 		}
 
 		api.Group(func(priv chi.Router) {
@@ -119,7 +116,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			priv.Delete("/auth/sessions/{sessionId}", deps.handleSessionRevoke)
 
 			priv.Group(func(admin chi.Router) {
-				admin.Use(middleware.RateLimit(deps.Config.Security.AdminRequestsPerMin))
 				admin.With(middleware.RequirePermission("users.read")).Get("/users", deps.handleUserList)
 				admin.With(middleware.RequirePermission("users.create")).Post("/users", deps.handleUserCreate)
 				admin.With(middleware.RequirePermission("users.read")).Get("/users/{userId}", deps.handleUserGet)

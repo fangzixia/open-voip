@@ -135,6 +135,10 @@ func (c *Client) GetIVRFlow(ctx context.Context, flowID string) (ports.SwitchIVR
 	return out, err
 }
 
+func (c *Client) ValidateIVRFlowPayload(ctx context.Context, payloadJSON string) error {
+	return c.do(ctx, http.MethodPost, "/switch/v1/ivr/flows/validate", map[string]string{"payload_json": payloadJSON}, nil)
+}
+
 func (c *Client) UpsertIVRFlow(ctx context.Context, flowID, payloadJSON string) (ports.SwitchIVRPublishedView, error) {
 	var out ports.SwitchIVRPublishedView
 	path := "/switch/v1/ivr/flows"

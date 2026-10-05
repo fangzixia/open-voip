@@ -16,20 +16,20 @@ import (
 	"open-switch/internal/store/models"
 )
 
-func (s *Service) versionFor(ctx context.Context, appID string) (int64, error) {
+func (s *Service) versionFor(ctx context.Context) (int64, error) {
 	if version := scope.ConfigVersion(ctx); version > 0 {
 		return version, nil
 	}
-	return activeVersion(s.db.WithContext(ctx), "")
+	return activeVersion(s.db.WithContext(ctx))
 }
 
 // ActiveVersion 实现 ports.ConfigSnapshotPort。
 func (s *Service) ActiveVersion(ctx context.Context) (int64, error) {
-	return activeVersion(s.db.WithContext(ctx), "")
+	return activeVersion(s.db.WithContext(ctx))
 }
 
 func (s *Service) GetQueue(ctx context.Context, queueID string) (ports.QueueSnapshot, error) {
-	version, err := s.versionFor(ctx, "")
+	version, err := s.versionFor(ctx)
 	if err != nil {
 		return ports.QueueSnapshot{}, err
 	}
@@ -44,12 +44,12 @@ func (s *Service) GetQueue(ctx context.Context, queueID string) (ports.QueueSnap
 	if err := s.db.WithContext(ctx).Model(&models.QueueSkill{}).Where("config_version = ? AND queue_id = ?", version, queueID).Pluck("skill_id", &skillIDs).Error; err != nil {
 		return ports.QueueSnapshot{}, err
 	}
-	out := ports.QueueSnapshot{ConfigVersion: version, ID: row.ID, Name: row.Name, VideoEnabled: row.VideoEnabled, MaxWaitSec: row.MaxWaitSec, IVRFlowID: derefString(row.IVRFlowID), OverflowAction: row.OverflowAction, OverflowQueueID: derefString(row.OverflowQueueID), WaitPrompt: row.WaitPrompt, AnnounceRecording: row.AnnounceRecording, SkillIDs: skillIDs, AfterHoursAction: row.AfterHoursAction, ForceHangupOnCheckout: row.ForceHangupOnCheckout, ListenAnnounce: row.ListenAnnounce, PriorityEnabled: row.PriorityEnabled}
+	out := ports.QueueSnapshot{ConfigVersion: version, ID: row.ID, Name: row.Name, VideoEnabled: row.VideoEnabled, MaxWaitSec: row.MaxWaitSec, IVRFlowID: derefString(row.IVRFlowID), PostCallIVRFlowID: derefString(row.PostCallIVRFlowID), OverflowAction: row.OverflowAction, OverflowQueueID: derefString(row.OverflowQueueID), WaitPrompt: row.WaitPrompt, AnnounceRecording: row.AnnounceRecording, SkillIDs: skillIDs, AfterHoursAction: row.AfterHoursAction, ForceHangupOnCheckout: row.ForceHangupOnCheckout, ListenAnnounce: row.ListenAnnounce, PriorityEnabled: row.PriorityEnabled}
 	return out, nil
 }
 
 func (s *Service) GetLatestIVR(ctx context.Context, flowID string) (ports.IVRSnapshot, error) {
-	version, err := s.versionFor(ctx, "")
+	version, err := s.versionFor(ctx)
 	if err != nil {
 		return ports.IVRSnapshot{}, err
 	}
@@ -66,7 +66,7 @@ func (s *Service) GetLatestIVR(ctx context.Context, flowID string) (ports.IVRSna
 func (s *Service) GetIVRSnapshot(ctx context.Context, configVersion int64, flowID string, flowVersion int) (ports.IVRSnapshot, error) {
 	if configVersion < 1 {
 		var err error
-		configVersion, err = s.versionFor(ctx, "")
+		configVersion, err = s.versionFor(ctx)
 		if err != nil {
 			return ports.IVRSnapshot{}, err
 		}
@@ -86,7 +86,7 @@ func (s *Service) GetIVRSnapshot(ctx context.Context, configVersion int64, flowI
 }
 
 func (s *Service) GetBusinessHours(ctx context.Context, queueID string) (ports.BusinessHours, error) {
-	version, err := s.versionFor(ctx, "")
+	version, err := s.versionFor(ctx)
 	if err != nil {
 		return ports.BusinessHours{}, err
 	}
@@ -137,7 +137,7 @@ func (s *Service) Now(context.Context) time.Time { return time.Now().UTC() }
 
 // RequestAgent 原子地预留一名符合条件且已签入的坐席。
 func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dto.DispatchResult, error) {
-	version, err := s.versionFor(ctx, "")
+	version, err := s.versionFor(ctx)
 	if err != nil {
 		return dto.DispatchResult{}, err
 	}
@@ -168,7 +168,7 @@ func (s *Service) RequestAgent(ctx context.Context, req dto.DispatchRequest) (dt
 			args = append(args, version, skillID)
 		}
 		if queue.DispatchStrategy == "round_robin" {
-			if err := tx.Exec("INSERT INTO os_queue_dispatch_cursor (queue_id, last_agent_id) VALUES (?, '') ON CONFLICT DO NOTHING", req.QueueID).Error; err != nil {
+			if err := tx.Exec("INSERT INTO os_queue_dispatch_cursor (queue_id, last_agent_id) VALUES (?, NULL) ON CONFLICT DO NOTHING", req.QueueID).Error; err != nil {
 				return err
 			}
 			var last string
@@ -245,7 +245,7 @@ func (s *Service) ByID(ctx context.Context, agentID string) (ports.AgentInfo, er
 }
 
 func (s *Service) findAgent(ctx context.Context, predicate string, value any) (ports.AgentInfo, error) {
-	version, err := s.versionFor(ctx, "")
+	version, err := s.versionFor(ctx)
 	if err != nil {
 		return ports.AgentInfo{}, err
 	}
@@ -336,7 +336,7 @@ func (s *Service) setState(ctx context.Context, callID, agentID, fromState, toSt
 }
 
 func (s *Service) CheckIn(ctx context.Context, agentID string, queueIDs []string) (ports.AgentSessionView, error) {
-	version, err := s.versionFor(ctx, "")
+	version, err := s.versionFor(ctx)
 	if err != nil {
 		return ports.AgentSessionView{}, err
 	}
@@ -455,6 +455,31 @@ func (s *Service) AgentSession(ctx context.Context, agentID string) (ports.Agent
 	return out, nil
 }
 
+// ListAgentSessions 一次返回所有已签入坐席的会话，未出现的坐席视为 offline。
+func (s *Service) ListAgentSessions(ctx context.Context) ([]ports.AgentSessionView, error) {
+	var sessions []models.AgentSession
+	if err := s.db.WithContext(ctx).Order("agent_id").Find(&sessions).Error; err != nil {
+		return nil, err
+	}
+	var links []models.AgentSessionQueue
+	if err := s.db.WithContext(ctx).Find(&links).Error; err != nil {
+		return nil, err
+	}
+	queues := make(map[string][]string, len(sessions))
+	for _, l := range links {
+		queues[l.AgentID] = append(queues[l.AgentID], l.QueueID)
+	}
+	out := make([]ports.AgentSessionView, 0, len(sessions))
+	for _, sess := range sessions {
+		qids := queues[sess.AgentID]
+		if qids == nil {
+			qids = []string{}
+		}
+		out = append(out, ports.AgentSessionView{AgentID: sess.AgentID, State: sess.State, BusyReason: sess.BusyReason, CurrentCallID: sess.CurrentCallID, QueueIDs: qids})
+	}
+	return out, nil
+}
+
 func (s *Service) QueueStatus(ctx context.Context, queueID string) (ports.QueueStatusView, error) {
 	if _, err := s.GetQueue(ctx, queueID); err != nil {
 		return ports.QueueStatusView{}, err
@@ -476,8 +501,20 @@ func (s *Service) QueueStatus(ctx context.Context, queueID string) (ports.QueueS
 	return out, nil
 }
 
+func (s *Service) notifyMessageForMode(mode string) string {
+	switch mode {
+	case "video_composite":
+		return s.options.VideoNotifyMessage
+	case "audio":
+		return s.options.AudioNotifyMessage
+	default:
+		return ""
+	}
+}
+
 func (s *Service) ForQueue(ctx context.Context, queueID string) (dto.RecordingPolicy, error) {
-	out := dto.RecordingPolicy{Mode: s.options.RecordingMode, NotifyMessage: s.options.NotifyMessage, RetainDays: s.options.RetainDays}
+	out := dto.RecordingPolicy{Mode: s.options.RecordingMode}
+	out.NotifyMessage = s.notifyMessageForMode(out.Mode)
 	if queueID == "" {
 		return out, nil
 	}
@@ -485,13 +522,19 @@ func (s *Service) ForQueue(ctx context.Context, queueID string) (dto.RecordingPo
 	if err != nil {
 		return dto.RecordingPolicy{}, err
 	}
-	version, _ := s.versionFor(ctx, "")
+	version, _ := s.versionFor(ctx)
 	var row models.Queue
 	if err := s.db.WithContext(ctx).Where("config_version = ? AND id = ?", version, q.ID).First(&row).Error; err != nil {
 		return dto.RecordingPolicy{}, err
 	}
 	out.Mode, out.NotifyGuest = row.RecordingPolicy, row.AnnounceRecording
+	out.NotifyMessage = s.notifyMessageForMode(out.Mode)
 	return out, nil
+}
+
+// NotifyMessageForMode 返回指定录制模式的告知文案。
+func (s *Service) NotifyMessageForMode(_ context.Context, mode string) string {
+	return s.notifyMessageForMode(mode)
 }
 
 func (s *Service) publishAgentTx(ctx context.Context, tx *gorm.DB, callID, agentID, state, reason string) error {

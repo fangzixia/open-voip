@@ -205,7 +205,10 @@ func (s *Service) SupervisorListen(ctx context.Context, callID, supervisorAgentI
 		}
 	}
 	if announce {
-		_ = s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{FilePath: "", Loop: false})
+		s.mu.Lock()
+		cust := customerLeg(rt)
+		s.mu.Unlock()
+		_ = s.deps.Media.InjectAudio(ctx, callID, cust, dto.AudioSource{FilePath: "", Loop: false})
 		_ = s.publishCall(ctx, callID, "recording.notice", "", map[string]any{
 			"call_id": callID, "message": "班长已加入监听",
 		})
@@ -465,9 +468,7 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 	if err := s.deps.Calls.InsertLeg(ctx, pstnLeg); err != nil {
 		return "", err
 	}
-	if media, ok := s.deps.Media.(interface{ PrepareSIP(string) }); ok {
-		media.PrepareSIP(callID)
-	}
+	s.deps.Media.PrepareSIP(callID)
 	opts := dto.RoomOptions{SessionType: dto.SessionTypeAudio}
 	if err := s.deps.Media.CreateRoom(ctx, callID, opts); err != nil {
 		return "", err
@@ -552,6 +553,9 @@ func (s *Service) beginRecordingIfNeeded(ctx context.Context, callID string) {
 	}
 	if policy.Mode == "video_composite" && session == dto.SessionTypeAudio {
 		policy.Mode = "audio"
+		if s.deps.RecordingPolicy != nil {
+			policy.NotifyMessage = s.deps.RecordingPolicy.NotifyMessageForMode(ctx, policy.Mode)
+		}
 	}
 	s.startRecording(ctx, callID, policy)
 	if policy.NotifyGuest && policy.NotifyMessage != "" {
@@ -638,7 +642,7 @@ func (s *Service) startVoicemail(ctx context.Context, callID string) {
 	opts := dto.RoomOptions{SessionType: dto.SessionTypeAudio}
 	_ = s.deps.Media.CreateRoom(ctx, callID, opts)
 	s.beginRecordingIfNeeded(ctx, callID)
-	_ = s.deps.Media.InjectAudio(ctx, callID, "", dto.AudioSource{Loop: false})
+	_ = s.deps.Media.InjectAudio(ctx, callID, customerLeg(rt), dto.AudioSource{Loop: false})
 	_ = s.publishCall(ctx, callID, "call.voicemail", "", map[string]any{
 		"call_id": callID, "message": "请在提示音后留言，结束后将自动挂断",
 	})

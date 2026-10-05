@@ -4,7 +4,6 @@ package switchapi
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"open-call/internal/datetime"
@@ -142,10 +141,6 @@ func (c *Client) Outbound(ctx context.Context, req dto.OutboundRequest) (string,
 		return "", err
 	}
 	return out.ID, nil
-}
-
-func (c *Client) StartIVR(ctx context.Context, callID, snapshotID string) error {
-	return fmt.Errorf("StartIVR: 请经 Switch API 扩展")
 }
 
 func (c *Client) Hold(ctx context.Context, callID string, on bool) error {

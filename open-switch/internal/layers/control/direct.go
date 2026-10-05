@@ -62,9 +62,7 @@ func (s *Service) CreateDirect(ctx context.Context, req dto.DirectCallRequest) (
 	// 语音房间自创建起使用 PCMU，以便在 WebRTC 协商后追加出局 SIP 腿，
 	// 且不会在通话中途静默切换编解码。
 	if req.SessionType == dto.SessionTypeAudio {
-		if m, ok := s.deps.Media.(interface{ PrepareSIP(string) }); ok {
-			m.PrepareSIP(req.CallID)
-		}
+		s.deps.Media.PrepareSIP(req.CallID)
 	}
 	if err := s.deps.Media.CreateRoom(ctx, req.CallID, dto.RoomOptions{SessionType: req.SessionType, Direct: true}); err != nil {
 		return ports.CallView{}, err
@@ -190,9 +188,7 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 	if rt.rec.SessionType != dto.SessionTypeAudio {
 		return ports.DirectSIPResult{}, errs.Unprocessable("SIP 腿仅支持语音", "")
 	}
-	if m, ok := s.deps.Media.(interface{ PrepareSIP(string) }); ok {
-		m.PrepareSIP(callID)
-	}
+	s.deps.Media.PrepareSIP(callID)
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
 		return ports.DirectSIPResult{}, err
 	}
@@ -297,9 +293,7 @@ func (s *Service) bridgeDirectOnce(ctx context.Context, callID, a, b string) err
 		rt.answeredAt = &now
 	}
 	if err := s.transition(ctx, callID, stateActive); err != nil {
-		if m, ok := s.deps.Media.(interface{ UnbridgeLegs(string) }); ok {
-			m.UnbridgeLegs(callID)
-		}
+		s.deps.Media.UnbridgeLegs(callID)
 		return err
 	}
 	bridgePayload := map[string]any{"call_id": callID, "leg_a": a, "leg_b": b}
@@ -347,9 +341,7 @@ func (s *Service) ReplaceBridge(ctx context.Context, callID, bridgeID, legA, leg
 		if err := s.deps.Bridges.ReplacePair(ctx, callID, bridgeID, legA, legB); err != nil {
 			return err
 		}
-		if m, ok := s.deps.Media.(interface{ UnbridgeLegs(string) }); ok {
-			m.UnbridgeLegs(callID)
-		}
+		s.deps.Media.UnbridgeLegs(callID)
 		if err := s.deps.Media.BridgeLegs(ctx, callID, legA, legB); err != nil {
 			return err
 		}
@@ -393,12 +385,8 @@ func (s *Service) leaveDirectLegOnce(ctx context.Context, callID, legID string) 
 	if err := s.deps.Media.LeaveRoom(ctx, callID, legID); err != nil {
 		return err
 	}
-	if remover, ok := s.deps.Calls.(interface {
-		DeleteLeg(context.Context, string, string) error
-	}); ok {
-		if err := remover.DeleteLeg(ctx, callID, legID); err != nil {
-			return err
-		}
+	if err := s.deps.Calls.DeleteLeg(ctx, callID, legID); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	for i, leg := range rt.legs {

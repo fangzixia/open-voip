@@ -46,7 +46,6 @@ export function renderAgents(state, actions) {
     });
   }
   return renderPageCrud({
-    description: "查看坐席状态、强制签出与利用率报表。",
     sections,
   });
 }

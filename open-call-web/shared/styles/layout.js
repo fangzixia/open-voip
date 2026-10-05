@@ -1,4 +1,4 @@
-// 本文件负责页面布局样式�?
+// Page layout styles.
 import { css } from "lit";
 
 export const layoutStyles = css`
@@ -202,19 +202,24 @@ export const layoutStyles = css`
   }
 
   .content {
-    padding: var(--ov-space-5);
-    padding-bottom: calc(var(--ov-space-5) + env(safe-area-inset-bottom, 0));
+    padding: var(--ov-space-3);
+    padding-bottom: calc(var(--ov-space-3) + env(safe-area-inset-bottom, 0));
     background: var(--ov-bg);
   }
 
-  .breadcrumb {
-    margin-bottom: var(--ov-space-4);
+  .breadcrumb-topbar {
+    margin: 0 0 0 var(--ov-space-3);
+    padding-left: var(--ov-space-3);
+    border-left: 1px solid var(--ov-border);
     color: var(--ov-text-muted);
     font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
   }
 
-  .breadcrumb strong {
+  .breadcrumb-topbar strong {
     color: var(--ov-text-secondary);
+    font-weight: 500;
   }
 
   @media (max-width: 960px) {

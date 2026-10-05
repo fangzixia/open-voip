@@ -6,7 +6,6 @@ import { renderPageCrud } from "../../shared/components/page-layout.js";
 export function renderRecs(state, actions) {
   const canDownload = state.me?.permissions?.includes("recordings.download");
   return renderPageCrud({
-    description: "通话录音与合成录像。可在线回放或下载。",
     sections: [{
       title: "录音列表",
       list: renderDataTable([

@@ -36,7 +36,7 @@ jobs:
         run: |
           go mod download
           go vet ./...
-          go test -race ./...
+          go test -race -cover ./...
           go build -o /dev/null ./cmd/open-switch
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
@@ -74,25 +74,13 @@ jobs:
         run: |
           go mod download
           go vet ./...
-          go test -race ./...
+          go test -race -cover ./...
           go build -o /dev/null ./cmd/open-call
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.13.2
           working-directory: open-call
-
-  openapi:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - run: npx --yes @redocly/cli@1 lint docs/api/openapi.yaml --config docs/api/redocly.yaml
 
   open-call-web:
     runs-on: ubuntu-latest
@@ -106,4 +94,6 @@ jobs:
           node-version: "20"
       - run: |
           npm ci
+          npm run lint
+          npm test
           npm run build

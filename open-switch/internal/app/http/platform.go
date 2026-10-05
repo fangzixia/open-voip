@@ -17,8 +17,10 @@ type StatusProvider struct {
 	ActiveCalls func() int
 	// WSConnections WebSocket 连接数。
 	WSConnections func() int
-	// RecordingsDir 录音目录，供运维判断磁盘挂载。
-	RecordingsDir string
+	// RecordingsAudioDir 纯音频录制目录。
+	RecordingsAudioDir string
+	// RecordingsVideoDir 录像目录。
+	RecordingsVideoDir string
 }
 
 type statusResponse struct {
@@ -29,8 +31,12 @@ type statusResponse struct {
 	HeapAlloc       uint64 `json:"heap_alloc_bytes"`
 	SysBytes        uint64 `json:"sys_bytes"`
 	NumCPU          int    `json:"num_cpu"`
-	RecordingsDir   string `json:"recordings_dir,omitempty"`
-	RecordingsBytes int64  `json:"recordings_dir_bytes"`
+	RecordingsDir        string `json:"recordings_dir,omitempty"`
+	RecordingsBytes      int64  `json:"recordings_dir_bytes,omitempty"`
+	RecordingsAudioDir   string `json:"recordings_audio_dir,omitempty"`
+	RecordingsAudioBytes int64  `json:"recordings_audio_dir_bytes,omitempty"`
+	RecordingsVideoDir   string `json:"recordings_video_dir,omitempty"`
+	RecordingsVideoBytes int64  `json:"recordings_video_dir_bytes,omitempty"`
 }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -48,8 +54,12 @@ func (s StatusProvider) handleStatus(w http.ResponseWriter, r *http.Request) {
 		HeapAlloc:       mem.HeapAlloc,
 		SysBytes:        mem.Sys,
 		NumCPU:          runtime.NumCPU(),
-		RecordingsDir:   s.RecordingsDir,
-		RecordingsBytes: dirSize(s.RecordingsDir),
+		RecordingsDir:        s.RecordingsAudioDir,
+		RecordingsBytes:      dirSize(s.RecordingsAudioDir),
+		RecordingsAudioDir:   s.RecordingsAudioDir,
+		RecordingsAudioBytes: dirSize(s.RecordingsAudioDir),
+		RecordingsVideoDir:   s.RecordingsVideoDir,
+		RecordingsVideoBytes: dirSize(s.RecordingsVideoDir),
 	}
 	if s.ActiveCalls != nil {
 		resp.ActiveCalls = s.ActiveCalls()

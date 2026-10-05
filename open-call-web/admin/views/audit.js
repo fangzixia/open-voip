@@ -4,7 +4,6 @@ import { renderPageCrud } from "../../shared/components/page-layout.js";
 
 export function renderAudit(state) {
   return renderPageCrud({
-    description: "管理操作审计记录，用于追踪配置与权限变更。",
     sections: [{
       title: "审计记录",
       list: renderDataTable([

@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
@@ -21,11 +20,11 @@ import (
 	"open-switch/internal/store/models"
 )
 
-// Options 非业务类的技术默认值（录音模式、保留天数等）。
+// Options 非业务类的技术默认值（录音模式等）。
 type Options struct {
-	RecordingMode string
-	NotifyMessage string
-	RetainDays    int
+	RecordingMode        string
+	AudioNotifyMessage   string
+	VideoNotifyMessage   string
 }
 
 // Service 是单个 Switch 数据库上的呼叫中心权威运行时。
@@ -39,9 +38,6 @@ func New(db *gorm.DB, events store.CallEvents, options Options) *Service {
 	if options.RecordingMode == "" {
 		options.RecordingMode = "off"
 	}
-	if options.RetainDays <= 0 {
-		options.RetainDays = 90
-	}
 	return &Service{db: db, events: events, options: options}
 }
 
@@ -53,16 +49,8 @@ var _ ports.RecordingPolicyPort = (*Service)(nil)
 var _ ports.CDRRecorderPort = (*Service)(nil)
 var _ ports.RecordingStorePort = (*Service)(nil)
 
-// applicationID 兼容旧调用点；单租户下恒为空。
-func applicationID(ctx context.Context) (string, error) {
-	_ = ctx
-	return "", nil
-}
-
 // StoreConfig 校验并存储一份不可变配置快照，但不激活。
 func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (ports.ConfigVersionView, error) {
-	appID, _ := applicationID(ctx)
-	_ = appID
 	normalizeBundle(&bundle)
 	if err := validateBundle(bundle); err != nil {
 		return ports.ConfigVersionView{}, err
@@ -78,35 +66,9 @@ func (s *Service) StoreConfig(ctx context.Context, bundle ports.ConfigBundle) (p
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", configMutationLockID).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("checksum = ?", checksum).First(&result).Error; err == nil {
-			return nil
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		version := bundle.Version
-		if version <= 0 {
-			if err := tx.Raw("SELECT COALESCE(MAX(version), 0) + 1 FROM os_config_versions").Scan(&version).Error; err != nil {
-				return err
-			}
-		}
-		var exists int64
-		if err := tx.Model(&models.ConfigVersion{}).Where("version = ?", version).Count(&exists).Error; err != nil {
-			return err
-		}
-		if exists != 0 {
-			return errs.Conflict("配置版本已存在", "")
-		}
-		bundle.Version = version
-		payload, err := json.Marshal(bundle)
-		if err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		result = models.ConfigVersion{Version: version, Status: "validated", Checksum: checksum, Payload: string(payload), CreatedAt: now}
-		if err := tx.Create(&result).Error; err != nil {
-			return err
-		}
-		return insertBundle(tx, version, bundle, now)
+		var err error
+		result, err = s.storeConfigTx(ctx, tx, bundle, checksum)
+		return err
 	})
 	if err != nil {
 		return ports.ConfigVersionView{}, err
@@ -121,25 +83,9 @@ func (s *Service) ActivateConfig(ctx context.Context, version int64) (ports.Conf
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", configMutationLockID).Error; err != nil {
 			return err
 		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("version = ?", version).First(&result).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errs.NotFound("配置版本不存在")
-			}
-			return err
-		}
-		if err := validateActiveDIDConflicts(tx, "", version); err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		if err := tx.Model(&models.ConfigVersion{}).Where("status = ?", "active").Update("status", "superseded").Error; err != nil {
-			return err
-		}
-		result.Status = "active"
-		result.ActivatedAt = &now
-		if err := tx.Model(&models.ConfigVersion{}).Where("version = ?", version).Updates(map[string]any{"status": "active", "activated_at": now}).Error; err != nil {
-			return err
-		}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(map[string]any{"version": version, "activated_at": now})}).Create(&models.ActiveConfig{ID: 1, Version: version, ActivatedAt: now}).Error
+		var err error
+		result, err = s.activateConfigTx(ctx, tx, version)
+		return err
 	})
 	if err != nil {
 		return ports.ConfigVersionView{}, err
@@ -318,6 +264,9 @@ func validateBundle(bundle ports.ConfigBundle) error {
 		if q.IVRFlowID != "" && !ivrs[q.IVRFlowID] {
 			return errs.InvalidRequest("队列引用不存在的 IVR")
 		}
+		if q.PostCallIVRFlowID != "" && !ivrs[q.PostCallIVRFlowID] {
+			return errs.InvalidRequest("队列引用不存在的满意度 IVR")
+		}
 		for _, id := range q.SkillIDs {
 			if !skills[id] {
 				return errs.InvalidRequest("队列引用不存在的技能")
@@ -364,6 +313,9 @@ func insertBundle(tx *gorm.DB, version int64, bundle ports.ConfigBundle, now tim
 		if in.IVRFlowID != "" {
 			row.IVRFlowID = &in.IVRFlowID
 		}
+		if in.PostCallIVRFlowID != "" {
+			row.PostCallIVRFlowID = &in.PostCallIVRFlowID
+		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
@@ -391,13 +343,6 @@ func insertBundle(tx *gorm.DB, version int64, bundle ports.ConfigBundle, now tim
 	return nil
 }
 
-func validateActiveDIDConflicts(tx *gorm.DB, _ string, version int64) error {
-	// 单租户：仅校验候选版本内 DID 自洽即可，无跨应用冲突。
-	_ = version
-	_ = tx
-	return nil
-}
-
 // NormalizeDID 生成确定性的被叫号码键，不推断本地国家/区号规则。
 func NormalizeDID(value string) string {
 	value = strings.TrimSpace(value)
@@ -414,7 +359,7 @@ func NormalizeDID(value string) string {
 	return b.String()
 }
 
-func activeVersion(db *gorm.DB, _ string) (int64, error) {
+func activeVersion(db *gorm.DB) (int64, error) {
 	var active models.ActiveConfig
 	if err := db.Where("id = ?", 1).First(&active).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

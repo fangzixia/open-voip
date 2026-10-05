@@ -30,6 +30,9 @@ type Node struct {
 	Next        string            `json:"next,omitempty"`
 	Open        string            `json:"open,omitempty"`
 	Closed      string            `json:"closed,omitempty"`
+	Schedule    string            `json:"schedule,omitempty"`
+	Busy        string            `json:"busy,omitempty"`
+	WaitingGt   int               `json:"waiting_gt,omitempty"`
 }
 type Doc struct {
 	Start  string              `json:"start"`
@@ -160,6 +163,9 @@ func (s *Service) Publish(ctx context.Context, id string) (SnapshotDTO, error) {
 		return SnapshotDTO{}, err
 	}
 	payload := strings.TrimSpace(row.DraftJSON)
+	if err := s.sw.ValidateIVRFlowPayload(ctx, payload); err != nil {
+		return SnapshotDTO{}, err
+	}
 	var next int
 	if err := s.db.WithContext(ctx).Raw(
 		`SELECT COALESCE(MAX(version), 0) + 1 FROM oc_ivr_published_snapshots WHERE flow_id = ?`, id,
@@ -186,8 +192,17 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	for _, q := range queues {
-		if q.IVRFlowID == id {
+		if q.IVRFlowID == id || q.PostCallIVRFlowID == id {
 			return errs.Conflict("IVR 仍被队列引用", "")
+		}
+	}
+	routes, err := s.sw.ListDIDConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, d := range routes {
+		if d.TargetType == "ivr" && d.TargetID == id {
+			return errs.Conflict("IVR 仍被 DID 路由引用", "")
 		}
 	}
 	if err := s.sw.DeleteIVRFlow(ctx, id); err != nil {
@@ -296,7 +311,7 @@ func (s *Service) validateDoc(ctx context.Context, d Doc) error {
 			return errs.InvalidRequest("节点 " + id + " 无效按键重试不能超过 5 次")
 		}
 		switch n.Type {
-		case "play", "menu", "route_queue", "time_check", "hangup", "business_action", "tts", "asr":
+		case "play", "menu", "route_queue", "time_condition", "queue_condition", "voicemail", "csat", "hangup", "business_action", "tts", "asr":
 		default:
 			return errs.InvalidRequest("节点 " + id + " 类型无效")
 		}
@@ -329,14 +344,33 @@ func (s *Service) validateDoc(ctx context.Context, d Doc) error {
 			if n.Invalid != "" {
 				refs = append(refs, n.Invalid)
 			}
-		case "time_check":
-			if n.QueueID == "" {
-				return errs.InvalidRequest("工作时间节点必须指定 queue_id")
-			}
-			if _, err := s.sw.GetQueueConfig(ctx, n.QueueID); err != nil {
-				return errs.InvalidRequest("工作时间节点队列不存在")
+		case "time_condition":
+			if n.Open == "" || n.Closed == "" {
+				return errs.InvalidRequest("时间判断必须配置营业与非营业去向")
 			}
 			refs = []string{n.Open, n.Closed}
+		case "queue_condition":
+			if n.QueueID == "" {
+				return errs.InvalidRequest("排队判断必须指定 queue_id")
+			}
+			if _, err := s.sw.GetQueueConfig(ctx, n.QueueID); err != nil {
+				return errs.InvalidRequest("排队判断队列不存在")
+			}
+			if n.Open == "" {
+				return errs.InvalidRequest("排队判断必须配置空闲去向")
+			}
+			if n.Busy == "" && n.Closed == "" {
+				return errs.InvalidRequest("排队判断必须配置忙碌去向")
+			}
+			refs = append(refs, n.Open, n.Busy, n.Closed)
+		case "voicemail":
+		case "csat":
+			if n.Default != "" {
+				refs = append(refs, n.Default)
+			}
+			if n.Next != "" {
+				refs = append(refs, n.Next)
+			}
 		case "route_queue":
 			if n.QueueID == "" {
 				return errs.InvalidRequest("route_queue 必须指定 queue_id")
@@ -350,6 +384,9 @@ func (s *Service) validateDoc(ctx context.Context, d Doc) error {
 		}
 		for _, ref := range refs {
 			if ref == "" {
+				if n.Type == "queue_condition" || n.Type == "csat" {
+					continue
+				}
 				return errs.InvalidRequest("节点 " + id + " 缺少后续节点")
 			}
 			if _, ok := d.Nodes[ref]; !ok {
@@ -374,49 +411,21 @@ func (s *Service) validateDoc(ctx context.Context, d Doc) error {
 			}
 			visit(n.Default)
 			visit(n.Invalid)
-		case "time_check":
+		case "time_condition":
 			visit(n.Open)
 			visit(n.Closed)
+		case "queue_condition":
+			visit(n.Open)
+			visit(n.Busy)
+			visit(n.Closed)
+		case "csat":
+			visit(n.Next)
+			visit(n.Default)
 		}
 	}
 	visit(d.Start)
 	if len(reachable) != len(d.Nodes) {
 		return errs.InvalidRequest("IVR 包含不可达节点")
-	}
-	visiting, done := map[string]bool{}, map[string]bool{}
-	var checkCycle func(string) bool
-	checkCycle = func(id string) bool {
-		if visiting[id] {
-			return true
-		}
-		if done[id] {
-			return false
-		}
-		visiting[id] = true
-		n := d.Nodes[id]
-		refs := []string{}
-		switch n.Type {
-		case "play":
-			refs = append(refs, n.Next)
-		case "menu", "business_action":
-			for _, target := range n.Choices {
-				refs = append(refs, target)
-			}
-			refs = append(refs, n.Default, n.Invalid)
-		case "time_check":
-			refs = append(refs, n.Open, n.Closed)
-		}
-		for _, target := range refs {
-			if target != "" && checkCycle(target) {
-				return true
-			}
-		}
-		visiting[id] = false
-		done[id] = true
-		return false
-	}
-	if checkCycle(d.Start) {
-		return errs.InvalidRequest("IVR 不能包含循环节点")
 	}
 	return nil
 }

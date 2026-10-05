@@ -18,10 +18,13 @@ func TestPublishedGraphAndCalendarValidation(t *testing.T) {
 			t.Fatalf("accepted calendar %s", raw)
 		}
 	}
+	if err := validateIVR(`{"start":"x","nodes":{"x":{"type":"play","next":"x"}}}`, map[string]bool{}); err != nil {
+		t.Fatalf("self-loop menu should be valid: %v", err)
+	}
 	for _, raw := range []string{
 		`{"start":"x","nodes":{"x":{"type":"business_action","action":"customer.check","choices":{"yes":"end"},"timeout_sec":5},"end":{"type":"hangup"}}}`,
 		`{"start":"x","nodes":{"x":{"type":"time_check","open":"end","closed":"end"},"end":{"type":"hangup"}}}`,
-		`{"start":"x","nodes":{"x":{"type":"play","next":"x"}}}`,
+		`{"start":"x","nodes":{"x":{"type":"time_condition","schedule":"always","open":"","closed":"end"},"end":{"type":"hangup"}}}`,
 		`{"start":"x","nodes":{"x":{"type":"tts"}}}`,
 	} {
 		if err := validateIVR(raw, map[string]bool{}); err == nil {

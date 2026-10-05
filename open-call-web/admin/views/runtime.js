@@ -67,7 +67,6 @@ export function renderRuntime(state, actions) {
   }) : renderPanel("桥接编辑", html`<p class="muted">从左侧选择一通活跃通话以编辑桥接。</p>`);
 
   return renderPageSplit({
-    description: "查看 Switch 未结束通话，并按需建立、替换或拆除媒体桥。",
     master,
     detail,
   });

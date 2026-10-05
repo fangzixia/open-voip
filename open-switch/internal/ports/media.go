@@ -50,4 +50,11 @@ type MediaPort interface {
 	SendDTMF(ctx context.Context, callID, legID string, digit dto.DTMFDigit) error
 	// RecordingInfo 读取录音元数据（停止后仍可查进程内缓存则可能为空）。
 	RecordingInfo(ctx context.Context, recordingID string) (RecordingMeta, error)
+	// PrepareSIP 在建房前声明该通话会有 SIP 腿加入，房间按 SIP 音频规则创建。
+	PrepareSIP(callID string)
+	// UnbridgeLegs 解除房间内的直连桥接，恢复为按房间转发。
+	UnbridgeLegs(callID string)
+	// DeferUntilAnswered 呼入 SIP 腿尚未发出 200 OK 时登记 fn 在应答后异步执行并返回 true；
+	// 无需等待时返回 false 且不调用 fn。呼叫在应答前失败时登记的 fn 被丢弃。
+	DeferUntilAnswered(callID string, fn func()) bool
 }

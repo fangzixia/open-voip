@@ -40,6 +40,8 @@ type CDR struct {
 	ScreenShareCount int `gorm:"not null;default:0;comment:屏幕共享次数"`
 	// CreatedAt 写入时间。
 	CreatedAt time.Time `gorm:"comment:创建时间"`
+	// SwitchEventVersion 最近一次投影的 Switch 事件 version，用于乱序保护。
+	SwitchEventVersion int64 `gorm:"not null;default:0;comment:Switch 事件 version"`
 }
 
 // TableName 指定表名。

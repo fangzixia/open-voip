@@ -12,12 +12,7 @@ import (
 
 // ListQueueConfigs 返回激活配置中的全部队列。
 func (s *Service) ListQueueConfigs(ctx context.Context) ([]ports.QueueConfig, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	_ = appID
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +39,7 @@ func (s *Service) CreateQueueConfig(ctx context.Context, in ports.QueueConfig) (
 
 // GetQueueConfig 按 ID 读取队列配置。
 func (s *Service) GetQueueConfig(ctx context.Context, id string) (ports.QueueConfig, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return ports.QueueConfig{}, err
-	}
-	_ = appID
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return ports.QueueConfig{}, err
 	}
@@ -120,12 +110,7 @@ func (s *Service) SetQueueSkills(ctx context.Context, queueID string, skillIDs [
 
 // ListSkillConfigs 列出技能。
 func (s *Service) ListSkillConfigs(ctx context.Context) ([]ports.SkillConfig, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	_ = appID
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -190,12 +175,7 @@ func (s *Service) DeleteSkillConfig(ctx context.Context, id string) error {
 
 // ListAgentConfigs 列出坐席路由配置。
 func (s *Service) ListAgentConfigs(ctx context.Context) ([]ports.AgentConfig, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	_ = appID
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -251,12 +231,7 @@ func (s *Service) SetAgentSkills(ctx context.Context, agentID string, skillIDs [
 
 // ListDIDConfigs 列出 DID 路由。
 func (s *Service) ListDIDConfigs(ctx context.Context) ([]ports.DIDConfig, error) {
-	appID, err := applicationID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	_ = appID
-	bundle, err := s.loadActiveBundleOrEmpty(ctx, "")
+	bundle, err := s.loadActiveBundleOrEmpty(ctx)
 	if err != nil {
 		return nil, err
 	}

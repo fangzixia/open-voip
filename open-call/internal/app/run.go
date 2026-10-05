@@ -112,6 +112,7 @@ func Run(configPath string) error {
 	businessActions := businessaction.NewService(db)
 
 	wsHub.Configure(authSvc, switchClient, agentSvc, switchClient, hookSvc)
+	wsHub.ConfigureDB(db)
 
 	// 后台任务使用独立上下文，停机时先停止领取新任务。
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
@@ -119,6 +120,7 @@ func Run(configPath string) error {
 	go monitorLogDisk(workerCtx, log, cfg.Log.Dir)
 	// Switch HTTP callback 投影事件；后台仅重试出站 WebSocket/Webhook 投递。
 	go runSwitchOutboxDelivery(workerCtx, db, wsHub, log)
+	go user.RunAgentSyncWorker(workerCtx, db, userSvc, log)
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
@@ -168,14 +170,14 @@ func Run(configPath string) error {
 	})
 
 	root := chi.NewRouter()
-	root.Mount("/", apphttp.WrapSwitchBFF(cfg.Integration, authSvc, apiRouter, cfg.Security.AllowedOrigins))
+	root.Mount("/", apphttp.WrapSwitchBFF(cfg.Integration, authSvc, apiRouter, cfg.Security.AllowedOrigins, auditSvc))
 
 	srv := &http.Server{
 		Addr:              cfg.Server.Listen,
 		Handler:           root,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       90 * time.Second,
 	}
 

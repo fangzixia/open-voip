@@ -15,8 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"uuid"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -25,6 +25,7 @@ import (
 	"open-call/internal/errs"
 	"open-call/internal/observability"
 	"open-call/internal/ports"
+	"open-call/internal/retrydelay"
 	"open-call/internal/store/models"
 )
 
@@ -387,7 +388,7 @@ func (s *Service) finishFailure(ctx context.Context, job models.WebhookDelivery,
 		updates["status"], updates["dead_letter_at"] = "dead_letter", now
 	} else {
 		updates["status"] = "pending"
-		updates["next_attempt_at"] = now.Add(backoff(attempts))
+		updates["next_attempt_at"] = now.Add(retrydelay.Exponential(attempts, time.Hour))
 	}
 	return s.db.WithContext(ctx).Model(&models.WebhookDelivery{}).Where("id = ?", job.ID).Updates(updates).Error
 }
@@ -470,21 +471,6 @@ func authRandomToken(size int) (string, error) {
 		value = value[:size]
 	}
 	return value, nil
-}
-
-// backoff 计算下一次投递的指数退避时间。
-func backoff(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	if attempt > 10 {
-		attempt = 10
-	}
-	d := time.Duration(1<<uint(attempt)) * time.Second
-	if d > time.Hour {
-		return time.Hour
-	}
-	return d
 }
 
 func matchType(types []string, event string) bool {

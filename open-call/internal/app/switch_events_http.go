@@ -26,10 +26,20 @@ func SwitchEventHTTP(db *gorm.DB, hub ports.CallEventPublisher, actions *busines
 			httpapi.Error(w, errs.InvalidRequest("event id 无效"))
 			return
 		}
+		if projectionDeadLetter(db, ev.ID) {
+			httpapi.Write(w, http.StatusOK, map[string]any{"accepted": true, "event_id": ev.ID, "dead_letter": true})
+			return
+		}
 		if err := CommitSwitchEvent(r.Context(), db, ev, hub); err != nil {
+			if recordProjectionFailure(db, ev.ID, err) {
+				slog.ErrorContext(r.Context(), "Switch 事件投影进入死信", "event_id", ev.ID, "err", err)
+				httpapi.Write(w, http.StatusOK, map[string]any{"accepted": true, "event_id": ev.ID, "dead_letter": true})
+				return
+			}
 			httpapi.Error(w, err)
 			return
 		}
+		WakeSwitchOutbox()
 		// 投影已提交；业务动作失败须返回错误，便于 Switch 重投同一事件（inbox 幂等，会再次执行 HandleRequested）。
 		if actions != nil && ev.Type == "business_action.requested" {
 			if err := actions.HandleRequested(r.Context(), ev, client); err != nil {
@@ -38,10 +48,6 @@ func SwitchEventHTTP(db *gorm.DB, hub ports.CallEventPublisher, actions *busines
 				httpapi.Error(w, err)
 				return
 			}
-		}
-		if err := DeliverSwitchEvents(r.Context(), db, hub); err != nil {
-			httpapi.Error(w, err)
-			return
 		}
 		httpapi.Write(w, http.StatusOK, map[string]any{"accepted": true, "event_id": ev.ID})
 	}

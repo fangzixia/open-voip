@@ -60,7 +60,7 @@ type Service struct {
 	db      *gorm.DB
 	runtime interface {
 		ListCalls(context.Context) ([]ports.CallView, error)
-		AgentSession(context.Context, string) (ports.SwitchAgentSession, error)
+		ListAgentSessions(context.Context) ([]ports.SwitchAgentSession, error)
 		ListQueueConfigs(context.Context) ([]ports.SwitchQueueConfig, error)
 	}
 }
@@ -68,7 +68,7 @@ type Service struct {
 // NewService 创建报表服务。
 func NewService(db *gorm.DB, runtime interface {
 	ListCalls(context.Context) ([]ports.CallView, error)
-	AgentSession(context.Context, string) (ports.SwitchAgentSession, error)
+	ListAgentSessions(context.Context) ([]ports.SwitchAgentSession, error)
 	ListQueueConfigs(context.Context) ([]ports.SwitchQueueConfig, error)
 }) *Service {
 	return &Service{db: db, runtime: runtime}
@@ -84,14 +84,21 @@ func (s *Service) Live(ctx context.Context) (Live, error) {
 	if err != nil {
 		return out, err
 	}
-	var agents []models.Agent
-	if err := s.db.WithContext(ctx).Find(&agents).Error; err != nil {
+	var agentIDs []string
+	if err := s.db.WithContext(ctx).Model(&models.Agent{}).Pluck("id", &agentIDs).Error; err != nil {
 		return out, err
 	}
-	for _, agent := range agents {
-		session, err := s.runtime.AgentSession(ctx, agent.ID)
-		if err != nil {
-			return out, err
+	known := make(map[string]struct{}, len(agentIDs))
+	for _, id := range agentIDs {
+		known[id] = struct{}{}
+	}
+	sessions, err := s.runtime.ListAgentSessions(ctx)
+	if err != nil {
+		return out, err
+	}
+	for _, session := range sessions {
+		if _, ok := known[session.AgentID]; !ok {
+			continue
 		}
 		if session.State != "offline" {
 			out.AgentsOnline++

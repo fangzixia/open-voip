@@ -44,4 +44,12 @@ func (c *Client) AgentSession(ctx context.Context, agentID string) (ports.Switch
 	return out, err
 }
 
+func (c *Client) ListAgentSessions(ctx context.Context) ([]ports.SwitchAgentSession, error) {
+	var out struct {
+		Items []ports.SwitchAgentSession `json:"items"`
+	}
+	err := c.do(ctx, http.MethodGet, "/switch/v1/agents/sessions", nil, &out)
+	return out.Items, err
+}
+
 var _ ports.SwitchAdminPort = (*Client)(nil)

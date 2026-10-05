@@ -4,7 +4,7 @@ import { renderDialpad } from "../../shared/components/ui.js";
 import { renderPanel } from "../../shared/components/panel.js";
 import { renderDescriptionList } from "../../shared/components/description-list.js";
 import { formatDuration } from "../../shared/display.js";
-export function renderQueueIdleView(state, actions) {
+export function renderQueueIdleView() {
     return renderPanel("排队状态", renderDescriptionList([
       ["前方等候", "0 位"],
       ["已等待", "00:00"],

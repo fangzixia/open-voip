@@ -2,17 +2,19 @@ package media
 
 import (
 	"context"
-	"encoding/binary"
-	"github.com/google/uuid"
-	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4/pkg/media"
 	"io"
 	"math/rand/v2"
-	"open-switch/internal/scope"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/go-audio/wav"
+	"github.com/google/uuid"
+	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4/pkg/media"
+
+	"open-switch/internal/scope"
 )
 
 // resolvePrompt 解析单租户素材目录下的 WAV 素材 ID。
@@ -24,12 +26,12 @@ func (s *Service) resolvePrompt(ctx context.Context, path string) string {
 	if _, err := uuid.Parse(strings.TrimSuffix(path, ".wav")); err != nil {
 		return ""
 	}
-	return filepath.Join(s.recDir, "prompts", scope.AssetNamespace(), path)
+	return filepath.Join(s.audioRecDir, "prompts", scope.AssetNamespace(), path)
 }
 
-func (s *Service) playWaitingTone(callID string, loop bool, seq uint64) {
+func (s *Service) playWaitingTone(callID, targetLegID string, loop bool, seq uint64) {
 	for {
-		s.playToneToRoom(callID, time.Second, seq)
+		s.playToneToRoom(callID, targetLegID, time.Second, seq)
 		if !loop {
 			return
 		}
@@ -52,7 +54,7 @@ func (s *Service) waitPromptInterval(callID string, duration time.Duration, seq 
 	return true
 }
 
-func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool, seq uint64) {
+func (s *Service) playPCMToRoom(callID, targetLegID string, pcm []int16, rate int, loop bool, seq uint64) {
 	if rate <= 0 {
 		rate = 8000
 	}
@@ -69,7 +71,7 @@ func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool,
 		frames = append(frames, buf)
 	}
 	if len(frames) == 0 {
-		s.playToneToRoom(callID, time.Second, seq)
+		s.playToneToRoom(callID, targetLegID, time.Second, seq)
 		return
 	}
 	packet := rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SSRC: rand.Uint32(), Timestamp: rand.Uint32()}}
@@ -80,7 +82,10 @@ func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool,
 				return
 			}
 			room.mu.RLock()
-			for _, p := range room.peers {
+			for legID, p := range room.peers {
+				if targetLegID != "" && legID != targetLegID {
+					continue
+				}
 				if p.audioSamp != nil {
 					_ = p.audioSamp.WriteSample(media.Sample{Data: payload, Duration: 20 * time.Millisecond})
 				}
@@ -90,6 +95,9 @@ func (s *Service) playPCMToRoom(callID string, pcm []int16, rate int, loop bool,
 			packet.Payload = payload
 			if raw, err := packet.Marshal(); err == nil {
 				for rt := range room.sipRTP {
+					if targetLegID != "" && rt.legID != targetLegID {
+						continue
+					}
 					rt.writePCMU(raw)
 				}
 			}
@@ -108,51 +116,24 @@ func readPCMWav(path string) ([]int16, int, error) {
 		return nil, 0, err
 	}
 	defer func() { _ = f.Close() }()
-	hdr := make([]byte, 12)
-	if _, err := io.ReadFull(f, hdr); err != nil {
+	dec := wav.NewDecoder(f)
+	if !dec.IsValidFile() {
+		return nil, 0, io.ErrUnexpectedEOF
+	}
+	buf, err := dec.FullPCMBuffer()
+	if err != nil {
 		return nil, 0, err
 	}
-	if string(hdr[0:4]) != "RIFF" || string(hdr[8:12]) != "WAVE" {
+	if dec.BitDepth != 16 || dec.NumChans < 1 {
 		return nil, 0, io.ErrUnexpectedEOF
 	}
-	var channels, bits, rate int
-	var data []byte
-	for {
-		chunk := make([]byte, 8)
-		if _, err := io.ReadFull(f, chunk); err != nil {
-			break
-		}
-		size := int(binary.LittleEndian.Uint32(chunk[4:8]))
-		if size > 32*1024*1024 {
-			return nil, 0, io.ErrUnexpectedEOF
-		}
-		body := make([]byte, size)
-		if _, err := io.ReadFull(f, body); err != nil {
-			return nil, 0, err
-		}
-		if size%2 == 1 {
-			_, _ = f.Read(make([]byte, 1))
-		}
-		id := string(chunk[0:4])
-		switch id {
-		case "fmt ":
-			if len(body) < 16 || binary.LittleEndian.Uint16(body[0:2]) != 1 {
-				return nil, 0, io.ErrUnexpectedEOF
-			}
-			channels = int(binary.LittleEndian.Uint16(body[2:4]))
-			rate = int(binary.LittleEndian.Uint32(body[4:8]))
-			bits = int(binary.LittleEndian.Uint16(body[14:16]))
-		case "data":
-			data = body
-		}
+	ch := int(dec.NumChans)
+	pcm := make([]int16, 0, len(buf.Data)/ch)
+	for i := 0; i < len(buf.Data); i += ch {
+		pcm = append(pcm, int16(buf.Data[i]))
 	}
-	if len(data) == 0 || bits != 16 || channels < 1 {
+	if len(pcm) == 0 {
 		return nil, 0, io.ErrUnexpectedEOF
 	}
-	n := len(data) / 2
-	pcm := make([]int16, 0, n/channels)
-	for i := 0; i+2 <= len(data); i += 2 * channels {
-		pcm = append(pcm, int16(binary.LittleEndian.Uint16(data[i:i+2])))
-	}
-	return pcm, rate, nil
+	return pcm, int(dec.SampleRate), nil
 }

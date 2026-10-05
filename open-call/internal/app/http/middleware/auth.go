@@ -65,28 +65,6 @@ func PrincipalFromContext(ctx context.Context) (auth.Principal, bool) {
 	return p, ok && (p.UserID != "" || p.GuestID != "")
 }
 
-// RequireRoles 限制角色。
-func RequireRoles(roles ...string) func(http.Handler) http.Handler {
-	allow := map[string]struct{}{}
-	for _, r := range roles {
-		allow[r] = struct{}{}
-	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p, ok := PrincipalFromContext(r.Context())
-			if !ok {
-				writeAuthError(w, errs.Unauthorized("未认证或令牌失效"))
-				return
-			}
-			if _, ok := allow[p.Role]; !ok {
-				writeAuthError(w, errs.Forbidden("无权限"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 // RequirePermission 校验当前角色分配产生的有效权限。
 func RequirePermission(code string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -106,14 +84,3 @@ func RequirePermission(code string) func(http.Handler) http.Handler {
 }
 
 func writeAuthError(w http.ResponseWriter, err error) { httpapi.Error(w, err) }
-
-// WithUser 兼容旧测试辅助。
-func WithUser(ctx context.Context, userID, role string) context.Context {
-	return WithPrincipal(ctx, auth.Principal{UserID: userID, Role: role})
-}
-
-// UserFromContext 兼容旧辅助。
-func UserFromContext(ctx context.Context) (userID, role string, ok bool) {
-	p, ok := PrincipalFromContext(ctx)
-	return p.UserID, p.Role, ok
-}

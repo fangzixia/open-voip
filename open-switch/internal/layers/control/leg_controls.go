@@ -51,12 +51,8 @@ func (s *Service) RejectLeg(ctx context.Context, callID, legID, reason string) e
 				return err
 			}
 		}
-		if remover, ok := s.deps.Calls.(interface {
-			DeleteLeg(context.Context, string, string) error
-		}); ok {
-			if err := remover.DeleteLeg(ctx, callID, legID); err != nil {
-				return err
-			}
+		if err := s.deps.Calls.DeleteLeg(ctx, callID, legID); err != nil {
+			return err
 		}
 		s.mu.Lock()
 		if rt := s.calls[callID]; rt != nil {

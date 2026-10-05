@@ -3,6 +3,7 @@ package http
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -173,6 +174,7 @@ func (d RouterDeps) handleCDRList(w http.ResponseWriter, r *http.Request) {
 	out, err := d.CDR.ListFiltered(r.Context(), page, size, cdr.Filter{
 		From: q.Get("from"), To: q.Get("to"), QueueID: q.Get("queue_id"),
 		AgentID: q.Get("agent_id"), Direction: q.Get("direction"), Result: q.Get("result"),
+		Caller: strings.TrimSpace(q.Get("caller")),
 	})
 	if err != nil {
 		writeErr(w, err)

@@ -33,7 +33,7 @@ func (s *CallStore) InsertCall(ctx context.Context, rec ports.CallRecord) error 
 	row := models.Call{
 		BusinessRef: rec.BusinessRef, Metadata: rec.Metadata, Version: rec.Version, ConfigVersion: rec.ConfigVersion,
 		ID:     rec.ID,
-		Caller: rec.Caller, Callee: rec.Callee, AgentID: rec.AgentID, OfferedAgent: rec.OfferedAgent, AnsweredAt: rec.AnsweredAt,
+		Caller: rec.Caller, Callee: rec.Callee, AgentID: agentUUIDPtr(rec.AgentID), OfferedAgent: agentUUIDPtr(rec.OfferedAgent), AnsweredAt: rec.AnsweredAt,
 		Direction:    rec.Direction,
 		SessionType:  string(rec.SessionType),
 		State:        rec.State,
@@ -77,7 +77,7 @@ func (s *CallStore) UpdateCall(ctx context.Context, rec ports.CallRecord) error 
 	updates := map[string]any{
 		"version": gorm.Expr("version + 1"),
 		"state":   rec.State,
-		"caller":  rec.Caller, "callee": rec.Callee, "agent_id": rec.AgentID, "offered_agent": rec.OfferedAgent, "answered_at": rec.AnsweredAt, "direction": rec.Direction,
+		"caller": rec.Caller, "callee": rec.Callee, "agent_id": agentUUIDPtr(rec.AgentID), "offered_agent": agentUUIDPtr(rec.OfferedAgent), "answered_at": rec.AnsweredAt, "direction": rec.Direction,
 		"session_type": string(rec.SessionType),
 		"updated_at":   rec.UpdatedAt,
 		"ended_at":     rec.EndedAt,
@@ -132,7 +132,7 @@ func (s *CallStore) GetCall(ctx context.Context, callID string) (ports.CallRecor
 	return ports.CallRecord{
 		BusinessRef: row.BusinessRef, Metadata: row.Metadata, Version: row.Version, ConfigVersion: row.ConfigVersion,
 		ID:     row.ID,
-		Caller: row.Caller, Callee: row.Callee, AgentID: row.AgentID, OfferedAgent: row.OfferedAgent, AnsweredAt: row.AnsweredAt,
+		Caller: row.Caller, Callee: row.Callee, AgentID: agentUUIDStr(row.AgentID), OfferedAgent: agentUUIDStr(row.OfferedAgent), AnsweredAt: row.AnsweredAt,
 		Direction:    row.Direction,
 		SessionType:  dto.SessionType(row.SessionType),
 		State:        row.State,

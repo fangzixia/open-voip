@@ -2,6 +2,8 @@ package media
 
 import (
 	"context"
+	"encoding/binary"
+	"math/rand/v2"
 	"net"
 	"open-switch/internal/observability"
 	"sync"
@@ -14,6 +16,8 @@ import (
 )
 
 type sipRTP struct {
+	ua                                     *sipUA
+	boundPort                              int
 	callID                                 string
 	legID                                  string
 	held                                   bool
@@ -38,12 +42,16 @@ func (u *sipUA) listenRTP() (*sipRTP, error) {
 	}
 	var last error
 	for p := minP; p <= maxP; p++ {
+		if !u.claimRTPPort(p) {
+			continue
+		}
 		c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: p})
 		if err != nil {
+			u.releaseRTPPort(p)
 			last = err
 			continue
 		}
-		return &sipRTP{conn: c, remotePT: 0, started: time.Now().UTC()}, nil
+		return &sipRTP{ua: u, boundPort: p, conn: c, remotePT: 0, started: time.Now().UTC()}, nil
 	}
 	return nil, last
 }
@@ -54,9 +62,14 @@ func (r *sipRTP) close() {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	port := r.boundPort
+	ua := r.ua
 	if r.conn != nil {
 		_ = r.conn.Close()
 		r.conn = nil
+	}
+	if ua != nil {
+		ua.releaseRTPPort(port)
 	}
 	if !r.summaryLogged {
 		r.summaryLogged = true
@@ -114,6 +127,45 @@ func (r *sipRTP) write(b []byte) {
 		r.txPackets++
 		r.txBytes += uint64(n)
 		r.mu.Unlock()
+	}
+}
+
+func digitToDTMFEvent(d string) (byte, bool) {
+	if len(d) != 1 {
+		return 0, false
+	}
+	switch d[0] {
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return d[0] - '0', true
+	case '*':
+		return 10, true
+	case '#':
+		return 11, true
+	default:
+		return 0, false
+	}
+}
+
+// sendRFC4733 向 SIP 对端发送 RFC 2833 电话按键（PT=101）。
+func (r *sipRTP) sendRFC4733(digit string) {
+	ev, ok := digitToDTMFEvent(digit)
+	if !ok || r == nil {
+		return
+	}
+	payload := []byte{ev, 0x8a, 0, 0}
+	binary.BigEndian.PutUint16(payload[2:], 160*8)
+	pkt := rtp.Packet{
+		Header: rtp.Header{
+			Version:        2,
+			PayloadType:    101,
+			SequenceNumber: uint16(rand.Uint32()),
+			Timestamp:      rand.Uint32(),
+			SSRC:           rand.Uint32(),
+		},
+		Payload: payload,
+	}
+	if raw, err := pkt.Marshal(); err == nil {
+		r.write(raw)
 	}
 }
 
@@ -200,16 +252,6 @@ func (s *Service) attachSIPRTP(callID string, rtpSess *sipRTP) {
 	r.mu.Unlock()
 }
 
-func (s *Service) hasWebRTCPeer(callID string) bool {
-	r := s.getRoom(callID)
-	if r == nil {
-		return false
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.peers) > 0
-}
-
 // sipReadLoop 校验 RTP 来源，解码电话按键，并在 SIP、WebRTC 与录音之间转发音频。
 func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 	if rtpSess == nil {
@@ -250,19 +292,18 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 			}
 			continue
 		}
-		if pkt.PayloadType != 0 && pkt.PayloadType != 8 {
-			continue
-		}
 		if rtpSess.blocked() {
 			continue
 		}
-		if pkt.PayloadType == 8 {
-			pkt.Payload = transcodeG711(8, 0, pkt.Payload)
-			pkt.PayloadType = 0
-			pkt.Extension = false
-			pkt.Extensions = nil
-			pkt.Padding = false
+		pcmu := rtpPayloadToPCMU(pkt.PayloadType, pkt.Payload)
+		if len(pcmu) == 0 {
+			continue
 		}
+		pkt.Payload = pcmu
+		pkt.PayloadType = 0
+		pkt.Extension = false
+		pkt.Extensions = nil
+		pkt.Padding = false
 		raw, err := pkt.Marshal()
 		if err != nil {
 			raw = buf[:n]
@@ -272,9 +313,23 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 			continue
 		}
 		r.mu.RLock()
-		for legID, p := range r.peers {
-			if p.audioOut != nil && !p.held && r.canForward(rtpSess.legID, legID) {
-				_, _ = p.audioOut.Write(raw)
+		if r.mixer != nil && r.mixAudio {
+			r.mixer.ingest(rtpSess.legID, pcmu)
+			for legID, p := range r.peers {
+				if p.held || !r.canForward(rtpSess.legID, legID) {
+					continue
+				}
+				mixed := pcmToPCMU(r.mixer.mixExcept(legID))
+				outPkt := r.mixer.nextRTP(legID, mixed)
+				if b, err := outPkt.Marshal(); err == nil && p.audioOut != nil {
+					_, _ = p.audioOut.Write(b)
+				}
+			}
+		} else {
+			for legID, p := range r.peers {
+				if p.audioOut != nil && !p.held && r.canForward(rtpSess.legID, legID) {
+					_, _ = p.audioOut.Write(raw)
+				}
 			}
 		}
 		for dst := range r.sipRTP {
@@ -315,7 +370,7 @@ func (r *sipRTP) observeInbound(seq uint16, bytes int) {
 	}
 }
 
-// dispatchDTMF 复制回调列表后再调用，避免回调期间持有房间读锁。
+// dispatchDTMF 复制回调列表后异步调用，避免回调期间持有房间读锁或阻塞 RTP 读循环。
 func (s *Service) dispatchDTMF(callID, digit string) {
 	if digit == "" {
 		return
@@ -332,9 +387,14 @@ func (s *Service) dispatchDTMF(callID, digit string) {
 		}
 	}
 	r.mu.RUnlock()
-	for _, h := range handlers {
-		h(context.Background(), dto.DTMFDigit(digit))
+	if len(handlers) == 0 {
+		return
 	}
+	r.enqueueDTMF(func() {
+		for _, h := range handlers {
+			h(context.Background(), dto.DTMFDigit(digit))
+		}
+	})
 }
 
 func (r *sipRTP) blocked() bool {
@@ -343,13 +403,25 @@ func (r *sipRTP) blocked() bool {
 	return r.held || r.muted || r.conn == nil
 }
 
-// 对称 RTP 可能改变协商端口，但绝不信任来源 IP 与远端不一致的数据包。
+// acceptSource 对称 RTP：锁定首个有效源，同 IP 下允许端口随 NAT 变化。
 func (r *sipRTP) acceptSource(addr *net.UDPAddr) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if addr == nil || r.remote == nil || !addr.IP.Equal(r.remote.IP) {
+	if addr == nil {
 		return false
 	}
-	r.remote = &net.UDPAddr{IP: append(net.IP(nil), addr.IP...), Port: addr.Port}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.conn == nil {
+		return false
+	}
+	if r.remote == nil {
+		r.remote = &net.UDPAddr{IP: append(net.IP(nil), addr.IP...), Port: addr.Port}
+		return true
+	}
+	if !addr.IP.Equal(r.remote.IP) {
+		return false
+	}
+	if addr.Port != r.remote.Port {
+		r.remote = &net.UDPAddr{IP: append(net.IP(nil), addr.IP...), Port: addr.Port}
+	}
 	return true
 }

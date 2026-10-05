@@ -81,8 +81,8 @@ export function renderApp(host, operations) {
       ${host.nav === "dids" ? page(renderDids,
         ["didForm", "dids", "ivrs", "me", "queues"], ["saveDid", "updateDidForm"]) : ""}
       ${host.nav === "cdr" ? page(renderCdrPage,
-        ["cdrCaller", "cdrResult", "me", "qaCallId", "qaLabel", "wrapUps"],
-        ["exportCdr", "filteredCdr", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}
+        ["cdrCaller", "cdrPage", "cdrPageSize", "cdrResult", "cdrTotal", "me", "qaCallId", "qaLabel", "wrapUps"],
+        ["cdrNext", "cdrPrev", "exportCdr", "filteredCdr", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}
       ${host.nav === "recordings" ? page(renderRecs,
         ["me", "playType", "playUrl", "recs"], ["downloadRec", "playRec"]) : ""}
       ${host.nav === "ivr" ? page(renderIvr, ["ivrs", "queues"], ["load"]) : ""}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"gorm.io/gorm"
 
 	"open-call/internal/layers/biz/agent"
 	"open-call/internal/layers/biz/auth"
@@ -29,36 +30,19 @@ type envelope struct {
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
-type client struct {
-	conn      *websocket.Conn
-	mu        sync.Mutex
-	principal auth.Principal
-}
-
 type retainedEvent struct {
 	callID, agentID string
 	message         envelope
 }
 
-func (c *client) send(ctx context.Context, v any) error {
-	b, err := datetime.Marshal(v)
-	if err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	return c.conn.Write(writeCtx, websocket.MessageText, b)
-}
-
 // Hub 维护 WebSocket 连接并按 agent/call 推送事件。
 type Hub struct {
 	log            *slog.Logger
+	db             *gorm.DB
 	auth           *auth.Service
 	calls          ports.CallControlPort
 	agents         *agent.Service
-	agentRuntime   ports.SwitchAdminPort
+	agentRuntime   ports.SwitchAgentRuntimePort
 	hooks          ports.WebhookDispatcher
 	connCount      atomic.Int64
 	sequence       atomic.Uint64
@@ -70,7 +54,7 @@ type Hub struct {
 	recent  []retainedEvent
 }
 
-// NewHub 创建 WS 网关。
+// NewHub 创建 WS 网关。allowed_origins 含 "*" 时不校验 Origin 白名单。
 func NewHub(log *slog.Logger, allowedOrigins ...string) *Hub {
 	return &Hub{
 		log:            log,
@@ -81,12 +65,20 @@ func NewHub(log *slog.Logger, allowedOrigins ...string) *Hub {
 }
 
 // Configure 注入鉴权与呼叫端口（打破组合根循环依赖）。
-func (h *Hub) Configure(authSvc *auth.Service, calls ports.CallControlPort, agents *agent.Service, agentRuntime ports.SwitchAdminPort, hooks ports.WebhookDispatcher) {
+func (h *Hub) Configure(authSvc *auth.Service, calls ports.CallControlPort, agents *agent.Service, agentRuntime ports.SwitchAgentRuntimePort, hooks ports.WebhookDispatcher) {
 	h.auth = authSvc
 	h.calls = calls
 	h.agents = agents
 	h.agentRuntime = agentRuntime
 	h.hooks = hooks
+}
+
+// ConfigureDB 注入数据库并恢复 WS 事件序号（多实例/重启后 since 补发一致）。
+func (h *Hub) ConfigureDB(db *gorm.DB) {
+	h.db = db
+	if db != nil {
+		h.loadSeqFromDB(context.Background())
+	}
 }
 
 var _ ports.CallEventPublisher = (*Hub)(nil)
@@ -100,8 +92,9 @@ func (h *Hub) ConnectionCount() int {
 func (h *Hub) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 	ctx = observability.With(ctx, observability.Context{CallID: ev.CallID, AgentID: ev.AgentID})
 	observability.Emit(ctx, "ws.call_event.published", map[string]any{"type": ev.Type})
-	msg := envelope{Type: ev.Type, Seq: h.sequence.Add(1), TS: datetime.Format(time.Now()), Payload: ev.Payload}
+	msg := envelope{Type: ev.Type, Seq: h.allocateSeq(ctx), TS: datetime.Format(time.Now()), Payload: ev.Payload}
 	h.retain(ev.CallID, ev.AgentID, msg)
+	h.persistBufferedEvent(ctx, ev.CallID, ev.AgentID, msg)
 	h.broadcast(ctx, ev.CallID, ev.AgentID, msg)
 	if h.hooks != nil {
 		if err := h.hooks.Dispatch(ctx, ev.Type, ev.Payload); err != nil {
@@ -114,8 +107,9 @@ func (h *Hub) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 func (h *Hub) PublishAgentEvent(ctx context.Context, ev ports.AgentEvent) error {
 	ctx = observability.With(ctx, observability.Context{AgentID: ev.AgentID})
 	observability.Emit(ctx, "ws.agent_event.published", map[string]any{"type": ev.Type})
-	msg := envelope{Type: ev.Type, Seq: h.sequence.Add(1), TS: datetime.Format(time.Now()), Payload: ev.Payload}
+	msg := envelope{Type: ev.Type, Seq: h.allocateSeq(ctx), TS: datetime.Format(time.Now()), Payload: ev.Payload}
 	h.retain("", ev.AgentID, msg)
+	h.persistBufferedEvent(ctx, "", ev.AgentID, msg)
 	h.broadcast(ctx, "", ev.AgentID, msg)
 	if h.hooks != nil {
 		if err := h.hooks.Dispatch(ctx, ev.Type, ev.Payload); err != nil {
@@ -161,11 +155,12 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.log.Warn("websocket accept failed", "err", err)
 		return
 	}
-	cl := &client{conn: conn, principal: p}
+	cl := newClient(conn, p)
 	observability.Emit(ctx, "ws.connected", map[string]any{"role": p.Role})
 	h.connCount.Add(1)
 	h.add(cl)
 	defer func() {
+		cl.close()
 		h.remove(cl)
 		if cl.principal.AgentID != "" && h.agents != nil && h.agentRuntime != nil {
 			h.mu.Lock()
@@ -190,7 +185,11 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Payload: map[string]any{"role": p.Role},
 	})
 	if since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64); err == nil && since > 0 {
-		h.replay(r.Context(), cl, since)
+		if h.db != nil {
+			replayFromDB(r.Context(), h.db, h.log, cl, since)
+		} else {
+			h.replay(r.Context(), cl, since)
+		}
 	}
 
 	ctx, cancel := context.WithDeadline(r.Context(), p.ExpiresAt)
@@ -200,10 +199,6 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			return
-		}
-		if _, err := h.auth.Authenticate(ctx, token); err != nil {
-			_ = conn.Close(websocket.StatusPolicyViolation, "令牌已失效")
 			return
 		}
 		h.handleClient(ctx, cl, data)
@@ -234,7 +229,7 @@ func (h *Hub) replay(ctx context.Context, cl *client, since uint64) {
 	}
 	h.mu.Unlock()
 	for _, ev := range events {
-		if err := cl.send(ctx, ev.message); err != nil {
+		if err := cl.sendWait(ctx, ev.message); err != nil {
 			return
 		}
 	}
@@ -267,6 +262,11 @@ func authProtocol(header string) (string, string) {
 }
 
 func (h *Hub) originAllowed(r *http.Request) bool {
+	for _, allowed := range h.allowedOrigins {
+		if strings.TrimSpace(allowed) == "*" {
+			return true
+		}
+	}
 	origin := strings.TrimSuffix(strings.TrimSpace(r.Header.Get("Origin")), "/")
 	if origin == "" {
 		return true

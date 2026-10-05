@@ -46,6 +46,9 @@ func bundleFromActive(active ports.SwitchActiveConfiguration) Bundle {
 		if q.IVRFlowID != "" {
 			row.IVRFlowID = &q.IVRFlowID
 		}
+		if q.PostCallIVRFlowID != "" {
+			row.PostCallIVRFlowID = &q.PostCallIVRFlowID
+		}
 		out.Queues = append(out.Queues, row)
 		for _, sid := range q.SkillIDs {
 			out.QueueSkills = append(out.QueueSkills, models.QueueSkill{QueueID: q.ID, SkillID: sid})
@@ -63,6 +66,7 @@ func bundleFromActive(active ports.SwitchActiveConfiguration) Bundle {
 	}
 	for _, ivr := range b.IVRs {
 		out.IVRVersions = append(out.IVRVersions, models.IVRPublishedSnapshot{FlowID: ivr.FlowID, Version: ivr.Version, PayloadJSON: ivr.PayloadJSON})
+		out.IVRFlows = append(out.IVRFlows, models.IVRFlow{ID: ivr.FlowID, Name: ivr.FlowID, DraftJSON: ivr.PayloadJSON})
 	}
 	return out
 }
@@ -123,6 +127,9 @@ func compileSwitchBundle(ctx context.Context, db *gorm.DB, bundle Bundle) (ports
 		}
 		if row.IVRFlowID != nil {
 			q.IVRFlowID = *row.IVRFlowID
+		}
+		if row.PostCallIVRFlowID != nil {
+			q.PostCallIVRFlowID = *row.PostCallIVRFlowID
 		}
 		out.Queues = append(out.Queues, q)
 	}

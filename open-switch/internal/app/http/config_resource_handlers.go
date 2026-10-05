@@ -362,6 +362,19 @@ func decodeIVRPayload(r *http.Request) (flowID, payload string, err error) {
 	return flowID, payload, nil
 }
 
+func (d SwitchRouterDeps) handleIVRFlowValidate(w http.ResponseWriter, r *http.Request) {
+	_, payload, err := decodeIVRPayload(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := d.Admin.ValidateIVRFlowPayload(r.Context(), payload); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"valid": true})
+}
+
 func (d SwitchRouterDeps) handleIVRFlowCreate(w http.ResponseWriter, r *http.Request) {
 	flowID, payload, err := decodeIVRPayload(r)
 	if err != nil {

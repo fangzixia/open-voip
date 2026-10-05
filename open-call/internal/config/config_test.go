@@ -12,7 +12,7 @@ func TestLoadExampleConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Server.Listen == "" || cfg.Security.LoginRequestsPerMin == 0 {
+	if cfg.Server.Listen == "" || len(cfg.Security.AllowedOrigins) == 0 {
 		t.Fatal("expected defaults")
 	}
 	if cfg.Log.Dir == "" || cfg.Log.MaxSizeMB <= 0 || cfg.Log.MaxAgeDays != 0 {

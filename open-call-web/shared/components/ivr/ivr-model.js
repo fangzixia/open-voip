@@ -2,7 +2,10 @@
 export const NODE_TYPES = {
   play: "播放语音",
   menu: "按键菜单",
-  time_check: "工作时间",
+  time_condition: "时间判断",
+  queue_condition: "排队判断",
+  voicemail: "留言",
+  csat: "满意度",
   route_queue: "转入队列",
   business_action: "业务判断",
   hangup: "结束通话",
@@ -15,7 +18,9 @@ export function outgoing(node) {
     case "play": return node.next ? [["下一步", node.next]] : [];
     case "menu": return [...Object.entries(node.choices || {}).map(([digit, target]) => [`按 ${digit}`, target]), ...(node.default ? [["超时", node.default]] : []), ...(node.invalid ? [["无效按键", node.invalid]] : [])];
     case "business_action": return [...Object.entries(node.choices || {}), ...(node.default ? [["超时", node.default]] : [])];
-    case "time_check": return [["营业", node.open], ["非营业", node.closed]].filter(([, target]) => target);
+    case "time_condition": return [["营业", node.open], ["非营业", node.closed]].filter(([, target]) => target);
+    case "queue_condition": return [["空闲", node.open], ["忙碌", node.busy || node.closed]].filter(([, target]) => target);
+    case "csat": return [...(node.next ? [["打分后", node.next]] : []), ...(node.default ? [["超时", node.default]] : [])];
     default: return [];
   }
 }
@@ -30,9 +35,11 @@ export function validateIVR(doc, queues = [], assets = []) {
   if (ids.length > 100) issues.push("节点不能超过 100 个");
   for (const [id, node] of Object.entries(nodes)) {
     if (!NODE_TYPES[node.type]) { issues.push(`${id}：节点类型无效`); continue; }
-    if (["play", "menu"].includes(node.type)) {
-      if (!node.file) issues.push(`${id}：请选择语音素材`);
-      else if (!assets.some(asset => `${asset.id}.wav` === node.file)) issues.push(`${id}：语音素材不存在`);
+    if (["play", "menu", "csat"].includes(node.type)) {
+      if (node.type !== "csat" || node.file) {
+        if (!node.file) issues.push(`${id}：请选择语音素材`);
+        else if (!assets.some(asset => `${asset.id}.wav` === node.file)) issues.push(`${id}：语音素材不存在`);
+      }
       if (!(node.timeout_sec >= 1 && node.timeout_sec <= 120)) issues.push(`${id}：播放/等待时间须为 1–120 秒`);
     }
     if (node.type === "play" && !node.next) issues.push(`${id}：请选择下一节点`);
@@ -42,16 +49,21 @@ export function validateIVR(doc, queues = [], assets = []) {
       if (!(node.max_retries >= 0 && node.max_retries <= 5)) issues.push(`${id}：无效按键重试次数须为 0–5`);
       for (const digit of Object.keys(node.choices || {})) if (!/^[0-9*#]$/.test(digit)) issues.push(`${id}：按键 ${digit} 无效`);
     }
+    if (node.type === "csat" && !node.default && !node.next) issues.push(`${id}：请配置超时或打分后去向`);
     if (node.type === "business_action") {
       if (!node.action?.trim()) issues.push(`${id}：请输入业务动作名称`);
       if (!(node.timeout_sec >= 1 && node.timeout_sec <= 120)) issues.push(`${id}：业务超时须为 1–120 秒`);
       if (!Object.keys(node.choices || {}).length || Object.keys(node.choices || {}).some(k => !k.trim())) issues.push(`${id}：请配置有效业务结果`);
       if (!node.default) issues.push(`${id}：请选择业务超时去向`);
     }
-    if (node.type === "time_check" && !queues.some(q=>q.id===node.queue_id)) issues.push(`${id}：请选择工作时间所属队列`);
-    if (node.type === "time_check" && (!node.open || !node.closed)) issues.push(`${id}：请配置营业和非营业去向`);
+    if (node.type === "time_condition" && (!node.open || !node.closed)) issues.push(`${id}：请配置营业和非营业去向`);
+    if (node.type === "queue_condition") {
+      if (!queues.some(q => q.id === node.queue_id)) issues.push(`${id}：请选择队列`);
+      if (!node.open) issues.push(`${id}：请配置空闲去向`);
+      if (!node.busy && !node.closed) issues.push(`${id}：请配置忙碌去向`);
+    }
     if (node.type === "route_queue" && !queues.some(q => q.id === node.queue_id)) issues.push(`${id}：目标队列不存在`);
-    for (const [, target] of outgoing(node)) if (!nodes[target]) issues.push(`${id}：目标节点 ${target || "空"} 不存在`);
+    for (const [, target] of outgoing(node)) if (target && !nodes[target]) issues.push(`${id}：目标节点 ${target || "空"} 不存在`);
   }
   if (nodes[doc?.start]) {
     const visiting = new Set(), visited = new Set();
@@ -59,7 +71,7 @@ export function validateIVR(doc, queues = [], assets = []) {
       if (visiting.has(id)) { issues.push("流程中存在循环，可能导致来电无法结束"); return; }
       if (visited.has(id)) return;
       visiting.add(id); visited.add(id);
-      for (const [, target] of outgoing(nodes[id])) if (nodes[target]) walk(target);
+      for (const [, target] of outgoing(nodes[id])) if (target && nodes[target]) walk(target);
       visiting.delete(id);
     }
     walk(doc.start);
@@ -68,8 +80,8 @@ export function validateIVR(doc, queues = [], assets = []) {
   return [...new Set(issues)];
 }
 
-/** 按测试按键与营业状态模拟执行流程，最多推进 100 步。 */
-export function simulateIVR(doc, { digits = "", open = true, outcomes = {} } = {}) {
+/** 按测试按键与营业/排队状态模拟执行流程，最多推进 100 步。 */
+export function simulateIVR(doc, { digits = "", open = true, queueBusy = false, outcomes = {} } = {}) {
   const path = [], nodes = doc?.nodes || {};
   let current = doc?.start, input = 0, invalidAttempts = 0;
   for (let step = 0; current && step < 100; step++) {
@@ -78,13 +90,30 @@ export function simulateIVR(doc, { digits = "", open = true, outcomes = {} } = {
     path.push({ id: current, type: node.type, event: "" });
     if (node.type === "route_queue") return { path, result: `转入队列 ${node.queue_id || "未选择"}` };
     if (node.type === "hangup") return { path, result: "结束通话" };
+    if (node.type === "voicemail") return { path, result: "进入留言" };
     if (node.type === "play") current = node.next;
-    else if (node.type === "time_check") current = open ? node.open : node.closed;
+    else if (node.type === "time_condition") current = open ? node.open : node.closed;
+    else if (node.type === "queue_condition") current = queueBusy ? (node.busy || node.closed) : node.open;
     else if (node.type === "business_action") {
       const outcome = outcomes[node.action];
       path[path.length - 1].event = outcome === undefined ? "业务超时" : `业务结果 ${outcome}`;
       if (outcome !== undefined && !node.choices?.[outcome]) return { path, result: "业务结果未在流程中声明" };
       current = outcome === undefined ? node.default : node.choices[outcome];
+    }
+    else if (node.type === "csat") {
+      const digit = digits[input++];
+      if (digit >= "1" && digit <= "5") {
+        path[path.length - 1].event = `评分 ${digit}`;
+        current = node.next || "";
+        if (!current) return { path, result: "满意度已记录" };
+      } else if (!digit) {
+        path[path.length - 1].event = "超时";
+        current = node.default || "";
+        if (!current) return { path, result: "满意度超时" };
+      } else {
+        path[path.length - 1].event = `无效 ${digit}`;
+        current = node.default || current;
+      }
     }
     else if (node.type === "menu") {
       const digit = digits[input++];

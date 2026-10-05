@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"runtime"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -95,14 +96,34 @@ func (s StatusProvider) snapshot(ctx context.Context) statusResponse {
 	return out
 }
 
-func (s StatusProvider) handleReady(w http.ResponseWriter, r *http.Request) {
-	out := s.snapshot(r.Context())
-	if !out.Ready {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "db_ok": out.DBOK, "switch_ok": out.SwitchOK})
-		return
+// newReadyHandler 缓存就绪探测结果 5 秒，避免高频探针放大到 DB 和 Switch。
+func newReadyHandler(s StatusProvider) http.HandlerFunc {
+	const cacheTTL = 5 * time.Second
+	var (
+		mu     sync.Mutex
+		at     time.Time
+		cached statusResponse
+	)
+	return func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now()
+		mu.Lock()
+		out := cached
+		fresh := !at.IsZero() && now.Sub(at) < cacheTTL
+		mu.Unlock()
+		if !fresh {
+			out = s.snapshot(r.Context())
+			mu.Lock()
+			cached, at = out, now
+			mu.Unlock()
+		}
+		if !out.Ready {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "db_ok": out.DBOK, "switch_ok": out.SwitchOK})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ready": true})
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ready": true})
 }
+
 func (s StatusProvider) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.snapshot(r.Context()))
 }

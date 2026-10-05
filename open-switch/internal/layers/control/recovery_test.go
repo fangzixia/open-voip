@@ -1,4 +1,4 @@
-// 本文件验证recovery的关键行为。
+// 本文件验证 recovery 的关键行为。
 package control
 
 import (
@@ -54,7 +54,7 @@ func (m *memCallEvents) hasType(want string) bool {
 	return false
 }
 
-func TestRecoverActiveCallPreservesRuntime(t *testing.T) {
+func TestRecoverActiveCallHangups(t *testing.T) {
 	svc, media, agents, _ := newTestService("ag1")
 	ctx := context.Background()
 	id, err := svc.StartInbound(ctx, dto.InboundRequest{QueueID: "q1", Caller: "13800000000"})
@@ -71,14 +71,11 @@ func TestRecoverActiveCallPreservesRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	view, err := restarted.GetCall(ctx, id)
-	if err != nil || view.State != stateActive {
-		t.Fatalf("recovery: %+v %v", view, err)
+	if err != nil || view.State != stateEnded {
+		t.Fatalf("recovery should hangup active call: %+v %v", view, err)
 	}
-	if agents.states["ag1"] != "on_call" {
-		t.Fatalf("agent state: %s", agents.states["ag1"])
-	}
-	if !events.hasType("call.media_reconnect_required") {
-		t.Fatal("expected media reconnect event")
+	if events.hasType("call.media_reconnect_required") {
+		t.Fatal("recovery must not emit media reconnect")
 	}
 }
 
@@ -96,13 +93,16 @@ func (c recoveryIVRCfg) GetLatestIVR(context.Context, string) (ports.IVRSnapshot
 func (c recoveryIVRCfg) GetIVRSnapshot(_ context.Context, _ int64, flowID string, _ int) (ports.IVRSnapshot, error) {
 	return ports.IVRSnapshot{FlowID: flowID, Version: 1, PayloadJSON: c.payload}, nil
 }
-func (recoveryIVRCfg) GetBusinessHours(context.Context, string) (ports.BusinessHours, error) {
+func (c recoveryIVRCfg) GetBusinessHours(context.Context, string) (ports.BusinessHours, error) {
 	return ports.BusinessHours{WeekdayHours: "always"}, nil
 }
-func (recoveryIVRCfg) ResolveDID(context.Context, string, string) (ports.DIDRouteSnapshot, error) {
+func (c recoveryIVRCfg) ResolveDID(context.Context, string, string) (ports.DIDRouteSnapshot, error) {
 	return ports.DIDRouteSnapshot{}, nil
 }
 func (recoveryIVRCfg) Now(context.Context) time.Time { return time.Now().UTC() }
+func (c recoveryIVRCfg) QueueStatus(_ context.Context, queueID string) (ports.QueueStatusView, error) {
+	return ports.QueueStatusView{QueueID: queueID}, nil
+}
 
 type memIVRSessions struct {
 	sess ports.IVRSessionView
@@ -130,7 +130,7 @@ func (m memRouting) Get(_ context.Context, callID string) (ports.RoutingSessionV
 	return ports.RoutingSessionView{}, errs.NotFound("路由会话不存在")
 }
 
-func TestRecoverQueuedResumesInsteadOfHangup(t *testing.T) {
+func TestRecoverQueuedCallHangups(t *testing.T) {
 	qID := "q1"
 	cfgVer := int64(1)
 	persist := newFakePersist()
@@ -152,12 +152,12 @@ func TestRecoverQueuedResumesInsteadOfHangup(t *testing.T) {
 		t.Fatal(err)
 	}
 	view, err := svc.GetCall(context.Background(), "q-call")
-	if err != nil || view.State != stateQueued {
-		t.Fatalf("expected queued resumed, got %+v err=%v", view, err)
+	if err != nil || view.State != stateEnded {
+		t.Fatalf("expected queued call hung up, got %+v err=%v", view, err)
 	}
 }
 
-func TestRecoverIVRResumesInsteadOfHangup(t *testing.T) {
+func TestRecoverIVRCallHangups(t *testing.T) {
 	flow := "f1"
 	cfgVer := int64(1)
 	payload := `{"start":"menu","nodes":{"menu":{"type":"menu","timeout_sec":30,"choices":{"1":"end"},"default":"end"},"end":{"type":"hangup"}}}`
@@ -181,8 +181,8 @@ func TestRecoverIVRResumesInsteadOfHangup(t *testing.T) {
 		t.Fatal(err)
 	}
 	view, err := svc.GetCall(context.Background(), "ivr-call")
-	if err != nil || view.State != stateIVR {
-		t.Fatalf("expected ivr resumed, got %+v err=%v", view, err)
+	if err != nil || view.State != stateEnded {
+		t.Fatalf("expected ivr call hung up, got %+v err=%v", view, err)
 	}
 }
 

@@ -21,7 +21,8 @@ func TestSIPDeviceRegisterAndRingOverUDP(t *testing.T) {
 	device := udpSocket(t)
 	deviceAddr := device.LocalAddr().String()
 	cfg := config.SIPConfig{Enabled: true, Listen: listen, ExternalIP: "127.0.0.1", LocalDomain: "call.test", UserAgent: "open-switch", Transport: "udp", LocalRegistrar: true, RTPPortMin: 31000, RTPPortMax: 31100, Devices: []config.SIPDeviceConfig{{Username: "1001", Password: "device-1001-secret", AllowedCIDRs: []string{"127.0.0.1/32"}}}}
-	svc, err := NewService(Options{SIP: cfg, RecordingsDir: t.TempDir()})
+	dir := t.TempDir()
+	svc, err := NewService(Options{SIP: cfg, AudioRecDir: dir, VideoRecDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,11 +3,13 @@ package cdr
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+
+	"uuid"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"uuid"
 
 	"open-call/internal/datetime"
 	"open-call/internal/errs"
@@ -32,6 +34,7 @@ type Item struct {
 	Result       string     `json:"result"`
 	SessionType  string     `json:"session_type"`
 	RecordingIDs []string   `json:"recording_ids"`
+	CsatScore    *int       `json:"csat_score,omitempty"`
 }
 
 // ListResult 分页话单。
@@ -44,6 +47,8 @@ type ListResult struct {
 
 type Filter struct {
 	From, To, QueueID, AgentID, Direction, Result string
+	// Caller 主叫号码子串匹配。
+	Caller string
 }
 
 // RecorderService 实现 CDRRecorderPort 与查询。
@@ -59,7 +64,7 @@ func NewRecorderService(db *gorm.DB) *RecorderService {
 var _ ports.CDRRecorderPort = (*RecorderService)(nil)
 
 // Upsert 以 callID 为键持续补全话单，保留通话从排队到结束的记录。
-func (r *RecorderService) Upsert(ctx context.Context, req ports.CDRWriteRequest) error {
+func (r *RecorderService) Upsert(ctx context.Context, req ports.CDRWriteRequest, switchEventVersion int64) error {
 	ctx = observability.With(ctx, observability.Context{CallID: req.CallID, AgentID: req.AgentID, QueueID: req.QueueID})
 	wait := 0
 	if req.AnsweredAt != nil && !req.StartedAt.IsZero() {
@@ -89,32 +94,49 @@ func (r *RecorderService) Upsert(ctx context.Context, req ports.CDRWriteRequest)
 		agentID = new(req.AgentID)
 	}
 	row := models.CDR{
-		ID:               uuid.New().String(),
-		CallID:           req.CallID,
-		Direction:        req.Direction,
-		QueueID:          queueID,
-		AgentID:          agentID,
-		Caller:           req.Caller,
-		Callee:           req.Callee,
-		SessionType:      string(req.SessionType),
-		Result:           req.Result,
-		StartedAt:        req.StartedAt,
-		AnsweredAt:       req.AnsweredAt,
-		EndedAt:          req.EndedAt,
-		DurationSec:      dur,
-		WaitSec:          wait,
-		VideoStartedAt:   req.VideoStartedAt,
-		VideoUpgradeOk:   req.VideoUpgradeOk,
-		ScreenShareCount: req.ScreenShareCount,
-		CreatedAt:        time.Now().UTC(),
+		ID:                 uuid.New().String(),
+		CallID:             req.CallID,
+		Direction:          req.Direction,
+		QueueID:            queueID,
+		AgentID:            agentID,
+		Caller:             req.Caller,
+		Callee:             req.Callee,
+		SessionType:        string(req.SessionType),
+		Result:             req.Result,
+		StartedAt:          req.StartedAt,
+		AnsweredAt:         req.AnsweredAt,
+		EndedAt:            req.EndedAt,
+		DurationSec:        dur,
+		WaitSec:            wait,
+		VideoStartedAt:     req.VideoStartedAt,
+		VideoUpgradeOk:     req.VideoUpgradeOk,
+		ScreenShareCount:   req.ScreenShareCount,
+		SwitchEventVersion: switchEventVersion,
+		CreatedAt:          time.Now().UTC(),
 	}
 	err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "call_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"direction", "queue_id", "agent_id", "caller", "callee", "session_type",
-			"result", "started_at", "answered_at", "ended_at", "duration_sec", "wait_sec",
-			"video_started_at", "video_upgrade_ok", "screen_share_count",
+		DoUpdates: clause.Assignments(map[string]any{
+			"direction":            gorm.Expr("EXCLUDED.direction"),
+			"queue_id":             gorm.Expr("EXCLUDED.queue_id"),
+			"agent_id":             gorm.Expr("EXCLUDED.agent_id"),
+			"caller":               gorm.Expr("EXCLUDED.caller"),
+			"callee":               gorm.Expr("EXCLUDED.callee"),
+			"session_type":         gorm.Expr("EXCLUDED.session_type"),
+			"result":               gorm.Expr("EXCLUDED.result"),
+			"started_at":           gorm.Expr("EXCLUDED.started_at"),
+			"answered_at":          gorm.Expr("EXCLUDED.answered_at"),
+			"ended_at":             gorm.Expr("EXCLUDED.ended_at"),
+			"duration_sec":         gorm.Expr("EXCLUDED.duration_sec"),
+			"wait_sec":             gorm.Expr("EXCLUDED.wait_sec"),
+			"video_started_at":     gorm.Expr("EXCLUDED.video_started_at"),
+			"video_upgrade_ok":     gorm.Expr("EXCLUDED.video_upgrade_ok"),
+			"screen_share_count":   gorm.Expr("EXCLUDED.screen_share_count"),
+			"switch_event_version": gorm.Expr("EXCLUDED.switch_event_version"),
 		}),
+		Where: clause.Where{Exprs: []clause.Expression{
+			clause.Expr{SQL: "oc_cdr.switch_event_version < ?", Vars: []any{switchEventVersion}},
+		}},
 	}).Create(&row).Error
 	if err != nil {
 		observability.Emit(ctx, "cdr.upsert.failed", map[string]any{"error": err.Error()})
@@ -144,6 +166,9 @@ func (r *RecorderService) query(ctx context.Context, f Filter) (*gorm.DB, error)
 	}
 	if f.Result != "" {
 		q = q.Where("result = ?", f.Result)
+	}
+	if f.Caller != "" {
+		q = q.Where("caller LIKE ?", "%"+escapeLike(f.Caller)+"%")
 	}
 	if f.From != "" {
 		t, err := datetime.Parse(f.From)
@@ -181,6 +206,28 @@ func (r *RecorderService) ListFiltered(ctx context.Context, page, pageSize int, 
 	if err := q.Order("started_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
 		return ListResult{}, err
 	}
+	callIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		callIDs = append(callIDs, row.CallID)
+	}
+	recordings := map[string][]string{}
+	csats := map[string]int{}
+	if len(callIDs) > 0 {
+		var recs []models.Recording
+		if err := r.db.WithContext(ctx).Select("id", "call_id").Where("call_id IN ?", callIDs).Find(&recs).Error; err != nil {
+			return ListResult{}, err
+		}
+		for _, rec := range recs {
+			recordings[rec.CallID] = append(recordings[rec.CallID], rec.ID)
+		}
+		var scores []models.CallCsat
+		if err := r.db.WithContext(ctx).Where("call_id IN ?", callIDs).Find(&scores).Error; err != nil {
+			return ListResult{}, err
+		}
+		for _, c := range scores {
+			csats[c.CallID] = c.Score
+		}
+	}
 	items := make([]Item, 0, len(rows))
 	for _, row := range rows {
 		it := Item{
@@ -203,13 +250,19 @@ func (r *RecorderService) ListFiltered(ctx context.Context, page, pageSize int, 
 		if row.AgentID != nil {
 			it.AgentID = *row.AgentID
 		}
-		_ = r.db.WithContext(ctx).Model(&models.Recording{}).Where("call_id = ?", row.CallID).Pluck("id", &it.RecordingIDs)
-		if it.RecordingIDs == nil {
-			it.RecordingIDs = []string{}
+		if ids := recordings[row.CallID]; ids != nil {
+			it.RecordingIDs = ids
+		}
+		if score, ok := csats[row.CallID]; ok {
+			it.CsatScore = &score
 		}
 		items = append(items, it)
 	}
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 // Stream 逐行读取指定时间范围内的话单，避免导出时一次加载全部记录。

@@ -34,6 +34,7 @@ type QueueConfig struct {
 	ListenAnnounce        bool     `json:"listen_announce"`
 	SkillIDs              []string `json:"skill_ids,omitempty"`
 	AgentIDs              []string `json:"agent_ids,omitempty"`
+	PostCallIVRFlowID     string   `json:"post_call_ivr_flow_id,omitempty"`
 }
 
 type SkillConfig struct {
@@ -139,6 +140,7 @@ type CallCenterAdminPort interface {
 
 	ListIVRFlows(context.Context) ([]IVRPublishedView, error)
 	GetIVRFlow(context.Context, string) (IVRPublishedView, error)
+	ValidateIVRFlowPayload(context.Context, string) error
 	UpsertIVRFlow(context.Context, string, string) (IVRPublishedView, error)
 	DeleteIVRFlow(context.Context, string) error
 
@@ -146,5 +148,6 @@ type CallCenterAdminPort interface {
 	CheckOut(context.Context, string) error
 	SetPresence(context.Context, string, string, string) (AgentSessionView, error)
 	AgentSession(context.Context, string) (AgentSessionView, error)
+	ListAgentSessions(context.Context) ([]AgentSessionView, error)
 	QueueStatus(context.Context, string) (QueueStatusView, error)
 }
