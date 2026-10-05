@@ -49,7 +49,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 				if len(pcmu) > 0 {
 					r.mixer.ingest(fromLeg, pcmu)
 					for id, p := range r.peers {
-						if id == fromLeg || p.held || !r.canForward(fromLeg, id) {
+						if id == fromLeg || p.held || !r.mediaForwardAllowed(fromLeg, id) {
 							continue
 						}
 						mixed := pcmToPCMU(r.mixer.mixExcept(id))
@@ -61,7 +61,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 						}
 					}
 					for rt := range r.sipRTP {
-						if rt.blocked() || !r.canForward(fromLeg, rt.legID) {
+						if rt.blocked() || !r.mediaForwardAllowed(fromLeg, rt.legID) {
 							continue
 						}
 						mixed := pcmToPCMU(r.mixer.mixExcept(rt.legID))
@@ -76,7 +76,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 			continue
 		}
 		for id, p := range r.peers {
-			if id == fromLeg || muted || held || p.held || !r.canForward(fromLeg, id) {
+			if id == fromLeg || muted || held || p.held || !r.mediaForwardAllowed(fromLeg, id) {
 				continue
 			}
 			var out *webrtc.TrackLocalStaticRTP

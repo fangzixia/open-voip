@@ -68,6 +68,7 @@ func Run(configPath string) error {
 		ICE: cfg.ICE, TURN: cfg.TURN,
 		AudioRecDir: cfg.Recordings.AudioDirPath(), VideoRecDir: cfg.Recordings.VideoDirPath(),
 		VideoFormat: cfg.Recordings.Video.Format, FFmpegPath: cfg.Recordings.Video.FFmpegPath, SIP: cfg.SIP,
+		Media: cfg.Media,
 	})
 	if err != nil {
 		return fmt.Errorf("媒体层: %w", err)

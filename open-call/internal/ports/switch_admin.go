@@ -26,6 +26,7 @@ type SwitchQueueConfig struct {
 	IVRFlowID             string   `json:"ivr_flow_id,omitempty"`
 	PostCallIVRFlowID     string   `json:"post_call_ivr_flow_id,omitempty"`
 	WaitPrompt            string   `json:"wait_prompt,omitempty"`
+	AudioProfile          string   `json:"audio_profile,omitempty"`
 	AnnounceRecording     bool     `json:"announce_recording"`
 	PriorityEnabled       bool     `json:"priority_enabled"`
 	BusinessHoursJSON     string   `json:"business_hours_json,omitempty"`

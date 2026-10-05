@@ -306,7 +306,7 @@ func insertBundle(tx *gorm.DB, version int64, bundle ports.ConfigBundle, now tim
 		}
 	}
 	for _, in := range bundle.Queues {
-		row := models.Queue{ConfigVersion: version, ID: in.ID, Name: in.Name, VideoEnabled: in.VideoEnabled, MaxWaitSec: in.MaxWaitSec, DispatchStrategy: in.DispatchStrategy, RecordingPolicy: in.RecordingPolicy, OverflowAction: in.OverflowAction, WaitPrompt: in.WaitPrompt, AnnounceRecording: in.AnnounceRecording, PriorityEnabled: in.PriorityEnabled, BusinessHoursJSON: in.BusinessHoursJSON, AfterHoursAction: in.AfterHoursAction, ForceHangupOnCheckout: in.ForceHangupOnCheckout, ListenAnnounce: in.ListenAnnounce, CreatedAt: now, UpdatedAt: now}
+		row := models.Queue{ConfigVersion: version, ID: in.ID, Name: in.Name, VideoEnabled: in.VideoEnabled, MaxWaitSec: in.MaxWaitSec, DispatchStrategy: in.DispatchStrategy, RecordingPolicy: in.RecordingPolicy, OverflowAction: in.OverflowAction, WaitPrompt: in.WaitPrompt, AudioProfile: in.AudioProfile, AnnounceRecording: in.AnnounceRecording, PriorityEnabled: in.PriorityEnabled, BusinessHoursJSON: in.BusinessHoursJSON, AfterHoursAction: in.AfterHoursAction, ForceHangupOnCheckout: in.ForceHangupOnCheckout, ListenAnnounce: in.ListenAnnounce, CreatedAt: now, UpdatedAt: now}
 		if in.OverflowQueueID != "" {
 			row.OverflowQueueID = &in.OverflowQueueID
 		}

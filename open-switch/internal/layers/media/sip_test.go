@@ -130,21 +130,30 @@ func TestRequire100rel(t *testing.T) {
 }
 
 func TestBuildAnswerSDPSubset(t *testing.T) {
-	offer := parseSDP("m=audio 4000 RTP/AVP 0 8 101\r\nc=IN IP4 1.1.1.1\r\n")
-	ans := buildAnswerSDP("127.0.0.1", 20000, offer)
-	if !strings.Contains(ans, "m=audio 20000 RTP/AVP 0 101") {
-		t.Fatalf("expected single PCMU + 101: %s", ans)
+	offerPCMA := parseSDP("m=audio 4000 RTP/AVP 8 0 101\r\nc=IN IP4 1.1.1.1\r\n")
+	ans := buildAnswerSDP("127.0.0.1", 20000, offerPCMA, false, false)
+	if !strings.Contains(ans, "m=audio 20000 RTP/AVP 8") {
+		t.Fatalf("expected PCMA when listed first in offer: %s", ans)
 	}
-	if strings.Contains(ans, "PCMA/8000") {
+	if strings.Contains(ans, "rtpmap:0") {
+		t.Fatal("answer must not include unselected PCMU")
+	}
+	offerPCMU := parseSDP("m=audio 4000 RTP/AVP 0 8 101\r\nc=IN IP4 1.1.1.1\r\n")
+	ans0 := buildAnswerSDP("127.0.0.1", 20001, offerPCMU, false, false)
+	if !strings.Contains(ans0, "m=audio 20001 RTP/AVP 0 101") {
+		t.Fatalf("expected single PCMU + 101: %s", ans0)
+	}
+	if strings.Contains(ans0, "PCMA/8000") {
 		t.Fatal("answer must not include unselected PCMA")
 	}
 	pcma := parseSDP("m=audio 4000 RTP/AVP 8\r\n")
-	ans8 := buildAnswerSDP("127.0.0.1", 20001, pcma)
+	ans8 := buildAnswerSDP("127.0.0.1", 20001, pcma, false, false)
 	if !strings.Contains(ans8, "RTP/AVP 8") || strings.Contains(ans8, "rtpmap:0") {
 		t.Fatalf("pcma answer: %s", ans8)
 	}
-	if buildAnswerSDP("127.0.0.1", 1, parseSDP("m=audio 9 RTP/AVP 9\r\n")) != "" {
-		t.Fatal("non-G.711 offer must yield empty answer")
+	ans722 := buildAnswerSDP("127.0.0.1", 1, parseSDP("m=audio 9 RTP/AVP 9\r\n"), true, false)
+	if !strings.Contains(ans722, "G722") {
+		t.Fatalf("expected G722 answer: %s", ans722)
 	}
 }
 

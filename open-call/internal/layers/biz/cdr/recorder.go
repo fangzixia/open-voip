@@ -3,6 +3,7 @@ package cdr
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,23 +19,35 @@ import (
 	"open-call/internal/store/models"
 )
 
+// RecordingSummary 通话关联的录音元数据（嵌在话单列表项中）。
+type RecordingSummary struct {
+	ID        string     `json:"id"`
+	CallID    string     `json:"call_id"`
+	MediaType string     `json:"media_type"`
+	Format    string     `json:"format"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	FileSize  int64      `json:"file_size"`
+}
+
 // Item 话单列表项。
 type Item struct {
-	CallID       string     `json:"call_id"`
-	Direction    string     `json:"direction"`
-	Caller       string     `json:"caller"`
-	Callee       string     `json:"callee"`
-	QueueID      string     `json:"queue_id,omitempty"`
-	AgentID      string     `json:"agent_id,omitempty"`
-	StartedAt    time.Time  `json:"started_at"`
-	AnsweredAt   *time.Time `json:"answered_at,omitempty"`
-	EndedAt      *time.Time `json:"ended_at,omitempty"`
-	DurationSec  int        `json:"duration_sec"`
-	WaitSec      int        `json:"wait_sec"`
-	Result       string     `json:"result"`
-	SessionType  string     `json:"session_type"`
-	RecordingIDs []string   `json:"recording_ids"`
-	CsatScore    *int       `json:"csat_score,omitempty"`
+	CallID       string             `json:"call_id"`
+	Direction    string             `json:"direction"`
+	Caller       string             `json:"caller"`
+	Callee       string             `json:"callee"`
+	QueueID      string             `json:"queue_id,omitempty"`
+	AgentID      string             `json:"agent_id,omitempty"`
+	StartedAt    time.Time          `json:"started_at"`
+	AnsweredAt   *time.Time         `json:"answered_at,omitempty"`
+	EndedAt      *time.Time         `json:"ended_at,omitempty"`
+	DurationSec  int                `json:"duration_sec"`
+	WaitSec      int                `json:"wait_sec"`
+	Result       string             `json:"result"`
+	SessionType  string             `json:"session_type"`
+	RecordingIDs []string           `json:"recording_ids,omitempty"`
+	Recordings   []RecordingSummary `json:"recordings,omitempty"`
+	CsatScore    *int               `json:"csat_score,omitempty"`
 }
 
 // ListResult 分页话单。
@@ -173,14 +186,14 @@ func (r *RecorderService) query(ctx context.Context, f Filter) (*gorm.DB, error)
 	if f.From != "" {
 		t, err := datetime.Parse(f.From)
 		if err != nil {
-			return nil, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间")
+			return nil, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (本地时间)")
 		}
 		q = q.Where("started_at >= ?", t)
 	}
 	if f.To != "" {
 		t, err := datetime.Parse(f.To)
 		if err != nil {
-			return nil, errs.InvalidRequest("to 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间")
+			return nil, errs.InvalidRequest("to 必须为 YYYY-MM-DD HH:MM:SS (本地时间)")
 		}
 		q = q.Where("started_at <= ?", t)
 	}
@@ -210,15 +223,15 @@ func (r *RecorderService) ListFiltered(ctx context.Context, page, pageSize int, 
 	for _, row := range rows {
 		callIDs = append(callIDs, row.CallID)
 	}
-	recordings := map[string][]string{}
+	recordings := map[string][]RecordingSummary{}
 	csats := map[string]int{}
 	if len(callIDs) > 0 {
 		var recs []models.Recording
-		if err := r.db.WithContext(ctx).Select("id", "call_id").Where("call_id IN ?", callIDs).Find(&recs).Error; err != nil {
+		if err := r.db.WithContext(ctx).Where("call_id IN ?", callIDs).Order("started_at").Find(&recs).Error; err != nil {
 			return ListResult{}, err
 		}
 		for _, rec := range recs {
-			recordings[rec.CallID] = append(recordings[rec.CallID], rec.ID)
+			recordings[rec.CallID] = append(recordings[rec.CallID], recordingSummary(rec))
 		}
 		var scores []models.CallCsat
 		if err := r.db.WithContext(ctx).Where("call_id IN ?", callIDs).Find(&scores).Error; err != nil {
@@ -250,8 +263,12 @@ func (r *RecorderService) ListFiltered(ctx context.Context, page, pageSize int, 
 		if row.AgentID != nil {
 			it.AgentID = *row.AgentID
 		}
-		if ids := recordings[row.CallID]; ids != nil {
-			it.RecordingIDs = ids
+		if recs := recordings[row.CallID]; len(recs) > 0 {
+			it.Recordings = recs
+			it.RecordingIDs = make([]string, len(recs))
+			for i, rec := range recs {
+				it.RecordingIDs[i] = rec.ID
+			}
 		}
 		if score, ok := csats[row.CallID]; ok {
 			it.CsatScore = &score
@@ -263,6 +280,18 @@ func (r *RecorderService) ListFiltered(ctx context.Context, page, pageSize int, 
 
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+func recordingSummary(r models.Recording) RecordingSummary {
+	return RecordingSummary{
+		ID:        r.ID,
+		CallID:    r.CallID,
+		MediaType: r.MediaType,
+		Format:    strings.TrimPrefix(strings.ToLower(filepath.Ext(r.FilePath)), "."),
+		StartedAt: r.StartedAt,
+		EndedAt:   r.EndedAt,
+		FileSize:  r.FileSize,
+	}
 }
 
 // Stream 逐行读取指定时间范围内的话单，避免导出时一次加载全部记录。

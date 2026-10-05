@@ -24,6 +24,8 @@ type QueueSnapshot struct {
 	OverflowQueueID string `json:"overflow_queue_id"`
 	// WaitPrompt 排队文案。
 	WaitPrompt string `json:"wait_prompt"`
+	// AudioProfile 音质档位：narrowband | wideband | hd_webrtc。
+	AudioProfile string `json:"audio_profile,omitempty"`
 	// AnnounceRecording 是否告知录音。
 	AnnounceRecording bool `json:"announce_recording"`
 	// SkillIDs 所需技能。

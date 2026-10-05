@@ -13,11 +13,11 @@ import (
 func (d RouterDeps) handleCDRExport(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if _, err := datetime.Parse(q.Get("from")); err != nil {
-		writeErr(w, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间"))
+		writeErr(w, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (本地时间)"))
 		return
 	}
 	if _, err := datetime.Parse(q.Get("to")); err != nil {
-		writeErr(w, errs.InvalidRequest("to 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间"))
+		writeErr(w, errs.InvalidRequest("to 必须为 YYYY-MM-DD HH:MM:SS (本地时间)"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv")

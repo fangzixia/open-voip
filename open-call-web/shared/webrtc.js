@@ -30,7 +30,11 @@ export function isWebRTCSupported() {
 
 /** 将可用设备按输入音频、输入视频和输出音频分组。 */
 export async function listMediaDevices() {
-  const devices = await navigator.mediaDevices.enumerateDevices();
+  const media = typeof navigator !== "undefined" ? navigator.mediaDevices : null;
+  if (!media?.enumerateDevices) {
+    return { audioInputs: [], videoInputs: [], audioOutputs: [] };
+  }
+  const devices = await media.enumerateDevices();
   return {
     audioInputs: devices.filter((d) => d.kind === "audioinput"),
     videoInputs: devices.filter((d) => d.kind === "videoinput"),

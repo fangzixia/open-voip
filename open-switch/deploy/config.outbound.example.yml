@@ -1,0 +1,28 @@
+# PSTN 外呼片段：合并到生产 config.yml 的 sip 段（勿提交真实密码到 Git）
+# 路线 A：scripts/deploy/patch_open_switch_trunk.py 写入 trunks[0]
+# 路线 B（模组代拨）：设 gateway_device，trunks 可留空；模组须已向本机 REGISTER
+
+sip:
+  enabled: true
+  listen: "0.0.0.0:5060"
+  external_ip: "YOUR_PUBLIC_IP"
+  local_domain: "YOUR_PUBLIC_IP"
+  rtp_port_min: 20002
+  rtp_port_max: 20100
+  local_registrar: true
+  devices:
+    - username: "100163800"
+      password: "REPLACE_TRUNK_OR_DEVICE_PASSWORD"
+      allowed_cidrs: ["0.0.0.0/0"]
+  gateway_device: "100163800"
+  trunks: []
+  # 经典中继（路线 A）示例 — 与 gateway 二选一：
+  # trunks:
+  #   - id: default
+  #     host: "CARRIER_SIP_HOST"
+  #     port: 5060
+  #     username: "100163800"
+  #     password: "REPLACE_TRUNK_PASSWORD"
+  #     register: true
+  #     from_user: "19159001193"
+  #     codecs: ["PCMA", "PCMU"]

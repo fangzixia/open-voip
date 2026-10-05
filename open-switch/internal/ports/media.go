@@ -34,10 +34,16 @@ type MediaPort interface {
 	InjectAudio(ctx context.Context, callID, botLegID string, source dto.AudioSource) error
 	// StopInjectedAudio 停止当前队列或 IVR 放音。
 	StopInjectedAudio(ctx context.Context, callID string) error
+	// BeginQueueAnswerHandoff 排队接听：保留等待音 grace 后再淡出停止，并短暂屏蔽坐席→主叫媒体。
+	BeginQueueAnswerHandoff(ctx context.Context, callID string, grace, fade time.Duration) error
 	// SubscribeDTMF 订阅 leg 上的 DTMF 事件。
 	SubscribeDTMF(ctx context.Context, callID, legID string, handler DTMFHandler) error
 	// StartRecording 按策略开始录制，返回 recordingID。
 	StartRecording(ctx context.Context, callID string, policy dto.RecordingPolicy) (recordingID string, err error)
+	// SetRecordingMixInbound 控制 SIP 混音录音是否收录对端上行（IVR 阶段通常为 false）。
+	SetRecordingMixInbound(ctx context.Context, callID string, enable bool) error
+	// SetCallAudioProfile 设置通话音质档位（narrowband | wideband | hd_webrtc）。
+	SetCallAudioProfile(ctx context.Context, callID, profile string) error
 	// StopRecording 停止录制并落盘。
 	StopRecording(ctx context.Context, recordingID string) error
 	// OriginateSIP 发起 SIP leg（PSTN 可选模块）。
@@ -57,4 +63,6 @@ type MediaPort interface {
 	// DeferUntilAnswered 呼入 SIP 腿尚未发出 200 OK 时登记 fn 在应答后异步执行并返回 true；
 	// 无需等待时返回 false 且不调用 fn。呼叫在应答前失败时登记的 fn 被丢弃。
 	DeferUntilAnswered(callID string, fn func()) bool
+	// PromptDuration 返回 IVR 素材（WAV）播放时长；素材无效时返回错误。
+	PromptDuration(ctx context.Context, fileRef string) (time.Duration, error)
 }

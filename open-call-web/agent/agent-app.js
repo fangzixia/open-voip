@@ -147,6 +147,7 @@ export class AgentApp extends LitElement {
   updated(changed) {
     if (changed.has("workspaceActive") && this.workspaceActive) {
       this.feedback.activate();
+      if (this.embedded && !this.me && getAccessToken()) void this.#restore();
     }
   }
 
@@ -176,6 +177,9 @@ export class AgentApp extends LitElement {
       } catch (e) {
         clearAccessToken();
         this.me = null;
+        if (this.embedded) {
+          this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true }));
+        }
         throw e;
       }
     });
@@ -423,15 +427,17 @@ export class AgentApp extends LitElement {
       const leg = (call.legs || []).find((l) => l.agent_id === this.me?.id);
       setCallContext({ call_id: call.id, leg_id: leg?.id || "", queue_id: call.queue_id || "" });
       reportEvent("call.outbound_created", { state: call.state });
-      if (call.state === "active" && leg) {
+      if (leg && (call.state === "active" || call.state === "ringing")) {
         await this.media.start({
           callId: call.id,
           legId: leg.id,
           video: false,
           audioDeviceId: this.audioDeviceId,
         });
-        this.media.bindVideos();
-        this.#startTimer();
+        if (call.state === "active") {
+          this.media.bindVideos();
+          this.#startTimer();
+        }
       }
     });
   }

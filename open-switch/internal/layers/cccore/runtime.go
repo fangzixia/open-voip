@@ -44,7 +44,7 @@ func (s *Service) GetQueue(ctx context.Context, queueID string) (ports.QueueSnap
 	if err := s.db.WithContext(ctx).Model(&models.QueueSkill{}).Where("config_version = ? AND queue_id = ?", version, queueID).Pluck("skill_id", &skillIDs).Error; err != nil {
 		return ports.QueueSnapshot{}, err
 	}
-	out := ports.QueueSnapshot{ConfigVersion: version, ID: row.ID, Name: row.Name, VideoEnabled: row.VideoEnabled, MaxWaitSec: row.MaxWaitSec, IVRFlowID: derefString(row.IVRFlowID), PostCallIVRFlowID: derefString(row.PostCallIVRFlowID), OverflowAction: row.OverflowAction, OverflowQueueID: derefString(row.OverflowQueueID), WaitPrompt: row.WaitPrompt, AnnounceRecording: row.AnnounceRecording, SkillIDs: skillIDs, AfterHoursAction: row.AfterHoursAction, ForceHangupOnCheckout: row.ForceHangupOnCheckout, ListenAnnounce: row.ListenAnnounce, PriorityEnabled: row.PriorityEnabled}
+	out := ports.QueueSnapshot{ConfigVersion: version, ID: row.ID, Name: row.Name, VideoEnabled: row.VideoEnabled, MaxWaitSec: row.MaxWaitSec, IVRFlowID: derefString(row.IVRFlowID), PostCallIVRFlowID: derefString(row.PostCallIVRFlowID), OverflowAction: row.OverflowAction, OverflowQueueID: derefString(row.OverflowQueueID), WaitPrompt: row.WaitPrompt, AudioProfile: row.AudioProfile, AnnounceRecording: row.AnnounceRecording, SkillIDs: skillIDs, AfterHoursAction: row.AfterHoursAction, ForceHangupOnCheckout: row.ForceHangupOnCheckout, ListenAnnounce: row.ListenAnnounce, PriorityEnabled: row.PriorityEnabled}
 	return out, nil
 }
 

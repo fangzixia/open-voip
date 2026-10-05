@@ -167,6 +167,8 @@ func (f *fakeAgents) SetCallState(_ context.Context, _ string, agentID, from, to
 }
 
 type fakeMedia struct {
+	handoffs      int
+	stopInjected  int
 	created    bool
 	closed     bool
 	starts     int
@@ -202,10 +204,21 @@ func (f *fakeMedia) InjectAudio(context.Context, string, string, dto.AudioSource
 	f.injects++
 	return nil
 }
-func (f *fakeMedia) StopInjectedAudio(context.Context, string) error { return nil }
+func (f *fakeMedia) StopInjectedAudio(context.Context, string) error {
+	f.stopInjected++
+	return nil
+}
+func (f *fakeMedia) BeginQueueAnswerHandoff(context.Context, string, time.Duration, time.Duration) error {
+	f.handoffs++
+	return nil
+}
 func (f *fakeMedia) SubscribeDTMF(context.Context, string, string, ports.DTMFHandler) error {
 	return nil
 }
+func (f *fakeMedia) SetRecordingMixInbound(context.Context, string, bool) error { return nil }
+
+func (f *fakeMedia) SetCallAudioProfile(context.Context, string, string) error { return nil }
+
 func (f *fakeMedia) StartRecording(_ context.Context, _ string, policy dto.RecordingPolicy) (string, error) {
 	f.starts++
 	f.lastPolicy = policy
@@ -231,6 +244,10 @@ func (f *fakeMedia) SendDTMF(context.Context, string, string, dto.DTMFDigit) err
 }
 func (f *fakeMedia) PrepareSIP(string)   {}
 func (f *fakeMedia) UnbridgeLegs(string) {}
+func (f *fakeMedia) PromptDuration(context.Context, string) (time.Duration, error) {
+	return 3 * time.Second, nil
+}
+
 func (f *fakeMedia) DeferUntilAnswered(_ string, fn func()) bool {
 	if f.holdAnswer {
 		f.answerFns = append(f.answerFns, fn)
@@ -306,6 +323,25 @@ func TestQueuedCustomerCanJoinWaitingMedia(t *testing.T) {
 	}
 }
 
+func TestAgentMayJoinOutboundRinging(t *testing.T) {
+	svc, _, _, _ := newTestService("ag1")
+	view := ports.CallView{
+		State:     stateRinging,
+		Direction: "outbound",
+		AgentID:   "ag1",
+		Legs: []ports.LegView{
+			{ID: "agent-leg", Role: dto.LegRoleAgent, AgentID: "ag1"},
+			{ID: "pstn-leg", Role: dto.LegRolePSTN},
+		},
+	}
+	if !svc.agentMayJoinOutboundRinging(view, "agent-leg") {
+		t.Fatal("outbound agent should join while ringing")
+	}
+	if svc.agentMayJoinOutboundRinging(view, "pstn-leg") {
+		t.Fatal("pstn leg should not use agent pre-join rule")
+	}
+}
+
 func TestInboundAnswerHangup(t *testing.T) {
 	svc, media, agents, ev := newTestService("ag1")
 	ctx := context.Background()
@@ -366,7 +402,7 @@ func TestDeclineRequeue(t *testing.T) {
 }
 
 func TestDoubleAnswerIdempotent(t *testing.T) {
-	svc, _, _, _ := newTestService("ag1")
+	svc, media, _, _ := newTestService("ag1")
 	ctx := context.Background()
 	id, err := svc.StartInbound(ctx, dto.InboundRequest{QueueID: "q1"})
 	if err != nil {
@@ -374,6 +410,9 @@ func TestDoubleAnswerIdempotent(t *testing.T) {
 	}
 	if err := svc.Answer(ctx, id, "ag1"); err != nil {
 		t.Fatal(err)
+	}
+	if media.handoffs != 1 || media.stopInjected != 0 {
+		t.Fatalf("queue answer: handoffs=%d stopInjected=%d", media.handoffs, media.stopInjected)
 	}
 	err = svc.Answer(ctx, id, "ag1")
 	if err != nil {

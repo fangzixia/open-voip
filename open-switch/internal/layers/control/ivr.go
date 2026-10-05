@@ -327,6 +327,11 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 	}
 	if node.Type == "play" || node.Type == "menu" || node.Type == "csat" {
 		seconds := node.TimeoutSec
+		if node.Type == "play" && node.File != "" && s.deps.Media != nil {
+			if d, err := s.deps.Media.PromptDuration(ctx, node.File); err == nil && d > 0 {
+				seconds = playNodeWaitSeconds(seconds, d)
+			}
+		}
 		if seconds == 0 {
 			switch node.Type {
 			case "menu", "csat":
@@ -593,4 +598,17 @@ func (s *Service) routeQueue(ctx context.Context, callID, queueID string) error 
 	}
 	s.mu.Unlock()
 	return s.enterQueue(ctx, callID)
+}
+
+// playNodeWaitSeconds 保证放音节点等待时间覆盖素材时长（含异步开播与尾帧余量）。
+func playNodeWaitSeconds(configuredSec int, promptDur time.Duration) int {
+	need := promptDur + 600*time.Millisecond
+	minSec := int((need + time.Second - 1) / time.Second)
+	if minSec < 1 {
+		minSec = 1
+	}
+	if configuredSec < minSec {
+		return minSec
+	}
+	return configuredSec
 }

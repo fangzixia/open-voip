@@ -27,6 +27,7 @@ type DTO struct {
 	IVRFlowID             string   `json:"ivr_flow_id,omitempty"`
 	PostCallIVRFlowID     string   `json:"post_call_ivr_flow_id,omitempty"`
 	WaitPrompt            string   `json:"wait_prompt,omitempty"`
+	AudioProfile          string   `json:"audio_profile,omitempty"`
 	AnnounceRecording     bool     `json:"announce_recording"`
 	PriorityEnabled       bool     `json:"priority_enabled"`
 	SkillIDs              []string `json:"skill_ids,omitempty"`
@@ -48,6 +49,7 @@ type CreateInput struct {
 	IVRFlowID             string   `json:"ivr_flow_id"`
 	PostCallIVRFlowID     string   `json:"post_call_ivr_flow_id"`
 	WaitPrompt            string   `json:"wait_prompt"`
+	AudioProfile          string   `json:"audio_profile"`
 	AnnounceRecording     bool     `json:"announce_recording"`
 	PriorityEnabled       bool     `json:"priority_enabled"`
 	SkillIDs              []string `json:"skill_ids"`
@@ -69,6 +71,7 @@ type UpdateInput struct {
 	IVRFlowID             *string   `json:"ivr_flow_id"`
 	PostCallIVRFlowID     *string   `json:"post_call_ivr_flow_id"`
 	WaitPrompt            *string   `json:"wait_prompt"`
+	AudioProfile          *string   `json:"audio_profile"`
 	AnnounceRecording     *bool     `json:"announce_recording"`
 	PriorityEnabled       *bool     `json:"priority_enabled"`
 	SkillIDs              *[]string `json:"skill_ids"`
@@ -165,6 +168,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	if err := validateQueueValues(in.RecordingPolicy, in.OverflowPolicy, in.AfterHoursAction, in.BusinessHoursJSON); err != nil {
 		return DTO{}, err
 	}
+	if err := validateAudioProfile(in.AudioProfile); err != nil {
+		return DTO{}, err
+	}
 	cfg := createToSwitch(in)
 	cfg.ID = uuid.New().String()
 	if err := s.validateReferences(ctx, cfg.ID, in.OverflowQueueID, in.IVRFlowID, in.PostCallIVRFlowID, in.SkillIDs); err != nil {
@@ -215,6 +221,9 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 	if in.WaitPrompt != nil {
 		merged.WaitPrompt = *in.WaitPrompt
 	}
+	if in.AudioProfile != nil {
+		merged.AudioProfile = strings.TrimSpace(*in.AudioProfile)
+	}
 	if in.AnnounceRecording != nil {
 		merged.AnnounceRecording = *in.AnnounceRecording
 	}
@@ -248,6 +257,9 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		merged.SkillIDs = skills
 	}
 	if err := validateQueueValues(merged.RecordingPolicy, merged.OverflowAction, merged.AfterHoursAction, merged.BusinessHoursJSON); err != nil {
+		return DTO{}, err
+	}
+	if err := validateAudioProfile(merged.AudioProfile); err != nil {
 		return DTO{}, err
 	}
 	if err := s.validateReferences(ctx, id, merged.OverflowQueueID, merged.IVRFlowID, merged.PostCallIVRFlowID, skills); err != nil {
@@ -322,6 +334,14 @@ func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error
 		return []string{}, nil
 	}
 	return q.AgentIDs, nil
+}
+
+func validateAudioProfile(profile string) error {
+	p := strings.TrimSpace(profile)
+	if p == "" || p == "narrowband" || p == "wideband" || p == "hd_webrtc" {
+		return nil
+	}
+	return errs.InvalidRequest("audio_profile 须为 narrowband、wideband 或 hd_webrtc")
 }
 
 func validateQueueValues(recording, overflow, after, hours string) error {

@@ -35,6 +35,8 @@ type QueueConfig struct {
 	SkillIDs              []string `json:"skill_ids,omitempty"`
 	AgentIDs              []string `json:"agent_ids,omitempty"`
 	PostCallIVRFlowID     string   `json:"post_call_ivr_flow_id,omitempty"`
+	// AudioProfile narrowband | wideband | hd_webrtc
+	AudioProfile string `json:"audio_profile,omitempty"`
 }
 
 type SkillConfig struct {

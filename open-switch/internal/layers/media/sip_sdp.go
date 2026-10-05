@@ -76,13 +76,15 @@ func viaWithRport(via string, raddr *net.UDPAddr) string {
 }
 
 type sdpMedia struct {
-	IP    string
-	Port  int
-	Types []int
+	IP     string
+	Port   int
+	Types  []int
+	opusPT int // 动态 PT；-1 表示 offer 未含 Opus
 }
 
 func parseSDP(body string) sdpMedia {
 	var out sdpMedia
+	out.opusPT = -1
 	sessIP := ""
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
@@ -106,6 +108,19 @@ func parseSDP(body string) sdpMedia {
 				if n, err := strconv.Atoi(f[i]); err == nil {
 					out.Types = append(out.Types, n)
 				}
+			}
+		case strings.HasPrefix(line, "a=rtpmap:"):
+			rest := strings.TrimPrefix(line, "a=rtpmap:")
+			f := strings.Fields(rest)
+			if len(f) < 2 {
+				continue
+			}
+			pt, err := strconv.Atoi(f[0])
+			if err != nil {
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(f[1]), "opus/") {
+				out.opusPT = pt
 			}
 		}
 	}
@@ -131,34 +146,82 @@ func (m sdpMedia) hasG711() bool {
 	return m.hasPT(0) || m.hasPT(8)
 }
 
-func (m sdpMedia) preferG711() uint8 {
-	if m.hasPT(0) || len(m.Types) == 0 {
-		return 0
+func (m sdpMedia) hasAudioCodec() bool {
+	if len(m.Types) == 0 {
+		return true
 	}
-	if m.hasPT(8) {
-		return 8
+	for _, t := range m.Types {
+		if t == 0 || t == 8 || t == 9 {
+			return true
+		}
+	}
+	if m.opusPT >= 0 {
+		for _, t := range m.Types {
+			if t == m.opusPT {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m sdpMedia) negotiateCodec(preferWideband, preferOpus bool) (sipAudioCodec, uint8) {
+	if preferOpus && m.opusPT >= 0 && m.hasPT(m.opusPT) {
+		return sipCodecOpus, uint8(m.opusPT)
+	}
+	if preferWideband && m.hasPT(9) {
+		return sipCodecG722, 9
+	}
+	pt := m.preferG711()
+	return codecFromPT(pt), pt
+}
+
+func (m sdpMedia) preferG711() uint8 {
+	for _, t := range m.Types {
+		if t == 8 {
+			return 8
+		}
+		if t == 0 {
+			return 0
+		}
+	}
+	if len(m.Types) == 0 {
+		return 0
 	}
 	return 0
 }
 
 func buildAudioSDP(ip string, port int, codecs []string) string {
-	offerU, offerA := true, true
+	offerU, offerA, offer722, offerOpus := true, true, false, false
 	if len(codecs) > 0 {
-		offerU, offerA = false, false
+		offerU, offerA, offer722, offerOpus = false, false, false, false
 		for _, c := range codecs {
 			switch strings.ToUpper(strings.TrimSpace(c)) {
 			case "PCMU":
 				offerU = true
 			case "PCMA":
 				offerA = true
+			case "G722":
+				offer722 = true
+			case "OPUS":
+				offerOpus = true
 			}
 		}
 	}
-	if !offerU && !offerA {
+	if !offerU && !offerA && !offer722 && !offerOpus {
 		offerU = true
 	}
-	pts := make([]string, 0, 3)
+	pts := make([]string, 0, 6)
 	var b strings.Builder
+	if offerOpus {
+		pts = append(pts, "111")
+		b.WriteString("a=rtpmap:111 opus/48000/2\r\n")
+		b.WriteString("a=fmtp:111 maxplaybackrate=48000; sprop-maxcapturerate=48000; stereo=0; useinbandfec=1; maxaveragebitrate=96000\r\n")
+	}
+	if offer722 {
+		pts = append(pts, "9")
+		b.WriteString("a=rtpmap:9 G722/8000\r\n")
+	}
 	if offerU {
 		pts = append(pts, "0")
 		b.WriteString("a=rtpmap:0 PCMU/8000\r\n")
@@ -184,17 +247,34 @@ func buildPCMUSDP(ip string, port int) string {
 	return buildAudioSDP(ip, port, []string{"PCMU", "PCMA"})
 }
 
-// buildAnswerSDP 按 RFC 3264 对 offer 取子集：只答一个 G.711 PT，telephone-event 仅在 offer 中出现时带回。
-func buildAnswerSDP(ip string, port int, offer sdpMedia) string {
-	if !offer.hasG711() {
+func (u *sipUA) buildAnswerForCall(callID string, rtpPort int, offer sdpMedia) string {
+	preferWB := u.cfg.PreferWideband
+	preferOpus := false
+	if u.media != nil {
+		wb, opus := u.media.sdpNegotiatePrefs(callID)
+		preferWB = preferWB || wb
+		preferOpus = opus
+	}
+	return buildAnswerSDP(u.cfg.AdvertiseHost(), rtpPort, offer, preferWB, preferOpus)
+}
+
+// buildAnswerSDP 按 RFC 3264 对 offer 取子集：应答单一音频 PT，telephone-event 仅在 offer 中出现时带回。
+func buildAnswerSDP(ip string, port int, offer sdpMedia, preferWideband, preferOpus bool) string {
+	if !offer.hasAudioCodec() {
 		return ""
 	}
-	pt := offer.preferG711()
+	codec, pt := offer.negotiateCodec(preferWideband, preferOpus)
 	var b strings.Builder
 	pts := []string{strconv.Itoa(int(pt))}
-	if pt == 8 {
+	switch codec {
+	case sipCodecOpus:
+		b.WriteString(fmt.Sprintf("a=rtpmap:%d opus/48000/2\r\n", pt))
+		b.WriteString(fmt.Sprintf("a=fmtp:%d maxplaybackrate=48000; sprop-maxcapturerate=48000; stereo=0; useinbandfec=1; maxaveragebitrate=96000\r\n", pt))
+	case sipCodecG722:
+		b.WriteString("a=rtpmap:9 G722/8000\r\n")
+	case sipCodecPCMA:
 		b.WriteString("a=rtpmap:8 PCMA/8000\r\n")
-	} else {
+	default:
 		b.WriteString("a=rtpmap:0 PCMU/8000\r\n")
 	}
 	if offer.hasPT(101) {

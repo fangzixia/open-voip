@@ -1,9 +1,40 @@
-// 本文件负责话单页，展示通话记录。
+// 本文件负责话单页，展示通话记录与关联录音。
 import { html, nothing } from "lit";
 import { callResultLabel, sessionTypeLabel } from "../../shared/call-enums.js";
 import { renderDataTable } from "../../shared/components/data-table.js";
 import { renderField } from "../../shared/components/panel.js";
 import { renderPageCrud } from "../../shared/components/page-layout.js";
+
+function recordingTypeLabel(r) {
+  if (r.media_type === "video_composite") {
+    return ["mp4", "webm"].includes(r.format) ? `视频 · ${r.format.toUpperCase()}` : "旧版音视频分离";
+  }
+  return `音频 · ${(r.format || "ogg").toUpperCase()}`;
+}
+
+function renderRecordingActions(r, actions, canDownload) {
+  if (!canDownload) return html`<span class="muted">—</span>`;
+  const video = r.media_type === "video_composite" && ["mp4", "webm"].includes(r.format);
+  return html`
+    ${video
+      ? html`<button type="button" class="secondary" @click=${() => actions.downloadRec(r.id, "mp4")}>MP4</button>
+             <button type="button" class="secondary" @click=${() => actions.downloadRec(r.id, "webm")}>WebM</button>`
+      : html`<button type="button" class="secondary" @click=${() => actions.downloadRec(r.id)}>下载</button>`}
+    <button type="button" class="secondary" @click=${() => actions.playRec(r.id)}>回放</button>
+  `;
+}
+
+function renderCallRecordings(c, state, actions) {
+  const recs = c.recordings || [];
+  if (!recs.length) return html`<span class="muted">无</span>`;
+  const canDownload = state.me?.permissions?.includes("recordings.download");
+  return html`<ul class="recording-inline-list">
+    ${recs.map((r) => html`<li>
+      <span>${recordingTypeLabel(r)} · ${r.file_size ?? 0} B</span>
+      ${renderRecordingActions(r, actions, canDownload)}
+    </li>`)}
+  </ul>`;
+}
 
 export function renderCdrQuery(state, actions) {
   return html`
@@ -35,6 +66,7 @@ export function renderCdrTable(state, actions, rows) {
     { label: "媒介", render: (c) => sessionTypeLabel(c.session_type) },
     { label: "开始", render: (c) => c.started_at || "" },
     { label: "时长", render: (c) => `${c.duration_sec ?? 0}s` },
+    { label: "录音", render: (c) => renderCallRecordings(c, state, actions) },
   ], rows, { emptyMessage: "暂无话单", showCount: true, label: "通话记录" });
 }
 
@@ -56,6 +88,11 @@ export function renderCdrPage(state, actions) {
     title: "通话记录",
     form: renderCdrQuery(state, actions),
     list: html`${renderCdrTable(state, actions, rows)}${renderCdrPager(state, actions)}`,
+    footer: state.playUrl
+      ? (state.playType?.startsWith("video/")
+        ? html`<video class="page-media" controls autoplay playsinline src=${state.playUrl}></video>`
+        : html`<audio class="page-media" controls autoplay src=${state.playUrl}></audio>`)
+      : null,
   }, {
     title: "通话小结",
     list: renderDataTable([

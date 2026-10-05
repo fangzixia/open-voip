@@ -12,27 +12,40 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )
 
-// originate 选择中继或已注册话机，发起 SIP INVITE 并处理协商响应。
+// originate 选择中继、网关模组或已注册话机，发起 SIP INVITE 并处理协商响应。
 func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID string) error {
-	tr := u.pickTrunk(trunkID)
-	if trunkID == "@device" {
+	if trunkID == "" && u.wantGatewayOutbound(dial) {
+		trunkID = "@gateway"
+	}
+	var tr *config.SIPTrunkConfig
+	switch trunkID {
+	case "@gateway":
+		gw := strings.TrimSpace(u.cfg.GatewayDevice)
+		if gw == "" || u.lookupReg(gw) == nil {
+			return errs.Unprocessable("SIP 网关模组未注册", errs.CodeSIPDisabled)
+		}
+		slog.Info("SIP 网关外呼", "gateway", gw, "dial", dial)
+	case "@device":
 		tr = nil
 		if u.lookupReg(dial) == nil {
 			return errs.Unprocessable("SIP 坐席未注册", errs.CodeSIPDisabled)
 		}
+	default:
+		tr = u.pickTrunk(trunkID)
+		if trunkID != "" && tr == nil {
+			return errs.InvalidRequest("中继不存在")
+		}
+		if u.lookupReg(dial) != nil && trunkID == "" {
+			tr = nil
+		}
 	}
-	if trunkID != "" && trunkID != "@device" && tr == nil {
-		return errs.InvalidRequest("中继不存在")
-	}
-	if u.lookupReg(dial) != nil && trunkID == "" {
-		tr = nil
-	}
-	if tr == nil && u.lookupReg(dial) == nil {
+	if tr == nil && trunkID != "@gateway" && u.lookupReg(dial) == nil {
 		return errs.Unprocessable("未找到 SIP 中继或已注册分机", errs.CodeSIPDisabled)
 	}
 	if tr != nil {
@@ -47,16 +60,24 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 	u.media.attachSIPRTP(callID, rtpSess)
 	go u.media.sipReadLoop(callID, rtpSess)
 
-	recipient, cliUser, codecs, user, pass := u.outboundTarget(dial, tr)
+	recipient, cliUser, codecs, user, pass := u.outboundTarget(dial, tr, trunkID)
 	sdp := buildAudioSDP(u.cfg.AdvertiseHost(), rtpSess.localPort(), codecs)
 	logSDP("send", "offer", callID, sdp)
+	slog.Info("SIP 出局 offer 编解码",
+		"call_id", callID, "leg_id", legID,
+		"offer_codecs", strings.Join(codecs, ","),
+		"prefer_wideband", u.cfg.PreferWideband)
 	if u.dlgCli == nil {
 		rtpSess.close()
 		return errs.Unprocessable("SIP 未就绪", errs.CodeSIPDisabled)
 	}
 
 	var peerIP net.IP
-	if tr == nil {
+	if trunkID == "@gateway" {
+		if addr := u.lookupReg(strings.TrimSpace(u.cfg.GatewayDevice)); addr != nil {
+			peerIP = addr.IP
+		}
+	} else if tr == nil {
 		if addr := u.lookupReg(dial); addr != nil {
 			peerIP = addr.IP
 		}
@@ -227,7 +248,7 @@ func (u *sipUA) inviteHeaders(cliUser string, tr *config.SIPTrunkConfig, se int)
 	return headers
 }
 
-func (u *sipUA) outboundTarget(dial string, tr *config.SIPTrunkConfig) (sip.Uri, string, []string, string, string) {
+func (u *sipUA) outboundTarget(dial string, tr *config.SIPTrunkConfig, trunkID string) (sip.Uri, string, []string, string, string) {
 	cli := u.cfg.UserAgent
 	codecs := []string{"PCMU", "PCMA"}
 	user, pass := "", ""
@@ -235,6 +256,16 @@ func (u *sipUA) outboundTarget(dial string, tr *config.SIPTrunkConfig) (sip.Uri,
 		cli = tr.CLIUser(u.cfg.UserAgent)
 		codecs = u.offerCodecs(tr)
 		user, pass = tr.Username, tr.Password
+	}
+	if trunkID == "@gateway" {
+		gw := strings.TrimSpace(u.cfg.GatewayDevice)
+		addr := u.lookupReg(gw)
+		if addr != nil {
+			if gw != "" {
+				cli = gw
+			}
+			return sip.Uri{User: dial, Host: addr.IP.String(), Port: addr.Port}, cli, codecs, "", ""
+		}
 	}
 	if addr := u.lookupReg(dial); addr != nil {
 		return sip.Uri{User: dial, Host: addr.IP.String(), Port: addr.Port}, cli, codecs, "", ""
@@ -259,6 +290,31 @@ func (u *sipUA) offerCodecs(tr *config.SIPTrunkConfig) []string {
 		return u.cfg.Trunks[0].Codecs
 	}
 	return []string{"PCMU", "PCMA"}
+}
+
+func (u *sipUA) wantGatewayOutbound(dial string) bool {
+	gw := strings.TrimSpace(u.cfg.GatewayDevice)
+	if gw == "" || u.lookupReg(gw) == nil {
+		return false
+	}
+	if u.lookupReg(dial) != nil {
+		return false
+	}
+	return sipOutboundLooksPSTN(dial)
+}
+
+func sipOutboundLooksPSTN(dest string) bool {
+	d := strings.TrimSpace(dest)
+	if strings.HasPrefix(d, "+") || strings.HasPrefix(d, "00") {
+		return true
+	}
+	n := 0
+	for _, r := range d {
+		if unicode.IsDigit(r) {
+			n++
+		}
+	}
+	return n >= 8
 }
 
 func (u *sipUA) pickTrunk(id string) *config.SIPTrunkConfig {

@@ -1,4 +1,4 @@
-// Package datetime 统一定义服务边界的纯日期与 UTC 时间格式。
+// Package datetime 统一定义服务边界的纯日期与本地墙钟时间格式（进程 time.Local）。
 package datetime
 
 import (
@@ -14,21 +14,21 @@ import (
 const Layout = "2006-01-02 15:04:05"
 const DateLayout = "2006-01-02"
 
-func Format(t time.Time) string { return t.UTC().Format(Layout) }
+func Format(t time.Time) string { return t.In(time.Local).Format(Layout) }
 
-// FormatLog 用于 slog 等人读日志，使用进程本地时区（API/库表仍用 UTC 的 Format）。
-func FormatLog(t time.Time) string { return t.Local().Format(Layout) }
+// FormatLog 用于 slog 等人读日志，与 API 的 Format 一致。
+func FormatLog(t time.Time) string { return Format(t) }
 
 // FormatDate 保留日期自身的年月日，不因时区转换而换日。
 func FormatDate(t time.Time) string { return t.Format(DateLayout) }
 
 func Parse(value string) (time.Time, error) {
 	if len(value) != len(Layout) {
-		return time.Time{}, fmt.Errorf("时间必须为 YYYY-MM-DD HH:MM:SS (UTC)")
+		return time.Time{}, fmt.Errorf("时间必须为 YYYY-MM-DD HH:MM:SS (本地时间)")
 	}
-	t, err := time.ParseInLocation(Layout, value, time.UTC)
+	t, err := time.ParseInLocation(Layout, value, time.Local)
 	if err != nil || Format(t) != value {
-		return time.Time{}, fmt.Errorf("时间必须为 YYYY-MM-DD HH:MM:SS (UTC)")
+		return time.Time{}, fmt.Errorf("时间必须为 YYYY-MM-DD HH:MM:SS (本地时间)")
 	}
 	return t, nil
 }

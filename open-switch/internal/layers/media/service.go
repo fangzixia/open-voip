@@ -57,11 +57,21 @@ type room struct {
 	sipRTP      map[*sipRTP]struct{}
 	peers       map[string]*peer
 	dtmf        map[string]ports.DTMFHandler
-	rec         *recorder
+	rec             *recorder
+	audioProfile    string
+	preferWideband  bool
+	bus             *audioBus
 
 	dtmfMu      sync.Mutex
 	dtmfPending []func()
 	dtmfRunning bool
+
+	connectGraceUntil time.Time
+	promptStopAt      time.Time
+	promptFadeTotal   int
+	promptFadeLeft    int
+	handoffGen        atomic.Uint64
+	legRoles          map[string]dto.LegRole
 }
 
 // enqueueDTMF 让按键回调脱离 RTP 读循环异步执行，同一房间内仍保持按键顺序；
@@ -119,7 +129,9 @@ type recorder struct {
 	mu        sync.Mutex
 	bytes     int64
 	ended     *time.Time
-	started   time.Time
+	started                time.Time
+	gateInboundUntilPrompt bool
+	pcmAnchored            bool
 }
 
 // Options 媒体层启动选项。
@@ -131,6 +143,7 @@ type Options struct {
 	VideoFormat   string
 	FFmpegPath    string
 	SIP           config.SIPConfig
+	Media         config.MediaConfig
 }
 
 // Service 实现 MediaPort 的进程内 SFU。
@@ -147,9 +160,12 @@ type Service struct {
 	mu            sync.Mutex
 	rooms         map[string]*room
 	recByID       map[string]*recorder
-	sipPending    map[string]bool
-	sipRTPPending map[string]map[*sipRTP]struct{}
-	answers       answerGate
+	sipPending        map[string]bool
+	sipRTPPending     map[string]map[*sipRTP]struct{}
+	callAudioProfile  map[string]string
+	answers           answerGate
+	queueAnswerGrace  time.Duration
+	queueAnswerFade   time.Duration
 }
 
 // NewService 根据 ICE/TURN/录音目录创建媒体服务。
@@ -253,9 +269,12 @@ func NewService(opt Options) (*Service, error) {
 		rooms:         map[string]*room{},
 		recByID:       map[string]*recorder{},
 		sipPending:    map[string]bool{},
-		sipRTPPending: map[string]map[*sipRTP]struct{}{},
+		sipRTPPending:     map[string]map[*sipRTP]struct{}{},
+		callAudioProfile:  map[string]string{},
 	}
 	s.sip = newSIPUA(opt.SIP, s)
+	s.queueAnswerGrace = opt.Media.QueueAnswerGraceDuration()
+	s.queueAnswerFade = opt.Media.QueueAnswerFadeDuration()
 	return s, nil
 }
 
@@ -294,11 +313,22 @@ func (s *Service) CreateRoom(ctx context.Context, callID string, opts dto.RoomOp
 		sipRTP:      rtpSess,
 		peers:       map[string]*peer{},
 		dtmf:        map[string]ports.DTMFHandler{},
+		legRoles:    map[string]dto.LegRole{},
 	}
 	if mix {
 		s.rooms[callID].mixer = newRoomMixer()
 	}
-	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "room.created", "create", "ok", "", started, "video", opts.EnableVideo)
+	profile := ""
+	if s.callAudioProfile != nil {
+		profile = s.callAudioProfile[callID]
+	}
+	applyProfileToRoom(s.rooms[callID], profile)
+	ap := profile
+	if ap == "" {
+		ap = ports.AudioProfileNarrowband
+	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "room.created", "create", "ok", "", started,
+		"video", opts.EnableVideo, "audio_profile", ap, "sip_prefer_wideband", s.rooms[callID].preferWideband)
 	return nil
 }
 
@@ -313,6 +343,7 @@ func (s *Service) CloseRoom(ctx context.Context, callID string) error {
 	delete(s.rooms, callID)
 	delete(s.sipPending, callID)
 	delete(s.sipRTPPending, callID)
+	delete(s.callAudioProfile, callID)
 	var rec *recorder
 	if r != nil {
 		r.mu.Lock()
@@ -395,8 +426,15 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 		return dto.LocalOffer{}, err
 	}
 
+	hdWebRTC := false
+	r.mu.RLock()
+	hdWebRTC = r.audioProfile == ports.AudioProfileHDWebRTC || r.audioProfile == "hd_webrtc"
+	r.mu.RUnlock()
 	audioCap := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}
-	if sipAudio || mixAudio {
+	if hdWebRTC && !sipAudio && !mixAudio {
+		audioCap.Channels = 1
+	}
+	if (sipAudio || mixAudio) && !hdWebRTC {
 		audioCap = webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}
 	}
 	audioOut, err := webrtc.NewTrackLocalStaticRTP(audioCap, "audio", "sfu-audio-"+legID)
@@ -490,6 +528,10 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 		_ = old.pc.Close()
 	}
 	r.peers[legID] = p
+	if r.legRoles == nil {
+		r.legRoles = map[string]dto.LegRole{}
+	}
+	r.legRoles[legID] = role
 	r.mu.Unlock()
 
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
@@ -694,6 +736,21 @@ func (s *Service) RequestRenegotiation(ctx context.Context, callID, legID string
 	return nil
 }
 
+func (s *Service) PromptDuration(ctx context.Context, fileRef string) (time.Duration, error) {
+	path := s.resolvePrompt(ctx, fileRef)
+	if fileRef != "" && path == "" {
+		return 0, errs.InvalidRequest("语音素材 ID 无效")
+	}
+	if path == "" {
+		return 0, errs.InvalidRequest("语音素材未指定")
+	}
+	pcm, rate, err := readPCMWav(path)
+	if err != nil || len(pcm) == 0 || rate <= 0 {
+		return 0, errs.InvalidRequest("语音素材内容无效")
+	}
+	return time.Duration(len(pcm)) * time.Second / time.Duration(rate), nil
+}
+
 func (s *Service) InjectAudio(ctx context.Context, callID, botLegID string, source dto.AudioSource) error {
 	r := s.getRoom(callID)
 	if r == nil {
@@ -709,16 +766,40 @@ func (s *Service) InjectAudio(ctx context.Context, callID, botLegID string, sour
 		}
 	}
 	if path != "" {
-		pcm, rate, err := readPCMWav(path)
-		if err != nil || len(pcm) == 0 {
+		pcm, rate, hd, hdRate := s.readPromptPCM(path)
+		if len(pcm) == 0 && len(hd) == 0 {
 			return errs.InvalidRequest("语音素材内容无效")
 		}
+		if len(hd) > 0 && s.roomPrefersHD(callID) {
+			pcm, rate = hd, hdRate
+		}
+		r.mu.Lock()
+		r.clearHandoffLocked()
+		r.mu.Unlock()
 		seq := r.promptSeq.Add(1)
 		go s.playPCMToRoom(callID, botLegID, pcm, rate, source.Loop, seq)
 		return nil
 	}
+	r.mu.Lock()
+	r.clearHandoffLocked()
+	r.mu.Unlock()
 	seq := r.promptSeq.Add(1)
 	go s.playWaitingTone(callID, botLegID, source.Loop, seq)
+	return nil
+}
+
+// SetRecordingMixInbound 在坐席接通等场景恢复收录对端上行；IVR 阶段应保持关闭以免底噪进入录音。
+func (s *Service) SetRecordingMixInbound(ctx context.Context, callID string, enable bool) error {
+	r := s.getRoom(callID)
+	if r == nil {
+		return errs.NotFound("媒体房间不存在")
+	}
+	r.mu.Lock()
+	if r.rec != nil {
+		r.rec.gateInboundUntilPrompt = !enable
+	}
+	r.mu.Unlock()
+	_ = ctx
 	return nil
 }
 
@@ -727,7 +808,16 @@ func (s *Service) StopInjectedAudio(ctx context.Context, callID string) error {
 	if r == nil {
 		return errs.NotFound("媒体房间不存在")
 	}
-	r.promptSeq.Add(1)
+	now := time.Now()
+	r.mu.Lock()
+	if !r.connectGraceUntil.IsZero() && now.Before(r.connectGraceUntil) {
+		r.mu.Unlock()
+		_ = ctx
+		return nil
+	}
+	r.connectGraceUntil = time.Time{}
+	r.mu.Unlock()
+	s.beginPromptFade(callID, r, now)
 	_ = ctx
 	return nil
 }
@@ -794,7 +884,7 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 	startedAt := time.Now().UTC()
 	rec := &recorder{
 		id: id, callID: callID, path: audioPath, audioPath: audioPath, mode: policy.Mode,
-		started: startedAt,
+		started: startedAt, gateInboundUntilPrompt: policy.GateInboundUntilPrompt,
 	}
 	if policy.Mode == "video_composite" {
 		videoRec, err := newVideoRecording(s.videoRecDir, callID, id, s.videoFormat, s.ffmpegPath, startedAt)
@@ -805,7 +895,20 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 		rec.path = videoRec.outputPath
 		rec.audioPath = ""
 	} else if sipAudio {
-		rec.pcm = newPCMMix(8000, rec.started)
+		recRate := 8000
+		if r != nil {
+			r.mu.RLock()
+			switch r.audioProfile {
+			case ports.AudioProfileHDWebRTC:
+				recRate = 48000
+			default:
+				if r.preferWideband {
+					recRate = 16000
+				}
+			}
+			r.mu.RUnlock()
+		}
+		rec.pcm = newPCMMix(recRate, rec.started)
 		if err := rec.pcm.startFile(audioPath); err != nil {
 			return "", err
 		}
@@ -822,7 +925,11 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 	s.mu.Lock()
 	s.recByID[id] = rec
 	s.mu.Unlock()
-	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "recording.opened", "start", "ok", "", rec.started, "recording_id", id, "mode", policy.Mode)
+	recAttrs := []any{"recording_id", id, "mode", policy.Mode}
+	if rec.pcm != nil {
+		recAttrs = append(recAttrs, "record_sample_rate_hz", rec.pcm.rate)
+	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "recording.opened", "start", "ok", "", rec.started, recAttrs...)
 	return id, nil
 }
 
@@ -959,32 +1066,64 @@ func (s *Service) playTone(callID, legID string, dur time.Duration) {
 func (s *Service) playToneToRoom(callID, targetLegID string, dur time.Duration, seq uint64) {
 	deadline := time.Now().Add(dur)
 	payload := mulawToneFrame()
+	var rtpSeq uint16
+	var rtpTS uint32
+	const rtpSSRC = 0x49565232
+	var nextSend time.Time
 	for time.Now().Before(deadline) {
 		r := s.getRoom(callID)
-		if r == nil || r.promptSeq.Load() != seq {
+		if r == nil {
 			return
 		}
+		gain, cont := r.promptGainAndContinue(seq)
+		if !cont && gain == 0 {
+			return
+		}
+		frame := scaleMulawFrame(payload, gain)
 		r.mu.RLock()
 		for legID, p := range r.peers {
 			if targetLegID != "" && legID != targetLegID {
 				continue
 			}
 			if p.audioSamp != nil {
-				_ = p.audioSamp.WriteSample(media.Sample{Data: payload, Duration: 20 * time.Millisecond})
+				_ = p.audioSamp.WriteSample(media.Sample{Data: frame, Duration: 20 * time.Millisecond})
 			}
 		}
+		hdr := rtp.Header{Version: 2, SequenceNumber: rtpSeq, Timestamp: rtpTS, SSRC: rtpSSRC}
 		for rt := range r.sipRTP {
 			if targetLegID != "" && rt.legID != targetLegID {
 				continue
 			}
-			pkt := rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SSRC: 1}, Payload: payload}
-			if raw, err := pkt.Marshal(); err == nil {
-				rt.writePCMU(raw)
+			pt := rt.currentPT()
+			pl := frame
+			if pt == 8 {
+				pl = transcodeG711(0, 8, frame)
 			}
+			hdr.PayloadType = pt
+			pkt := rtp.Packet{Header: hdr, Payload: pl}
+			rt.writeRTPPacket(&pkt)
 		}
+		recordPromptToMix(r.rec, frame)
 		r.mu.RUnlock()
-		time.Sleep(20 * time.Millisecond)
+		rtpSeq++
+		rtpTS += 160
+		paceFrame(&nextSend)
+		if !cont {
+			return
+		}
 	}
+}
+
+// recordPromptToMix 将 IVR/等待音等出站提示音并入 SIP 录音混音（此前仅采集对端上行 RTP）。
+func recordPromptToMix(rec *recorder, payload []byte) {
+	if rec == nil || len(payload) == 0 {
+		return
+	}
+	pl := append([]byte(nil), payload...)
+	rec.writeRTP("prompt", webrtc.RTPCodecTypeAudio, "audio/PCMU", &rtp.Packet{
+		Header:  rtp.Header{PayloadType: 0},
+		Payload: pl,
+	})
 }
 
 func (rec *recorder) writeRTP(legID string, kind webrtc.RTPCodecType, mime string, pkt *rtp.Packet) {
@@ -994,6 +1133,14 @@ func (rec *recorder) writeRTP(legID string, kind webrtc.RTPCodecType, mime strin
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if rec.ended != nil {
+		return
+	}
+	if kind == webrtc.RTPCodecTypeAudio && rec.pcm != nil && legID == "prompt" &&
+		rec.gateInboundUntilPrompt && !rec.pcmAnchored {
+		rec.pcm.anchorAt(time.Now())
+		rec.pcmAnchored = true
+	}
+	if kind == webrtc.RTPCodecTypeAudio && rec.pcm != nil && legID != "prompt" && rec.gateInboundUntilPrompt {
 		return
 	}
 	if rec.videoRec != nil {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +33,32 @@ type Config struct {
 	SIP SIPConfig `yaml:"sip"`
 	// Integration 与唯一业务 CC 的回调对接（无鉴权，依赖内网隔离）。
 	Integration IntegrationConfig `yaml:"integration"`
+	// Media 排队接听等媒体行为。
+	Media MediaConfig `yaml:"media"`
+}
+
+// MediaConfig 媒体层可选调参。
+type MediaConfig struct {
+	// QueueAnswerGraceMS 排队坐席接听后继续向主叫播放等待音的毫秒数。
+	QueueAnswerGraceMS int `yaml:"queue_answer_grace_ms"`
+	// QueueAnswerFadeMS 停止等待音前的淡出毫秒数。
+	QueueAnswerFadeMS int `yaml:"queue_answer_fade_ms"`
+}
+
+// QueueAnswerGraceDuration 返回排队接听 grace 时长。
+func (m MediaConfig) QueueAnswerGraceDuration() time.Duration {
+	if m.QueueAnswerGraceMS <= 0 {
+		return 500 * time.Millisecond
+	}
+	return time.Duration(m.QueueAnswerGraceMS) * time.Millisecond
+}
+
+// QueueAnswerFadeDuration 返回排队接听淡出时长。
+func (m MediaConfig) QueueAnswerFadeDuration() time.Duration {
+	if m.QueueAnswerFadeMS <= 0 {
+		return 150 * time.Millisecond
+	}
+	return time.Duration(m.QueueAnswerFadeMS) * time.Millisecond
 }
 
 // IntegrationConfig 配置向 CC 推送事件的回调地址。
@@ -101,8 +128,14 @@ type SIPConfig struct {
 	TLSCertFile string `yaml:"tls_cert_file"`
 	// TLSKeyFile transport=tls 时的服务端私钥。
 	TLSKeyFile string `yaml:"tls_key_file"`
+	// GatewayDevice 已注册模组用户名；PSTN 外呼无 trunk 时向该 Contact 发 INVITE（Request-URI 为被叫号码）。
+	GatewayDevice string `yaml:"gateway_device"`
 	// Trunks 中继列表。
 	Trunks []SIPTrunkConfig `yaml:"trunks"`
+	// PreferWideband 呼入应答优先 G.722（对端 offer 含 PT=9 时）。
+	PreferWideband bool `yaml:"prefer_wideband"`
+	// PreferredCodecs 出局 SDP 编解码顺序（如 G722、PCMA、PCMU、OPUS）。
+	PreferredCodecs []string `yaml:"preferred_codecs"`
 }
 
 type SIPDeviceConfig struct {
@@ -329,8 +362,8 @@ func (c *Config) Validate() error {
 			}
 			for _, codec := range t.Codecs {
 				c := strings.ToUpper(strings.TrimSpace(codec))
-				if c != "" && c != "PCMU" && c != "PCMA" {
-					errs = append(errs, fmt.Sprintf("sip.trunks[%d].codecs 仅支持 PCMU/PCMA，收到 %q", i, codec))
+				if c != "" && c != "PCMU" && c != "PCMA" && c != "G722" && c != "OPUS" {
+					errs = append(errs, fmt.Sprintf("sip.trunks[%d].codecs 支持 PCMU/PCMA/G722/OPUS，收到 %q", i, codec))
 				}
 			}
 		}
@@ -354,6 +387,12 @@ func (c *Config) applyDefaults() {
 		c.ICE.UDPPortMax = 20000
 	}
 	c.Recordings.normalize()
+	if c.Media.QueueAnswerGraceMS <= 0 {
+		c.Media.QueueAnswerGraceMS = 500
+	}
+	if c.Media.QueueAnswerFadeMS <= 0 {
+		c.Media.QueueAnswerFadeMS = 150
+	}
 	if strings.TrimSpace(c.SIP.UserAgent) == "" {
 		c.SIP.UserAgent = "open-voip"
 	}

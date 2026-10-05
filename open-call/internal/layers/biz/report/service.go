@@ -207,11 +207,11 @@ func (s *Service) Historical(ctx context.Context, from, to, queueID string) (His
 func (s *Service) AgentUtilization(ctx context.Context, from, to string) ([]AgentUtil, error) {
 	start, err := datetime.Parse(from)
 	if err != nil {
-		return nil, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (UTC) 时间")
+		return nil, errs.InvalidRequest("from 必须为 YYYY-MM-DD HH:MM:SS (本地时间)")
 	}
 	end, err := datetime.Parse(to)
 	if err != nil || !end.After(start) {
-		return nil, errs.InvalidRequest("to 必须为晚于 from 的 YYYY-MM-DD HH:MM:SS (UTC) 时间")
+		return nil, errs.InvalidRequest("to 必须为晚于 from 的 YYYY-MM-DD HH:MM:SS (本地时间)")
 	}
 	if end.Sub(start) > 366*24*time.Hour {
 		return nil, errs.InvalidRequest("单次查询范围不能超过 366 天")

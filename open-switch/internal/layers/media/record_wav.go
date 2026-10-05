@@ -78,6 +78,18 @@ func newPCMMix(rate int, started time.Time) *pcmMix {
 	return &pcmMix{started: started, rate: rate}
 }
 
+// anchorAt 将混音时间轴对齐到实际可听内容起点（如 IVR 首帧出站），避免应答前空白与错位。
+func (m *pcmMix) anchorAt(t time.Time) {
+	if m == nil {
+		return
+	}
+	m.started = t
+	m.samples = nil
+	if m.file != nil && m.written == 0 {
+		_ = m.header(0)
+	}
+}
+
 func (m *pcmMix) add(payloadType uint8, payload []byte) {
 	if m == nil || len(payload) == 0 {
 		return

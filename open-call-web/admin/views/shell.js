@@ -12,7 +12,6 @@ import { renderDids } from "./dids.js";
 import { renderIvr } from "./ivr.js";
 import { renderOverview } from "./overview.js";
 import { renderQueues } from "./queues.js";
-import { renderRecs } from "./recordings.js";
 import { renderHooks } from "./webhooks.js";
 import { renderIdentity } from "./identity.js";
 import { renderRuntime } from "./runtime.js";
@@ -24,7 +23,6 @@ export const NAV = [
   { id: "agents", label: "坐席", group: "话务管理" },
   { id: "dids", label: "呼入号码", group: "话务管理" },
   { id: "cdr", label: "通话记录", group: "话务管理" },
-  { id: "recordings", label: "录音", group: "话务管理" },
   { id: "ivr", label: "IVR", group: "流程管理" },
   { id: "webhooks", label: "Webhook", group: "流程管理" },
   { id: "audit", label: "审计", group: "系统设置" },
@@ -81,10 +79,8 @@ export function renderApp(host, operations) {
       ${host.nav === "dids" ? page(renderDids,
         ["didForm", "dids", "ivrs", "me", "queues"], ["saveDid", "updateDidForm"]) : ""}
       ${host.nav === "cdr" ? page(renderCdrPage,
-        ["cdrCaller", "cdrPage", "cdrPageSize", "cdrResult", "cdrTotal", "me", "qaCallId", "qaLabel", "wrapUps"],
-        ["cdrNext", "cdrPrev", "exportCdr", "filteredCdr", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}
-      ${host.nav === "recordings" ? page(renderRecs,
-        ["me", "playType", "playUrl", "recs"], ["downloadRec", "playRec"]) : ""}
+        ["cdrCaller", "cdrPage", "cdrPageSize", "cdrResult", "cdrTotal", "me", "playType", "playUrl", "qaCallId", "qaLabel", "wrapUps"],
+        ["cdrNext", "cdrPrev", "downloadRec", "exportCdr", "filteredCdr", "playRec", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}
       ${host.nav === "ivr" ? page(renderIvr, ["ivrs", "queues"], ["load"]) : ""}
       ${host.nav === "webhooks" ? page(renderHooks,
         ["hookUrl", "hooks", "me"], ["addHook", "setHookUrl"]) : ""}

@@ -31,9 +31,14 @@ func NormalizeToPromptWAV(ctx context.Context, ffmpegPath string, in []byte, sam
 	if err := os.WriteFile(inPath, in, 0600); err != nil {
 		return nil, err
 	}
+	af := "highpass=f=80,lowpass=f=3400,loudnorm=I=-16:TP=-2:LRA=7"
+	if sampleRate > 8000 {
+		af = "loudnorm=I=-16:TP=-2:LRA=7"
+	}
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin", "-y",
 		"-i", inPath,
+		"-af", af,
 		"-ar", fmt.Sprintf("%d", sampleRate),
 		"-ac", "1",
 		"-c:a", "pcm_s16le",

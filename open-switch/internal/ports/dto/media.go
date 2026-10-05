@@ -61,6 +61,8 @@ type RecordingPolicy struct {
 	NotifyGuest bool `json:"notify_guest"`
 	// NotifyMessage 告知文案。
 	NotifyMessage string `json:"notify_message"`
+	// GateInboundUntilPrompt IVR 阶段混音录音仅保留出站提示音，不收录对端上行；坐席接通后由控制层开启收录。
+	GateInboundUntilPrompt bool `json:"gate_inbound_until_prompt"`
 }
 
 // AudioSource IVR 放音源描述。

@@ -557,6 +557,11 @@ func (s *Service) beginRecordingIfNeeded(ctx context.Context, callID string) {
 			policy.NotifyMessage = s.deps.RecordingPolicy.NotifyMessageForMode(ctx, policy.Mode)
 		}
 	}
+	s.mu.Lock()
+	if rt := s.calls[callID]; rt != nil && rt.rec.State == stateIVR {
+		policy.GateInboundUntilPrompt = true
+	}
+	s.mu.Unlock()
 	s.startRecording(ctx, callID, policy)
 	if policy.NotifyGuest && policy.NotifyMessage != "" {
 		_ = s.publishCall(ctx, callID, "recording.notice", "", map[string]any{

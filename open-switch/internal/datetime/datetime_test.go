@@ -23,7 +23,8 @@ func TestDateTimeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(raw); got != `{"at":"2026-09-25 10:12:35","nested":[{"at":"2026-09-25 10:12:35"}],"note":"2026-09-25T18:12:35+08:00"}` {
+	wantAt := Format(timestamp)
+	if got := string(raw); got != `{"at":"`+wantAt+`","nested":[{"at":"`+wantAt+`"}],"note":"2026-09-25T18:12:35+08:00"}` {
 		t.Fatalf("wire format = %s", got)
 	}
 	var out payload
@@ -36,7 +37,7 @@ func TestDateTimeRoundTrip(t *testing.T) {
 	if _, err := Parse("2026-09-25T10:12:35Z"); err == nil {
 		t.Fatal("accepted wrong format")
 	}
-	if _, err := Parse("2026-09-25 10:12:35"); err != nil {
+	if _, err := Parse(wantAt); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -55,7 +56,8 @@ func TestNestedTimesAndDatesWithoutGeneratedMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"at":"2026-09-25 10:12:35","date":"2026-09-25","day":"2026-09-25","nested":{"events":["2026-09-25 10:12:35"]}}`
+	wantAt := Format(stamp)
+	want := `{"at":"` + wantAt + `","date":"2026-09-25","day":"2026-09-25","nested":{"events":["` + wantAt + `"]}}`
 	if string(raw) != want {
 		t.Fatalf("wire format = %s", raw)
 	}
@@ -102,8 +104,9 @@ func TestNestedTimesAndDatesWithoutGeneratedMethods(t *testing.T) {
 
 func TestBareTimeInMapUsesUnifiedFormat(t *testing.T) {
 	stamp := time.Date(2026, 9, 25, 10, 12, 35, 0, time.UTC)
+	wantAt := Format(stamp)
 	raw, err := Marshal(map[string]any{"at": stamp})
-	if err != nil || string(raw) != `{"at":"2026-09-25 10:12:35"}` {
+	if err != nil || string(raw) != `{"at":"`+wantAt+`"}` {
 		t.Fatalf("map timestamp = %s, %v", raw, err)
 	}
 }

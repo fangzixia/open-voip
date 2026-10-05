@@ -112,14 +112,14 @@ func (s *Service) List(ctx context.Context, page, pageSize int, userID, action s
 	if from := value(2); from != "" {
 		t, err := datetime.Parse(from)
 		if err != nil {
-			return ListResult{}, fmt.Errorf("from 必须为 YYYY-MM-DD HH:MM:SS (UTC): %w", err)
+			return ListResult{}, fmt.Errorf("from 必须为 YYYY-MM-DD HH:MM:SS (本地时间): %w", err)
 		}
 		q = q.Where("created_at >= ?", t)
 	}
 	if to := value(3); to != "" {
 		t, err := datetime.Parse(to)
 		if err != nil {
-			return ListResult{}, fmt.Errorf("to 必须为 YYYY-MM-DD HH:MM:SS (UTC): %w", err)
+			return ListResult{}, fmt.Errorf("to 必须为 YYYY-MM-DD HH:MM:SS (本地时间): %w", err)
 		}
 		q = q.Where("created_at <= ?", t)
 	}

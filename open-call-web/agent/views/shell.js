@@ -1,6 +1,7 @@
 // 本文件负责坐席界面的导航与页面骨架。
 import { html } from "lit";
 import { renderAppShell, renderFeedback, renderLoginLayout } from "../../shared/components/ui.js";
+import { getAccessToken } from "../../shared/auth-store.js";
 import { agentStateLabel, agentStateTone } from "../../shared/display.js";
 import { isWebRTCSupported } from "../../shared/webrtc.js";
 import { renderCredentialFields } from "../../shared/components/credentials.js";
@@ -21,7 +22,15 @@ export const NAV = [
 
 export function renderApp(host, actions) {
     if (!host.me) {
-      if (host.embedded) return html`<p class="muted" style="padding:24px">正在加载坐席工作台…</p>`;
+      if (host.embedded) {
+        return html`
+          <div style="padding:24px">
+            ${getAccessToken()
+              ? html`<p class="muted">正在加载坐席工作台…</p>`
+              : html`<p class="muted">请稍候，正在同步登录状态…</p>`}
+            ${renderFeedback({ error: host.error, notice: host.notice })}
+          </div>`;
+      }
       return renderLoginView(host, actions);
     }
     const state = host.me.session?.state || "offline";

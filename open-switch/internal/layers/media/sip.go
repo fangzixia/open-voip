@@ -308,7 +308,7 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 
 	offer := parseSDP(string(req.Body()))
 	logSDP("receive", "offer", callIDFromMessage(req), string(req.Body()))
-	if !offer.hasG711() {
+	if !offer.hasAudioCodec() {
 		_ = dlg.Respond(sip.StatusNotAcceptableHere, "Not Acceptable Here", nil)
 		return
 	}
@@ -337,7 +337,12 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		_ = dlg.Respond(sip.StatusInternalServerError, "Server Internal Error", nil)
 		return
 	}
-	applyRemoteSDP(rtpSess, offer)
+	rtpSess.mu.Lock()
+	rtpSess.callID = callID
+	rtpSess.mu.Unlock()
+	if offer.IP != "" && offer.Port > 0 {
+		rtpSess.latch(&net.UDPAddr{IP: net.ParseIP(offer.IP), Port: offer.Port})
+	}
 	u.media.attachSIPRTP(callID, rtpSess)
 	go u.media.sipReadLoop(callID, rtpSess)
 
@@ -414,7 +419,8 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		_ = dlg.Respond(sip.StatusRinging, "Ringing", nil)
 	}
 
-	sdp := buildAnswerSDP(u.cfg.AdvertiseHost(), rtpSess.localPort(), offer)
+	applyRemoteSDP(rtpSess, offer)
+	sdp := u.buildAnswerForCall(callID, rtpSess.localPort(), offer)
 	if sdp == "" {
 		_ = dlg.Respond(sip.StatusNotAcceptableHere, "Not Acceptable Here", nil)
 		u.endCall(callID, false)
@@ -469,7 +475,7 @@ func (u *sipUA) handleReInvite(d *sipSession, req *sip.Request, tx sip.ServerTra
 			offer := parseSDP(string(req.Body()))
 			applyRemoteSDP(rtpSess, offer)
 			if confirmed && rtpSess != nil {
-				sdp := buildAnswerSDP(u.cfg.AdvertiseHost(), rtpSess.localPort(), offer)
+				sdp := u.buildAnswerForCall(d.callID, rtpSess.localPort(), offer)
 				if sdp == "" {
 					_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotAcceptableHere, "Not Acceptable Here", nil))
 					return
@@ -483,7 +489,7 @@ func (u *sipUA) handleReInvite(d *sipSession, req *sip.Request, tx sip.ServerTra
 		}
 	}
 	if confirmed && rtpSess != nil {
-		sdp := buildAnswerSDP(u.cfg.AdvertiseHost(), rtpSess.localPort(), sdpMedia{Types: []int{int(rtpSess.currentPT()), 101}})
+		sdp := u.buildAnswerForCall(d.callID, rtpSess.localPort(), sdpMedia{Types: []int{int(rtpSess.currentPT()), 101}})
 		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", []byte(sdp))
 		res.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
 		res.AppendHeader(sipAllowHeader())
@@ -671,7 +677,7 @@ func (u *sipUA) onUpdate(req *sip.Request, tx sip.ServerTransaction) {
 	if confirmed && rtpSess != nil && len(req.Body()) > 0 {
 		offer := parseSDP(string(req.Body()))
 		applyRemoteSDP(rtpSess, offer)
-		sdp := buildAnswerSDP(u.cfg.AdvertiseHost(), rtpSess.localPort(), offer)
+		sdp := u.buildAnswerForCall(d.callID, rtpSess.localPort(), offer)
 		body = []byte(sdp)
 	}
 	res := sip.NewResponseFromRequest(req, 200, "OK", body)

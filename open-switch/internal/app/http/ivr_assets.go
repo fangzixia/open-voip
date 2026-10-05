@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"open-switch/internal/layers/media"
 	"open-switch/internal/scope"
 	"os"
 	"path/filepath"
@@ -84,9 +85,15 @@ func (d SwitchRouterDeps) handleIVRAssetUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if len(raw) > maxIVRAssetBytes || !validPromptWAV(raw) {
-		writeErr(w, errs.InvalidRequest("仅支持 8/16 kHz、16 位、单声道 PCM WAV（不超过 16 MB）"))
+		writeErr(w, errs.InvalidRequest("仅支持 8/16/48 kHz、16 位、单声道 PCM WAV（不超过 16 MB）"))
 		return
 	}
+	narrow, hd, err := media.NormalizePromptUpload(r.Context(), d.Config.Recordings.VideoFFmpegPath(), raw)
+	if err != nil {
+		writeErr(w, errs.InvalidRequest("语音素材规范化失败: "+err.Error()))
+		return
+	}
+	raw = narrow
 	if err := os.MkdirAll(d.ivrAssetDir(r), 0750); err != nil {
 		writeErr(w, err)
 		return
@@ -95,6 +102,9 @@ func (d SwitchRouterDeps) handleIVRAssetUpload(w http.ResponseWriter, r *http.Re
 	if err := os.WriteFile(filepath.Join(d.ivrAssetDir(r), id+".wav"), raw, 0640); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if len(hd) > 0 {
+		_ = os.WriteFile(filepath.Join(d.ivrAssetDir(r), id+"_48k.wav"), hd, 0640)
 	}
 	name := filepath.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
 	if len(name) > 160 {
@@ -122,7 +132,7 @@ func validPromptWAV(raw []byte) bool {
 			}
 			fmt := raw[off+8 : end]
 			rate := binary.LittleEndian.Uint32(fmt[4:8])
-			fmtOK = binary.LittleEndian.Uint16(fmt[:2]) == 1 && binary.LittleEndian.Uint16(fmt[2:4]) == 1 && (rate == 8000 || rate == 16000) && binary.LittleEndian.Uint16(fmt[14:16]) == 16
+			fmtOK = binary.LittleEndian.Uint16(fmt[:2]) == 1 && binary.LittleEndian.Uint16(fmt[2:4]) == 1 && (rate == 8000 || rate == 16000 || rate == 48000) && binary.LittleEndian.Uint16(fmt[14:16]) == 16
 		case "data":
 			dataOK = size > 0 && size%2 == 0
 		}

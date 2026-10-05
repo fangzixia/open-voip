@@ -205,6 +205,7 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	_ = s.publishCall(ctx, callID, "leg.incoming", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "role": string(dto.LegRoleCustomer)})
 	ctx = observability.WithFields(ctx, observability.Fields{CallID: callID, QueueID: req.QueueID})
 	observability.Event(ctx, "control", "call.created", stateCreated, "ok", "", now, "session_type", string(req.SessionType), "priority", req.Priority)
+	_ = s.deps.Media.SetCallAudioProfile(ctx, callID, q.AudioProfile)
 	slog.Info("呼入已创建", "call_id", callID, "queue_id", req.QueueID, "session_type", string(req.SessionType), "priority", req.Priority)
 
 	// 非营业时段优先执行队列的留言、挂断或继续排队策略。
@@ -301,11 +302,20 @@ func (s *Service) doAnswer(ctx context.Context, callID, agentID string) error {
 		return err
 	}
 
+	consulting := rt.consultFrom != "" && rt.consultFrom != agentID
 	opts := dto.RoomOptions{SessionType: rt.rec.SessionType, EnableVideo: rt.rec.SessionType != dto.SessionTypeAudio}
 	if err := s.deps.Media.CreateRoom(ctx, callID, opts); err != nil {
 		return err
 	}
-	if err := s.deps.Media.StopInjectedAudio(ctx, callID); err != nil {
+	if consulting {
+		if err := s.deps.Media.StopInjectedAudio(ctx, callID); err != nil {
+			return err
+		}
+	} else if rt.rec.QueueID != nil {
+		if err := s.deps.Media.BeginQueueAnswerHandoff(ctx, callID, 0, 0); err != nil {
+			return err
+		}
+	} else if err := s.deps.Media.StopInjectedAudio(ctx, callID); err != nil {
 		return err
 	}
 
@@ -322,7 +332,6 @@ func (s *Service) doAnswer(ctx context.Context, callID, agentID string) error {
 	if rt.rec.SessionType == dto.SessionTypeVideo || rt.rec.SessionType == dto.SessionTypeMixed {
 		rt.videoStartedAt = &t
 	}
-	consulting := rt.consultFrom != "" && rt.consultFrom != agentID
 	rt.activeAgent = agentID
 	rt.sipOfferCancel = nil
 	rt.offeredAgent = ""
@@ -647,10 +656,38 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string) (dto.Loc
 		return dto.LocalOffer{}, errs.NotFound("通话腿不存在")
 	}
 	preAnswerCustomer := role == dto.LegRoleCustomer && (view.State == stateQueued || view.State == stateRinging)
-	if !preAnswerCustomer && view.State != stateCreated && view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
+	preAnswerOutboundAgent := view.State == stateRinging && role == dto.LegRoleAgent && s.agentMayJoinOutboundRinging(view, legID)
+	if !preAnswerCustomer && !preAnswerOutboundAgent && view.State != stateCreated && view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
 		return dto.LocalOffer{}, errs.Conflict("当前状态无法加入媒体", "")
 	}
 	return s.deps.Media.JoinWebRTC(ctx, callID, legID, role)
+}
+
+// agentMayJoinOutboundRinging 允许发起外呼的坐席在 PSTN 振铃阶段进入媒体房间（听回铃/早媒体）。
+func (s *Service) agentMayJoinOutboundRinging(view ports.CallView, legID string) bool {
+	var legAgent string
+	isAgent := false
+	hasPSTN := false
+	for _, leg := range view.Legs {
+		if leg.Role == dto.LegRolePSTN {
+			hasPSTN = true
+		}
+		if leg.ID != legID {
+			continue
+		}
+		if leg.Role != dto.LegRoleAgent {
+			return false
+		}
+		isAgent = true
+		legAgent = leg.AgentID
+	}
+	if !isAgent || legAgent == "" {
+		return false
+	}
+	if view.AgentID != "" && view.AgentID != legAgent {
+		return false
+	}
+	return view.Direction == "outbound" || hasPSTN
 }
 
 func (s *Service) AcceptAnswer(ctx context.Context, callID, legID string, answerSDP string) error {
@@ -736,8 +773,11 @@ func (s *Service) transition(ctx context.Context, callID, state string) error {
 		return err
 	}
 	observability.Event(ctx, "control", "fsm.transition", state, "ok", "", started, "from_state", prev, "to_state", state)
-	if state == stateActive && prev != stateActive {
+	if prev != state && (state == stateActive || state == stateIVR || state == stateQueued) {
 		s.beginRecordingIfNeeded(ctx, callID)
+	}
+	if prev != state && state == stateActive {
+		_ = s.deps.Media.SetRecordingMixInbound(ctx, callID, true)
 	}
 	return nil
 }

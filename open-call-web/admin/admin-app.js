@@ -5,7 +5,7 @@ import { bindApiFeedback } from "../shared/http-client.js";
 import { FeedbackController, runFeedbackAction } from "../shared/feedback.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRecordings, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
+import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { canOpenAdminPage, firstAdminPage } from "../shared/workspace-permissions.js";
 import { appStyles } from "../shared/styles/index.js";
@@ -41,7 +41,6 @@ const NAV_LOAD_JOBS = {
   cdr: [
     ["wrapUps", listWrapUps, "items", "cdr.read"],
   ],
-  recordings: [["recs", listRecordings, "items", "recordings.read"]],
   ivr: [
     ["ivrs", listIvr, null, "ivr.read"],
     ["queues", listQueues, "items", "queues.read"],
@@ -247,6 +246,7 @@ export class AdminApp extends LitElement {
   async #load() {
     this.me = await authMe();
     const perms = this.me?.permissions || [];
+    if (this.nav === "recordings") this.nav = "cdr";
     if (!canOpenAdminPage(perms, this.nav)) this.nav = firstAdminPage(perms) || "identity";
     await this.#loadNav(this.nav);
   }

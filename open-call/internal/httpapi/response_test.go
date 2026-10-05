@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"open-call/internal/datetime"
 	"open-call/internal/errs"
 	"open-call/internal/ports"
 	"strings"
@@ -57,7 +58,8 @@ func TestTimestampResponseAndDecode(t *testing.T) {
 	at := time.Date(2026, 9, 25, 10, 12, 35, 0, time.UTC)
 	rec := httptest.NewRecorder()
 	Write(rec, http.StatusOK, ports.CallView{CreatedAt: at})
-	if !strings.Contains(rec.Body.String(), `"created_at":"2026-09-25 10:12:35"`) {
+	want := datetime.Format(at)
+	if !strings.Contains(rec.Body.String(), `"created_at":"`+want+`"`) {
 		t.Fatal(rec.Body.String())
 	}
 	var out ports.CallView

@@ -59,4 +59,15 @@ sip:
   #     allowed_cidrs: ["192.168.10.0/24"]
   tls_cert_file: ""
   tls_key_file: ""
+  prefer_wideband: false
+  preferred_codecs:
+    - G722
+    - PCMA
+    - PCMU
+  # gateway_device: "100163800"  # 模组注册名；PSTN 外呼走网关（无 trunk 时自动）
   trunks: []
+
+# 排队接听：主叫侧等待音与坐席媒体接通的平滑过渡
+media:
+  queue_answer_grace_ms: 500
+  queue_answer_fade_ms: 150

@@ -117,7 +117,7 @@ func compileSwitchBundle(ctx context.Context, db *gorm.DB, bundle Bundle) (ports
 		q := ports.SwitchQueueConfig{
 			ID: row.ID, Name: row.Name, VideoEnabled: row.VideoEnabled, MaxWaitSec: row.MaxWaitSec,
 			DispatchStrategy: row.DispatchStrategy, RecordingPolicy: row.RecordingPolicy, OverflowAction: row.OverflowAction,
-			WaitPrompt: row.WaitPrompt, AnnounceRecording: row.AnnounceRecording, PriorityEnabled: row.PriorityEnabled,
+			WaitPrompt: row.WaitPrompt, AudioProfile: row.AudioProfile, AnnounceRecording: row.AnnounceRecording, PriorityEnabled: row.PriorityEnabled,
 			BusinessHoursJSON: row.BusinessHoursJSON, AfterHoursAction: row.AfterHoursAction,
 			ForceHangupOnCheckout: row.ForceHangupOnCheckout, ListenAnnounce: row.ListenAnnounce,
 			SkillIDs: uniqueStrings(skillsByQueue[row.ID]), AgentIDs: uniqueStrings(agentsByQueue[row.ID]),

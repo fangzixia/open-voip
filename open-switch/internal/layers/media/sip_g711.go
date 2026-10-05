@@ -16,7 +16,22 @@ func transcodeG711(fromPT, toPT uint8, payload []byte) []byte {
 	return payload
 }
 
-func linearToMulaw(sample int16) byte { return g711.EncodeUlawFrame(sample) }
+func linearToMulaw(sample int16) byte { return linearToG711(sample, 0) }
+
+func linearToG711(sample int16, payloadType uint8) byte {
+	if payloadType == 8 {
+		return g711.EncodeAlawFrame(sample)
+	}
+	return g711.EncodeUlawFrame(sample)
+}
+
+func pcmToG711(pcm []int16, payloadType uint8) []byte {
+	out := make([]byte, len(pcm))
+	for i, s := range pcm {
+		out[i] = linearToG711(s, payloadType)
+	}
+	return out
+}
 
 func mulawToLinear(u byte) int16 { return g711.DecodeUlawFrame(u) }
 

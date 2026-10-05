@@ -8,7 +8,6 @@ export const ADMIN_PAGE_PERMISSIONS = {
   agents: "agents.read",
   dids: "dids.read",
   cdr: "cdr.read",
-  recordings: "recordings.read",
   ivr: "ivr.read",
   webhooks: "webhooks.read",
   audit: "audit.read",

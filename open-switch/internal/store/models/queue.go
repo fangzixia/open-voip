@@ -26,6 +26,8 @@ type Queue struct {
 	PostCallIVRFlowID *string `gorm:"type:uuid;comment:满意度 IVR 流程 ID"`
 	// WaitPrompt 排队文案模板，可含 {position}。
 	WaitPrompt string `gorm:"size:256;comment:排队提示文案"`
+	// AudioProfile 音质档位：narrowband | wideband | hd_webrtc。
+	AudioProfile string `gorm:"size:32;comment:音质档位"`
 	// AnnounceRecording 入队/接通前是否告知录音。
 	AnnounceRecording bool `gorm:"not null;default:false;comment:是否播放录音告知"`
 	// PriorityEnabled 是否启用优先级入队。

@@ -104,7 +104,7 @@ func (u *sipUA) sendReInviteRefresh(sess *sipSession, dest sip.Uri) {
 	if rtpSess == nil {
 		return
 	}
-	sdp := buildAnswerSDP(u.cfg.AdvertiseHost(), rtpSess.localPort(), sdpMedia{Types: []int{int(rtpSess.currentPT())}})
+	sdp := u.buildAnswerForCall(sess.callID, rtpSess.localPort(), sdpMedia{Types: []int{int(rtpSess.currentPT())}})
 	req := sip.NewRequest(sip.INVITE, dest)
 	req.SetBody([]byte(sdp))
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
