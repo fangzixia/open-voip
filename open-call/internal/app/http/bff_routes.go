@@ -37,6 +37,9 @@ func switchCallID(path string) string {
 	for _, prefix := range []string{"/switch/v1/calls/", "/switch/v1/supervisor/calls/"} {
 		if strings.HasPrefix(path, prefix) {
 			id := strings.Split(strings.TrimPrefix(path, prefix), "/")[0]
+			if id == "outbound" || id == "inbound" {
+				return ""
+			}
 			return observability.NormalizeID(id)
 		}
 	}

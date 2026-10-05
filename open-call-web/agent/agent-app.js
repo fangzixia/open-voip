@@ -92,7 +92,7 @@ export class AgentApp extends LitElement {
     this.held = false;
     this.wrapNotes = "";
     this.guestLink = "";
-    this.guestMedia = "video";
+    this.guestMedia = "audio";
     this.guestExpiresAt = "";
     this.notice = "";
     this.videoAsk = null;
@@ -541,7 +541,7 @@ export class AgentApp extends LitElement {
   async #makeLink() {
     await this.#run(async () => {
       const qid = this.selectedQueues[0] || this.queues[0]?.id;
-      const s = await createGuestSession(qid, 3600, this.guestMedia);
+      const s = await createGuestSession(qid, 3600, "audio");
       this.guestLink = new URL(s.guest_url, location.origin).href;
       this.guestExpiresAt = s.expires_at || "";
       this.feedback.clear();

@@ -285,16 +285,25 @@ func (s *Service) setState(ctx context.Context, callID, agentID, fromState, toSt
 			return tx.Model(&sess).Update("pending_checkout", true).Error
 		}
 		if callID != "" && sess.CurrentCallID != "" && sess.CurrentCallID != callID {
-			return errs.Conflict("过期通话不能更新坐席", errs.CodeAgentBusy)
+			var old models.Call
+			err := tx.Where("id = ?", sess.CurrentCallID).First(&old).Error
+			stale := errors.Is(err, gorm.ErrRecordNotFound) || old.State == "ended"
+			if stale {
+				sess.CurrentCallID = ""
+				if err := tx.Model(&sess).Update("current_call_id", nil).Error; err != nil {
+					return err
+				}
+			} else if toState == "idle" || toState == "acw" || toState == "busy" || toState == "offline" {
+				return nil
+			} else {
+				return errs.Conflict("坐席正在处理另一通话", errs.CodeAgentBusy)
+			}
 		}
 		if fromState != "" && sess.State != fromState {
 			return errs.Conflict("坐席状态已变更", errs.CodeAgentNotIdle)
 		}
 		if callID == "" {
 			callID = sess.CurrentCallID
-		}
-		if (toState == "ringing" || toState == "on_call") && sess.CurrentCallID != "" && callID != "" && sess.CurrentCallID != callID {
-			return errs.Conflict("坐席正在处理另一通话", errs.CodeAgentBusy)
 		}
 		current := callID
 		if toState == "idle" || toState == "acw" || toState == "busy" || toState == "offline" {

@@ -1,10 +1,12 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"open-call/internal/errs"
 	"open-call/internal/observability"
@@ -94,7 +96,9 @@ func (d RouterDeps) handleClientEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		view, err := d.Calls.GetCall(r.Context(), event.CallID)
+		lookupCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		view, err := d.Calls.GetCall(lookupCtx, event.CallID)
+		cancel()
 		allowed := err == nil && view.AgentID == p.AgentID
 		if !allowed && err == nil {
 			for _, leg := range view.Legs {

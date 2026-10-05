@@ -395,6 +395,17 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if req.AgentID == "" || req.Destination == "" {
 		return "", errs.InvalidRequest("agent_id 与 destination 必填")
 	}
+	for _, open := range s.openCallsForAgent(ctx, req.AgentID) {
+		if open == callID {
+			continue
+		}
+		hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := s.Hangup(hctx, open, dto.HangupReasonError)
+		cancel()
+		if err != nil {
+			slog.Warn("外呼前结束旧通话超时或失败", "call_id", open, "err", err)
+		}
+	}
 	now := time.Now().UTC()
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -415,7 +426,11 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if err := s.deps.Calls.InsertLeg(ctx, fromLeg); err != nil {
 		return "", err
 	}
-	if err := s.setAgentState(ctx, callID, req.AgentID, "idle", "on_call", "outbound"); err != nil {
+	fromState, err := outboundAgentFromState(info.State)
+	if err != nil {
+		return "", err
+	}
+	if err := s.setAgentState(ctx, callID, req.AgentID, fromState, "on_call", "outbound"); err != nil {
 		return "", err
 	}
 	caller := info.Extension
@@ -483,21 +498,29 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 		dialCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		err := s.deps.Media.OriginateSIP(dialCtx, callID, pstnLeg.ID, req.Destination, req.TrunkID)
-		ctx, unlock := s.command(context.Background(), callID)
-		defer unlock()
-		if rt.rec.State == stateEnded {
-			_ = s.deps.Media.LeaveRoom(ctx, callID, pstnLeg.ID)
+		s.mu.Lock()
+		ended := rt.rec.State == stateEnded
+		s.mu.Unlock()
+		if ended {
+			_ = s.deps.Media.LeaveRoom(context.Background(), callID, pstnLeg.ID)
 			return
 		}
 		if err != nil {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			go func() { _ = s.Hangup(context.Background(), callID, dto.HangupReasonError) }()
 			return
 		}
+		ctx, unlock := s.command(context.Background(), callID)
+		defer unlock()
 		s.mu.Lock()
+		if rt.rec.State == stateEnded {
+			s.mu.Unlock()
+			_ = s.deps.Media.LeaveRoom(ctx, callID, pstnLeg.ID)
+			return
+		}
 		rt.answeredAt = new(time.Now().UTC())
 		s.mu.Unlock()
 		if s.transition(ctx, callID, stateActive) != nil {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			go func() { _ = s.Hangup(context.Background(), callID, dto.HangupReasonError) }()
 			return
 		}
 		_ = s.cdrUpsert(ctx, callID, "answered")
@@ -696,6 +719,40 @@ func looksPSTN(dest string) bool {
 		}
 	}
 	return n >= 8
+}
+
+func outboundAgentFromState(state string) (string, error) {
+	switch state {
+	case "idle", "on_call", "ringing", "acw":
+		return state, nil
+	case "busy":
+		return "", errs.Conflict("坐席示忙，请先置闲", errs.CodeAgentNotIdle)
+	case "offline", "":
+		return "", errs.Conflict("坐席未签入", errs.CodeAgentNotIdle)
+	default:
+		return "", errs.Conflict("坐席状态已变更", errs.CodeAgentNotIdle)
+	}
+}
+
+func (s *Service) openCallsForAgent(ctx context.Context, agentID string) []string {
+	calls, err := s.ListCalls(ctx)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, c := range calls {
+		if c.AgentID == agentID {
+			ids = append(ids, c.ID)
+			continue
+		}
+		for _, leg := range c.Legs {
+			if leg.AgentID == agentID {
+				ids = append(ids, c.ID)
+				break
+			}
+		}
+	}
+	return ids
 }
 
 func (s *Service) removeLiveLeg(callID, legID string) {

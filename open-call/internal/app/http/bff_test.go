@@ -30,8 +30,14 @@ func (bffAuth) Authenticate(_ context.Context, token string) (auth.Principal, er
 func TestBFFChecksCallAndLegOwnershipAndSetsActor(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/switch/v1/calls/outbound" {
+			if r.Method != http.MethodPost {
+				t.Fatalf("outbound must be POST, got %s", r.Method)
+			}
 			httpapi.Write(w, http.StatusOK, ports.CallView{ID: "new-call"})
 			return
+		}
+		if r.URL.Path == "/switch/v1/internal/calls/outbound" {
+			t.Fatal("outbound must not be resolved as call id")
 		}
 		if strings.HasPrefix(r.URL.Path, "/switch/v1/calls/") && strings.HasSuffix(r.URL.Path, "/offer") {
 			httpapi.Write(w, http.StatusOK, map[string]string{"sdp": "v=0", "type": "offer"})

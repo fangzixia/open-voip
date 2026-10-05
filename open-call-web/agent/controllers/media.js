@@ -1,5 +1,5 @@
 // 坐席 WebRTC 媒体会话：与通话业务 API 解耦。
-import { applyAudioOutput, replaceInputDevice, setLocalMuted, startMediaSession, startScreenShare, stopMedia } from "../../shared/webrtc.js";
+import { applyAudioOutput, replaceInputDevice, requireMediaDevices, setLocalMuted, startMediaSession, startScreenShare, stopMedia } from "../../shared/webrtc.js";
 import { screenShare } from "../../shared/api.js";
 import { runFeedbackAction } from "../../shared/feedback.js";
 
@@ -105,7 +105,7 @@ export class AgentMediaController {
   async preview() {
     const host = this.#host;
     await runFeedbackAction(host.feedback, async () => {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await requireMediaDevices().getUserMedia({
         audio: false,
         video: host.videoDeviceId ? { deviceId: { exact: host.videoDeviceId } } : true,
       });

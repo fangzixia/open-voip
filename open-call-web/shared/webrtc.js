@@ -24,8 +24,30 @@ export function createPeerConnection(configuration) {
   return new RTCPeerConnection(configuration);
 }
 
+export function isMediaDevicesAvailable() {
+  return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getUserMedia === "function";
+}
+
+/** 非 HTTPS（且非 localhost）时 mediaDevices 不可用，需在文案中提示配置 TLS。 */
+export function mediaDevicesUnavailableMessage() {
+  const secure = typeof window !== "undefined" && window.isSecureContext;
+  if (!secure) {
+    return "浏览器要求 HTTPS 或 localhost 才能使用麦克风；请为呼叫中心配置 TLS 后通过 https:// 访问。";
+  }
+  return "浏览器未提供麦克风接口，请使用 Chrome/Edge 并检查系统麦克风权限。";
+}
+
+export function requireMediaDevices() {
+  if (!isMediaDevicesAvailable()) {
+    const error = new Error(mediaDevicesUnavailableMessage());
+    error.name = "NotSupportedError";
+    throw error;
+  }
+  return navigator.mediaDevices;
+}
+
 export function isWebRTCSupported() {
-  return typeof RTCPeerConnection !== "undefined";
+  return typeof RTCPeerConnection !== "undefined" && isMediaDevicesAvailable();
 }
 
 /** 将可用设备按输入音频、输入视频和输出音频分组。 */
@@ -58,27 +80,28 @@ export function microphoneConstraints(deviceId = "") {
 
 /** 坐席摄像头不可用时保留麦克风；远端视频仍由服务端 Offer 接收。 */
 export async function acquireAgentMedia({ audioDeviceId, videoDeviceId }) {
+  const media = requireMediaDevices();
   let audioStream;
   try {
-    audioStream = await navigator.mediaDevices.getUserMedia({
+    audioStream = await media.getUserMedia({
       audio: microphoneConstraints(audioDeviceId),
       video: false,
     });
   } catch (error) {
     if (!audioDeviceId || !isMissingDevice(error)) throw error;
-    audioStream = await navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints(), video: false });
+    audioStream = await media.getUserMedia({ audio: microphoneConstraints(), video: false });
   }
 
   try {
     let videoStream;
     try {
-      videoStream = await navigator.mediaDevices.getUserMedia({
+      videoStream = await media.getUserMedia({
         audio: false,
         video: videoDeviceId ? { deviceId: { exact: videoDeviceId } } : true,
       });
     } catch (error) {
       if (!videoDeviceId || !isMissingDevice(error)) throw error;
-      videoStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+      videoStream = await media.getUserMedia({ audio: false, video: true });
     }
     for (const track of videoStream.getVideoTracks()) audioStream.addTrack(track);
     return { stream: audioStream, cameraUnavailable: videoStream.getVideoTracks().length === 0 };
@@ -105,7 +128,7 @@ export async function startMediaSession({ callId, legId, video, audioDeviceId, v
       cameraUnavailable = acquired.cameraUnavailable;
       if (cameraUnavailable) reportEvent("webrtc.permission", { phase: "camera_unavailable", error_name: acquired.cameraError || "NotFoundError" });
     } else {
-      localStream = await navigator.mediaDevices.getUserMedia({
+      localStream = await requireMediaDevices().getUserMedia({
           audio: microphoneConstraints(audioDeviceId),
           video: video ? (videoDeviceId ? { deviceId: { exact: videoDeviceId } } : true) : false,
         });
@@ -241,7 +264,7 @@ export async function replaceInputDevice(pc, localStream, kind, deviceId) {
     kind === "video"
       ? { video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false }
       : { audio: microphoneConstraints(deviceId), video: false };
-  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  const stream = await requireMediaDevices().getUserMedia(constraints);
   const track = kind === "video" ? stream.getVideoTracks()[0] : stream.getAudioTracks()[0];
   const sender = pc?.getSenders().find((s) => s.track?.kind === kind);
   if (sender) await sender.replaceTrack(track);
@@ -256,7 +279,7 @@ export async function replaceInputDevice(pc, localStream, kind, deviceId) {
 
 /** 用屏幕共享替换当前视频轨。 */
 export async function startScreenShare(pc) {
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  const stream = await requireMediaDevices().getDisplayMedia({ video: true, audio: false });
   const track = stream.getVideoTracks()[0];
   const sender = pc?.getSenders().find((s) => s.track?.kind === "video");
   if (sender) await sender.replaceTrack(track);

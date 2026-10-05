@@ -26,7 +26,22 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 		}
 		httpapi.Write(w, http.StatusOK, map[string]any{"items": items})
 		return nil
-	case callID != "" && path == "/switch/v1/calls/"+callID:
+	case path == "/switch/v1/calls/outbound":
+		var req dto.OutboundRequest
+		if err := decodeBFFBody(r, &req); err != nil {
+			return err
+		}
+		id, err := client.Outbound(r.Context(), req)
+		if err != nil {
+			return err
+		}
+		view, err := client.GetCall(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		httpapi.Write(w, http.StatusOK, view)
+		return nil
+	case callID != "" && path == "/switch/v1/calls/"+callID && r.Method == http.MethodGet:
 		view, err := client.GetCall(r.Context(), callID)
 		if err != nil {
 			return err
@@ -50,21 +65,6 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 			return err
 		}
 		httpapi.Write(w, http.StatusOK, nil)
-		return nil
-	case path == "/switch/v1/calls/outbound":
-		var req dto.OutboundRequest
-		if err := decodeBFFBody(r, &req); err != nil {
-			return err
-		}
-		id, err := client.Outbound(r.Context(), req)
-		if err != nil {
-			return err
-		}
-		view, err := client.GetCall(r.Context(), id)
-		if err != nil {
-			return err
-		}
-		httpapi.Write(w, http.StatusOK, view)
 		return nil
 	case callID != "" && strings.HasSuffix(path, "/hangup"):
 		var body struct {
