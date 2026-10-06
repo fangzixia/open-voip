@@ -31,8 +31,8 @@ export function renderAppContent(host, actions) {
       ["answer", "askVideo", "completeXfer", "conf", "decline", "dial", "doCheckIn", "doCheckOut", "downgrade", "dtmf", "hangup", "hold", "playRemoteAudio", "respondVideo", "setDest", "setIdle", "setShowPad", "setWrapNotes", "setXferMode", "share", "stageCaller", "stageQueue", "submitWrap", "toggleBusy", "toggleMute", "waitingCount", "xfer"], sessionState) : ""}
     ${host.nav === "inbound" ? page(renderInboundView, ["incoming", "permissions"], ["answer", "decline"]) : ""}
     ${host.nav === "outbound" ? page(renderOutboundView,
-      ["dest", "guestExpiresAt", "guestLink", "guestMedia", "me", "permissions"],
-      ["copyGuestLink", "dial", "listen", "makeLink", "setDest", "setGuestMedia"]) : ""}
+      ["dest", "guestExpiresAt", "guestLink", "guestMedia", "ivrAssets", "me", "permissions", "promptAssetId", "voiceNotifyBusy"],
+      ["copyGuestLink", "dial", "listen", "makeLink", "setDest", "setGuestMedia", "setPromptAssetId", "voiceNotify"]) : ""}
     ${host.nav === "queue" ? page(renderQueueView,
       ["busyReason", "queues", "selectedQueues"],
       ["doCheckIn", "doCheckOut", "setBusyReason", "setSelectedQueues", "toggleBusy"], state) : ""}

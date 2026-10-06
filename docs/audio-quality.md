@@ -18,6 +18,7 @@ IVR 素材上传会自动生成 8 kHz 电话母带与可选 48 kHz HD 副本（`
 | `codec.negotiated` | sip_rtp | `codec_negotiated`、`payload_type`、`sample_rate_hz`、`offer_codecs`、`audio_profile` |
 | `rtp.summary` | sip_rtp | 挂断汇总 + `codec_negotiated`、`sample_rate_hz` |
 | `prompt.play` | media | IVR：`codec_negotiated`、`prompt_late_ms`、`frames_sent` |
+| `prompt.prime` | media | 呼入 SIP 播首句前：`lead_in_frames`、`inbound_seen` |
 | `room.created` | media | `audio_profile`、`sip_prefer_wideband` |
 | `recording.opened` | media | `record_sample_rate_hz`（8k / 16k / 48k） |
 

@@ -79,7 +79,10 @@ type runtimeCall struct {
 	endMessage     string
 	endCode        string
 	cdrResult      string
-	pstnDialState  string
+	pstnDialState     string
+	promptOutbound    bool
+	promptAsset       string
+	promptHangupTimer *time.Timer
 }
 
 // Service 实现 CallControlPort 与 SignalingPort。
@@ -476,6 +479,8 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 		return nil
 	}
 
+	s.stopPromptHangupTimer(rt)
+
 	if rt.sipOfferCancel != nil {
 		rt.sipOfferCancel()
 		rt.sipOfferCancel = nil
@@ -483,7 +488,7 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	offered := rt.offeredAgent
 	prev := rt.rec.State
 	consultFrom := rt.consultFrom
-	toACW := prev == stateActive || prev == stateHeld || prev == stateTransferring || consultFrom != ""
+	toACW := (prev == stateActive || prev == stateHeld || prev == stateTransferring || consultFrom != "") && !rt.promptOutbound
 	seen := map[string]struct{}{}
 	if offered != "" {
 		seen[offered] = struct{}{}
@@ -689,6 +694,9 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string) (dto.Loc
 	if !found {
 		return dto.LocalOffer{}, errs.NotFound("通话腿不存在")
 	}
+	if view.OutboundMode == "prompt_outbound" && role == dto.LegRoleAgent {
+		return dto.LocalOffer{}, errs.Conflict("语音通知无需加入媒体", "")
+	}
 	preAnswerCustomer := role == dto.LegRoleCustomer && (view.State == stateQueued || view.State == stateRinging)
 	preAnswerOutboundAgent := view.State == stateRinging && role == dto.LegRoleAgent && s.agentMayJoinOutboundRinging(view, legID)
 	if !preAnswerCustomer && !preAnswerOutboundAgent && view.State != stateCreated && view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
@@ -720,6 +728,9 @@ func (s *Service) agentMayJoinOutboundRinging(view ports.CallView, legID string)
 	}
 	// 被叫振铃腿（AgentID 为 offered）不可用外呼预 join 规则。
 	if view.AgentID != "" && view.AgentID == legAgent && !hasPSTN {
+		return false
+	}
+	if view.OutboundMode == "prompt_outbound" {
 		return false
 	}
 	if !(view.Direction == "outbound" || view.Direction == "internal" || hasPSTN) {

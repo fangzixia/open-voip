@@ -43,6 +43,8 @@ type CallView struct {
 	ErrorCode string `json:"error_code,omitempty"`
 	// PstnDialState 外呼 PSTN 腿阶段：pending / dialing / connected / failed。
 	PstnDialState string `json:"pstn_dial_state,omitempty"`
+	// OutboundMode 外呼子模式，如 prompt_outbound（语音通知）。
+	OutboundMode string `json:"outbound_mode,omitempty"`
 }
 
 // LegView 通话腿视图。

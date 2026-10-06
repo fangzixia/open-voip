@@ -108,6 +108,8 @@ export function outboundProgressLabel(phase) {
       return "对端已应答";
     case "failed":
       return "出局失败";
+    case "playing":
+      return "正在播放通知…";
     default:
       return "";
   }

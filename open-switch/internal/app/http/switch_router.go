@@ -140,6 +140,7 @@ func (d SwitchRouterDeps) registerSwitchAPI(api chi.Router) {
 	api.Post("/calls/{callId}/hangup", d.handleCallHangup)
 	api.Post("/calls/inbound", d.handleSwitchInbound)
 	api.Post("/calls/outbound", d.handleOutbound)
+	api.Post("/calls/voice-notifications", d.handleVoiceNotification)
 	api.Post("/calls/{callId}/answer", d.handleCallAnswer)
 	api.Post("/calls/{callId}/decline", d.handleDecline)
 	api.Post("/calls/{callId}/hold", d.handleHold)
@@ -194,7 +195,7 @@ func (d SwitchRouterDeps) authorizeCallResource(next http.Handler) http.Handler 
 				continue
 			}
 			id := strings.Split(strings.TrimPrefix(path, prefix), "/")[0]
-			if suffix == "/calls/" && (id == "direct" || id == "inbound" || id == "outbound" || (r.Method == http.MethodPost && strings.TrimSuffix(path, "/") == base+"/calls")) {
+			if suffix == "/calls/" && (id == "direct" || id == "inbound" || id == "outbound" || id == "voice-notifications" || (r.Method == http.MethodPost && strings.TrimSuffix(path, "/") == base+"/calls")) {
 				next.ServeHTTP(w, r)
 				return
 			}

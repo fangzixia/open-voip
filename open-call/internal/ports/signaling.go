@@ -39,6 +39,7 @@ type CallView struct {
 	EndMessage    string `json:"end_message,omitempty"`
 	ErrorCode     string `json:"error_code,omitempty"`
 	PstnDialState string `json:"pstn_dial_state,omitempty"`
+	OutboundMode  string `json:"outbound_mode,omitempty"`
 }
 
 // LegView 通话腿视图。

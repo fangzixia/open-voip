@@ -23,6 +23,6 @@ func TestPlayToneToRoomSingleLeg(t *testing.T) {
 	}
 	s := &Service{rooms: map[string]*room{callID: r}}
 	seq := r.promptSeq.Add(1)
-	s.playToneToRoom(callID, "customer", 25*time.Millisecond, seq)
-	s.playToneToRoom(callID, "unknown", 25*time.Millisecond, seq)
+	s.playToneToRoom(callID, "customer", 25*time.Millisecond, seq, false)
+	s.playToneToRoom(callID, "unknown", 25*time.Millisecond, seq, false)
 }

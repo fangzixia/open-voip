@@ -159,6 +159,9 @@ func enrichCallView(v *ports.CallView, rt *runtimeCall) {
 	v.EndMessage = rt.endMessage
 	v.ErrorCode = rt.endCode
 	v.PstnDialState = rt.pstnDialState
+	if rt.promptOutbound {
+		v.OutboundMode = "prompt_outbound"
+	}
 	v.Result = rt.cdrResult
 	if v.EndMessage == "" || v.ErrorCode == "" || v.Result == "" {
 		msg, code, res := endDetailFromMetadata(rt.rec)

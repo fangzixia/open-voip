@@ -30,8 +30,10 @@ func (s *Service) resolvePrompt(ctx context.Context, path string) string {
 }
 
 func (s *Service) playWaitingTone(callID, targetLegID string, loop bool, seq uint64) {
+	prime := true
 	for {
-		s.playToneToRoom(callID, targetLegID, time.Second, seq)
+		s.playToneToRoom(callID, targetLegID, time.Second, seq, prime)
+		prime = false
 		if !loop {
 			return
 		}
@@ -60,6 +62,13 @@ func (s *Service) playPCMToRoom(callID, targetLegID string, pcm []int16, rate in
 		}
 	}()
 	ctx := context.Background()
+	var rtpSeq uint16
+	var rtpTS uint32
+	const rtpSSRC = 0x49565231
+	var nextSend time.Time
+	var sent, lateTotal int
+	s.primeSIPPrompt(ctx, callID, targetLegID, seq, &rtpSeq, &rtpTS, rtpSSRC, &nextSend, &lateTotal)
+
 	needG722 := s.roomNeedsG722(callID)
 	var g722Frames [][]byte
 	if needG722 {
@@ -76,18 +85,13 @@ func (s *Service) playPCMToRoom(callID, targetLegID string, pcm []int16, rate in
 	pcm = preparePromptPCM(pcm)
 	frames := splitPCMFrames(pcm, 160)
 	if len(frames) == 0 && len(g722Frames) == 0 {
-		s.playToneToRoom(callID, targetLegID, time.Second, seq)
+		s.playToneToRoom(callID, targetLegID, time.Second, seq, true)
 		return
 	}
 	n := len(frames)
 	if len(g722Frames) > n {
 		n = len(g722Frames)
 	}
-	var rtpSeq uint16
-	var rtpTS uint32
-	const rtpSSRC = 0x49565231
-	var nextSend time.Time
-	var sent, lateTotal int
 	codecLabel := "G711"
 	if needG722 && len(g722Frames) > 0 {
 		codecLabel = "G722"

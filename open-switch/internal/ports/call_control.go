@@ -24,6 +24,8 @@ type CallControlPort interface {
 	CompleteTransfer(ctx context.Context, callID string) error
 	// Outbound 坐席发起外呼或分机互拨。
 	Outbound(ctx context.Context, req dto.OutboundRequest) (callID string, err error)
+	// VoiceNotification 坐席发起 PSTN 语音通知（服务端放音后挂断）。
+	VoiceNotification(ctx context.Context, req dto.VoiceNotificationRequest) (callID string, err error)
 	// StartIVR 为已有 Call 绑定 IVR 运行时（快照 ID）。
 	StartIVR(ctx context.Context, callID, snapshotID string) error
 	// Hold 保持或恢复。

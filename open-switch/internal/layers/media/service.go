@@ -1070,13 +1070,17 @@ func (s *Service) playTone(callID, legID string, dur time.Duration) {
 	}
 }
 
-func (s *Service) playToneToRoom(callID, targetLegID string, dur time.Duration, seq uint64) {
+func (s *Service) playToneToRoom(callID, targetLegID string, dur time.Duration, seq uint64, primeSIP bool) {
 	deadline := time.Now().Add(dur)
 	payload := mulawToneFrame()
 	var rtpSeq uint16
 	var rtpTS uint32
 	const rtpSSRC = 0x49565232
 	var nextSend time.Time
+	var lateTotal int
+	if primeSIP {
+		s.primeSIPPrompt(context.Background(), callID, targetLegID, seq, &rtpSeq, &rtpTS, rtpSSRC, &nextSend, &lateTotal)
+	}
 	for time.Now().Before(deadline) {
 		r := s.getRoom(callID)
 		if r == nil {

@@ -6,7 +6,7 @@ import { FeedbackController, runFeedbackAction } from "../shared/feedback.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, sendDtmf, setAgentState, startSSO, setCallVersion, startSurvey, transferCall, completeTransfer, wrapUp } from "../shared/api.js";
+import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listIvrAssets, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, sendDtmf, setAgentState, startSSO, setCallVersion, startSurvey, transferCall, completeTransfer, voiceNotificationCall, wrapUp } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
 import { listMediaDevices } from "../shared/webrtc.js";
@@ -68,6 +68,9 @@ export class AgentApp extends LitElement {
     contentOnly: { type: Boolean, attribute: "content-only" },
     staffNav: { type: String, attribute: "staff-nav" },
     outboundNotice: { type: String },
+    promptAssetId: { type: String },
+    ivrAssets: { type: Array },
+    voiceNotifyBusy: { type: Boolean },
   };
 
   static styles = appStyles;
@@ -132,6 +135,9 @@ export class AgentApp extends LitElement {
     this.contentOnly = false;
     this.staffNav = "";
     this.outboundNotice = "";
+    this.promptAssetId = "";
+    this.ivrAssets = [];
+    this.voiceNotifyBusy = false;
   }
 
   #emitNavBadges() {
@@ -281,6 +287,10 @@ export class AgentApp extends LitElement {
         this.#endLocal(this.call.id, endMeta);
       }
       if (active) {
+        if (active.outbound_mode === "prompt_outbound") {
+          this.outboundNotice = outboundProgressLabel(active.state === "active" ? "playing" : "dialing");
+          return;
+        }
         this.call = active;
         if (active?.version != null) setCallVersion(active.version, active.id);
         const activeLeg = active.legs?.find((item) => item.agent_id === this.me.id);
@@ -326,7 +336,9 @@ export class AgentApp extends LitElement {
         reportEvent("call.outbound_failed", { result: "failed", error_code: p.error_code || "", message: p.message || "" });
         notifyCallFailure(this, p);
       }
-      if (p.phase === "connected") this.#startTimer();
+      if (p.phase === "connected" || p.phase === "playing") {
+        if (p.phase === "connected" && this.call?.id === p.call_id) this.#startTimer();
+      }
     } else if (msg.type === "command.failed" || msg.type === "recording.failed") {
       notifyCallFailure(this, msg.payload || {});
     } else if (msg.type === "leg.failed") {
@@ -358,6 +370,7 @@ export class AgentApp extends LitElement {
       }
     } else if (msg.type === "call.answered" && msg.payload?.call_id) {
       void this.#syncCalls().then(async () => {
+        if (this.call?.outbound_mode === "prompt_outbound") return;
         if (this.call?.state !== "active") return;
         this.outboundNotice = "";
         if (!this.media.pc && this.me?.terminal_type !== "sip") {
@@ -546,6 +559,49 @@ export class AgentApp extends LitElement {
     }
   }
 
+  async #loadIvrAssets() {
+    try {
+      const data = await listIvrAssets();
+      this.ivrAssets = data?.items || [];
+    } catch {
+      this.ivrAssets = [];
+    }
+  }
+
+  async #voiceNotify() {
+    await this.#run(async (epoch) => {
+      const dest = this.dest.trim();
+      const asset = (this.promptAssetId || "").trim();
+      if (!dest) {
+        this.feedback.fail("请输入目标号码", epoch);
+        return;
+      }
+      if (!asset) {
+        this.feedback.fail("请选择语音素材", epoch);
+        return;
+      }
+      if (this.voiceNotifyBusy) return;
+      this.voiceNotifyBusy = true;
+      try {
+        await this.#ensureCheckedIn();
+        if (this.me?.session?.state === "busy") {
+          const sess = await setAgentState(this.me.id, "idle", "");
+          this.me = { ...this.me, session: sess };
+        }
+        if (this.me?.terminal_type === "sip") {
+          this.feedback.ok("请从已注册的 SIP 话机操作", epoch);
+          return;
+        }
+        const view = await voiceNotificationCall(dest, asset);
+        this.outboundNotice = "已提交语音通知，关闭页面不影响播放";
+        reportEvent("call.voice_notification_created", { call_id: view?.id || "", state: view?.state });
+        this.feedback.ok("语音通知已提交", epoch);
+      } finally {
+        this.voiceNotifyBusy = false;
+      }
+    });
+  }
+
   async #dial() {
     await this.#run(async (epoch) => {
       if (!this.dest.trim()) {
@@ -553,6 +609,10 @@ export class AgentApp extends LitElement {
         return;
       }
       await this.#ensureCheckedIn();
+      if (this.me?.session?.state === "busy") {
+        const sess = await setAgentState(this.me.id, "idle", "");
+        this.me = { ...this.me, session: sess };
+      }
       if (this.me?.terminal_type === "sip") { this.feedback.ok("已自动签入，请从已注册的 SIP 话机拨号", epoch); return; }
       const joinEpoch = ++this.#joinEpoch;
       this.#failureNotifiedCallId = "";
@@ -778,6 +838,7 @@ export class AgentApp extends LitElement {
     }
     this.feedback.begin();
     this.nav = id;
+    if (id === "outbound") void this.#loadIvrAssets();
     if (id === "desk" && this.media.pc) this.media.bindVideos();
   }
 
@@ -817,6 +878,8 @@ export class AgentApp extends LitElement {
       respondVideo: (...args) => this.#respondVideo(...args),
       setBusyReason: (value) => { this.busyReason = value; },
       setDest: (value) => { this.dest = value; },
+      setPromptAssetId: (value) => { this.promptAssetId = value; },
+      voiceNotify: (...args) => this.#voiceNotify(...args),
       setUsername: (value) => { this.username = value; },
       setPassword: (value) => { this.password = value; },
       setGuestMedia: (value) => { this.guestMedia = value; },

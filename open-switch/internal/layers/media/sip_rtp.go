@@ -8,6 +8,7 @@ import (
 	"net"
 	"open-switch/internal/observability"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtp"
@@ -35,6 +36,9 @@ type sipRTP struct {
 	expectedSeq                            uint16
 	haveSeq                                bool
 	summaryLogged                          bool
+	inboundReady                           chan struct{}
+	inboundOnce                            sync.Once
+	txDroppedNoRemote                      uint64
 }
 
 func (u *sipUA) listenRTP() (*sipRTP, error) {
@@ -54,7 +58,10 @@ func (u *sipUA) listenRTP() (*sipRTP, error) {
 			last = err
 			continue
 		}
-		return &sipRTP{ua: u, boundPort: p, conn: c, remotePT: 0, started: time.Now().UTC()}, nil
+		return &sipRTP{
+			ua: u, boundPort: p, conn: c, remotePT: 0, started: time.Now().UTC(),
+			inboundReady: make(chan struct{}),
+		}, nil
 	}
 	return nil, last
 }
@@ -77,7 +84,7 @@ func (r *sipRTP) close() {
 	if !r.summaryLogged {
 		r.summaryLogged = true
 		ctx := observability.WithFields(context.Background(), observability.Fields{CallID: r.callID, LegID: r.legID})
-		codec := r.currentCodec()
+		codec := r.codecLocked()
 		observability.Event(ctx, "sip_rtp", "rtp.summary", "hangup", "ok", "", r.started,
 			"rx_packets", r.rxPackets, "rx_bytes", r.rxBytes, "tx_packets", r.txPackets, "tx_bytes", r.txBytes,
 			"sequence_gaps", r.sequenceGaps, "out_of_order", r.outOfOrder,
@@ -135,9 +142,14 @@ func (r *sipRTP) currentCodec() sipAudioCodec {
 		return sipCodecPCMU
 	}
 	r.mu.Lock()
+	c := r.codecLocked()
+	r.mu.Unlock()
+	return c
+}
+
+func (r *sipRTP) codecLocked() sipAudioCodec {
 	c := r.remoteCodec
 	pt := r.remotePT
-	r.mu.Unlock()
 	if c == 0 {
 		return codecFromPT(pt)
 	}
@@ -152,6 +164,7 @@ func (r *sipRTP) write(b []byte) {
 	conn, addr := r.conn, r.remote
 	r.mu.Unlock()
 	if conn == nil || addr == nil {
+		atomic.AddUint64(&r.txDroppedNoRemote, 1)
 		return
 	}
 	n, err := conn.WriteToUDP(b, addr)
@@ -366,6 +379,9 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 			}
 			continue
 		}
+		if pkt.PayloadType != 101 {
+			rtpSess.signalInbound()
+		}
 		if rtpSess.blocked() {
 			continue
 		}
@@ -478,6 +494,51 @@ func (r *sipRTP) blocked() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.held || r.muted || r.conn == nil
+}
+
+// signalInbound 在收到对端首包媒体后关闭 inboundReady，供 IVR 在播首句前等待对称 RTP/终端开音。
+func (r *sipRTP) signalInbound() {
+	if r == nil {
+		return
+	}
+	r.inboundOnce.Do(func() {
+		if r.inboundReady != nil {
+			close(r.inboundReady)
+		}
+	})
+}
+
+func (r *sipRTP) waitInbound(timeout time.Duration) bool {
+	if r == nil {
+		return false
+	}
+	ch := r.inboundReady
+	if ch == nil {
+		return true
+	}
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func (r *sipRTP) waitRemote(timeout time.Duration) bool {
+	if r == nil {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		ok := r.conn != nil && r.remote != nil
+		r.mu.Unlock()
+		if ok {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
 }
 
 // acceptSource 对称 RTP：锁定首个有效源，同 IP 下允许端口随 NAT 变化。

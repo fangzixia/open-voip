@@ -55,7 +55,7 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 			httpapi.Error(w, errs.Forbidden("无权限"))
 			return
 		}
-		if p.IsGuest() && (strings.Contains(r.URL.Path, "/supervisor/") || strings.HasSuffix(r.URL.Path, "/outbound") || strings.HasPrefix(r.URL.Path, "/switch/v1/ivr-assets")) {
+		if p.IsGuest() && (strings.Contains(r.URL.Path, "/supervisor/") || strings.HasSuffix(r.URL.Path, "/outbound") || strings.Contains(r.URL.Path, "/voice-notifications") || strings.HasPrefix(r.URL.Path, "/switch/v1/ivr-assets")) {
 			httpapi.Error(w, errs.Forbidden("无权限"))
 			return
 		}
@@ -77,7 +77,12 @@ func WrapSwitchBFF(cfg config.IntegrationConfig, auth middleware.Authenticator, 
 			return
 		}
 		code := switchPermission(r.Method, r.URL.Path)
-		if !p.IsGuest() && !p.Has(code) {
+		if r.Method == http.MethodGet && isIVRAssetPath(r.URL.Path) {
+			if p.IsGuest() || (!p.Has("ivr.read") && !p.Has("calls.operate")) {
+				httpapi.Error(w, errs.Forbidden("无权限"))
+				return
+			}
+		} else if !p.IsGuest() && !p.Has(code) {
 			httpapi.Error(w, errs.Forbidden("无权限"))
 			return
 		}

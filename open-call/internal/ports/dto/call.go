@@ -41,6 +41,14 @@ type OutboundRequest struct {
 	TrunkID string `json:"trunk_id"`
 }
 
+// VoiceNotificationRequest 坐席发起单通语音通知。
+type VoiceNotificationRequest struct {
+	AgentID       string `json:"agent_id"`
+	Destination   string `json:"destination"`
+	PromptAssetID string `json:"prompt_asset_id"`
+	TrunkID       string `json:"trunk_id"`
+}
+
 // TransferRequest 转接参数。
 type TransferRequest struct {
 	// Mode blind 或 consult。

@@ -395,6 +395,15 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if req.AgentID == "" || req.Destination == "" {
 		return "", errs.InvalidRequest("agent_id 与 destination 必填")
 	}
+	promptOutbound := req.PromptAssetID != ""
+	if promptOutbound {
+		if !looksPSTN(req.Destination) {
+			return "", errs.InvalidRequest("语音通知仅支持 PSTN 号码")
+		}
+		if _, err := s.deps.Media.PromptDuration(ctx, req.PromptAssetID); err != nil {
+			return "", err
+		}
+	}
 	for _, open := range s.openCallsForAgent(ctx, req.AgentID) {
 		if open == callID {
 			continue
@@ -418,7 +427,13 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if looksPSTN(req.Destination) {
 		dir = "outbound"
 	}
+	if promptOutbound {
+		dir = "outbound"
+	}
 	rec := ports.CallRecord{Version: 1, ConfigVersion: new(info.ConfigVersion), ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
+	if promptOutbound {
+		rec.Metadata = promptOutboundMetadata(req.AgentID, req.PromptAssetID)
+	}
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
 		return "", err
 	}
@@ -430,17 +445,25 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if err != nil {
 		return "", err
 	}
-	if err := s.setAgentState(ctx, callID, req.AgentID, fromState, "on_call", "outbound"); err != nil {
+	busyReason := "outbound"
+	if promptOutbound {
+		busyReason = "prompt_outbound"
+	}
+	if err := s.setAgentState(ctx, callID, req.AgentID, fromState, "on_call", busyReason); err != nil {
 		return "", err
 	}
 	caller := info.Extension
 	rt := &runtimeCall{rec: rec, legs: []ports.CallLegRecord{fromLeg}, caller: caller, callee: req.Destination, queuedAt: now, maxWait: 2 * time.Minute}
 	rt.activeAgent = req.AgentID
+	if promptOutbound {
+		rt.promptOutbound = true
+		rt.promptAsset = req.PromptAssetID
+	}
 	s.mu.Lock()
 	s.calls[callID] = rt
 	s.mu.Unlock()
 
-	if looksPSTN(req.Destination) {
+	if promptOutbound || looksPSTN(req.Destination) {
 		return s.originateSIPCall(ctx, callID, rt, req)
 	}
 
@@ -537,6 +560,35 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 		s.emitOutboundProgress(ctx, callID, req.AgentID, "connected", "")
 		_ = s.cdrUpsert(ctx, callID, "answered")
 		_ = s.publishCall(ctx, callID, "call.answered", req.AgentID, map[string]any{"call_id": callID, "agent_id": req.AgentID})
+		s.mu.Lock()
+		prompt := rt.promptOutbound
+		asset := rt.promptAsset
+		s.mu.Unlock()
+		if prompt && asset != "" {
+			if err := s.deps.Media.InjectAudio(ctx, callID, pstnLeg.ID, dto.AudioSource{FilePath: asset, Loop: false}); err != nil {
+				slog.Warn("语音通知放音失败", "call_id", callID, "err", err)
+				_ = s.failCall(ctx, callID, dto.HangupReasonError, codeIVRPromptFailed, "通知放音失败")
+				return
+			}
+			s.emitOutboundProgress(ctx, callID, req.AgentID, "playing", "正在播放通知…")
+			dur, _ := s.deps.Media.PromptDuration(ctx, asset)
+			delay := promptOutboundHangupDelay(dur)
+			timer := time.AfterFunc(delay, func() {
+				hctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				s.mu.Lock()
+				if rt := s.calls[callID]; rt != nil && rt.rec.State != stateEnded {
+					rt.endMessage = "通知已播放完成"
+				}
+				s.mu.Unlock()
+				_ = s.Hangup(hctx, callID, dto.HangupReasonNormal)
+			})
+			s.mu.Lock()
+			if rt := s.calls[callID]; rt != nil {
+				rt.promptHangupTimer = timer
+			}
+			s.mu.Unlock()
+		}
 	}()
 	return callID, nil
 }
@@ -573,6 +625,10 @@ func (s *Service) beginRecordingIfNeeded(ctx context.Context, callID string) {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	if rt == nil || rt.recordingID != "" {
+		s.mu.Unlock()
+		return
+	}
+	if rt.promptOutbound {
 		s.mu.Unlock()
 		return
 	}

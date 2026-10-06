@@ -42,7 +42,7 @@ func TestPlayToneToRoomMixesIntoRecorder(t *testing.T) {
 	}
 	s := &Service{rooms: map[string]*room{callID: r}}
 	seq := r.promptSeq.Add(1)
-	s.playToneToRoom(callID, "", 45*time.Millisecond, seq)
+	s.playToneToRoom(callID, "", 45*time.Millisecond, seq, false)
 	peak := 0
 	for _, sample := range rec.pcm.samples {
 		v := int(sample)

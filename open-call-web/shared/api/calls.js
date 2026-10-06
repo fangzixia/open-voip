@@ -113,6 +113,13 @@ export function outboundCall(destination) {
   });
 }
 
+export function voiceNotificationCall(destination, promptAssetId) {
+  return apiFetch("/api/v1/calls/voice-notifications", {
+    method: "POST",
+    body: JSON.stringify({ destination, prompt_asset_id: promptAssetId }),
+  });
+}
+
 export function holdCall(callId, on) {
   return callMutate(`/api/v1/calls/${callId}/hold`, { action: "hold", callId, method: "POST", body: { on } });
 }

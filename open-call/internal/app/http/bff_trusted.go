@@ -16,7 +16,7 @@ import (
 // Switch 信任服务命令；最终用户的通话及媒体腿权限由 BFF 在转发前检查。
 func prepareSwitchRequest(r *http.Request, p auth.Principal, client *switchapi.Client) error {
 	path := r.URL.Path
-	if path == "/switch/v1/calls/outbound" {
+	if path == "/switch/v1/calls/outbound" || path == "/switch/v1/calls/voice-notifications" {
 		if p.AgentID == "" || p.IsGuest() {
 			return errs.Forbidden("仅坐席可外呼")
 		}
@@ -100,7 +100,7 @@ func isSwitchWrite(path string) bool {
 	if strings.HasSuffix(path, "/turn-credentials") {
 		return false
 	}
-	if path == "/switch/v1/calls/outbound" || strings.HasPrefix(path, "/switch/v1/supervisor/") {
+	if path == "/switch/v1/calls/outbound" || path == "/switch/v1/calls/voice-notifications" || strings.HasPrefix(path, "/switch/v1/supervisor/") {
 		return true
 	}
 	if !strings.HasPrefix(path, "/switch/v1/calls/") {

@@ -37,6 +37,36 @@ func (d RouterDeps) handleOutbound(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, view)
 }
 
+func (d RouterDeps) handleVoiceNotification(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AgentID       string `json:"agent_id"`
+		Destination   string `json:"destination"`
+		PromptAssetID string `json:"prompt_asset_id"`
+		TrunkID       string `json:"trunk_id"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if body.AgentID == "" {
+		writeErr(w, errs.InvalidRequest("agent_id 必填"))
+		return
+	}
+	id, err := d.CallControl.VoiceNotification(r.Context(), dto.VoiceNotificationRequest{
+		AgentID: body.AgentID, Destination: body.Destination, PromptAssetID: body.PromptAssetID, TrunkID: body.TrunkID,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	view, err := d.Signaling.GetCall(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, view)
+}
+
 func (d RouterDeps) handleHold(w http.ResponseWriter, r *http.Request) {
 	if err := d.authorizeCall(r, chi.URLParam(r, "callId")); err != nil {
 		writeErr(w, err)

@@ -50,6 +50,8 @@ func mapSwitchPath(path string) string {
 	switch {
 	case path == "/api/v1/calls/outbound":
 		return "/switch/v1/calls/outbound"
+	case path == "/api/v1/calls/voice-notifications":
+		return "/switch/v1/calls/voice-notifications"
 	case path == "/api/v1/calls":
 		return "/switch/v1/calls"
 	case strings.HasPrefix(path, "/api/v1/calls/"):
@@ -67,7 +69,7 @@ func shouldProxyToSwitch(path string) bool {
 	if isIVRAssetPath(path) {
 		return false
 	}
-	if path == "/api/v1/calls/outbound" || path == "/api/v1/calls" {
+	if path == "/api/v1/calls/outbound" || path == "/api/v1/calls/voice-notifications" || path == "/api/v1/calls" {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/v1/calls/") {
