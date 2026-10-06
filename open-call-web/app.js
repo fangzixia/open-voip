@@ -1,12 +1,20 @@
-// 统一登录壳：管理员与坐席入口、SSO 与令牌存储。
+// 统一登录壳：坐席与管理共用一个侧栏菜单。
 import { LitElement, css, html } from "lit";
-import { authMe, authOptions, changePassword, exchangeSSOTicket, login, popSSOTicket, startSSO } from "./shared/api.js";
+import { authMe, authOptions, changePassword, exchangeSSOTicket, login, logout, popSSOTicket, startSSO } from "./shared/api.js";
 import { apiEvents } from "./shared/http-client.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "./shared/auth-store.js";
 import { renderCredentialFields } from "./shared/components/credentials.js";
-import { renderLoginLayout } from "./shared/components/ui.js";
+import { renderAppShell, renderLoginLayout } from "./shared/components/ui.js";
+import { formatDateTime } from "./shared/datetime.js";
 import { appStyles } from "./shared/styles/index.js";
 import { availableViews } from "./shared/workspace-permissions.js";
+import {
+  buildStaffNav,
+  defaultStaffNavId,
+  isAdminNav,
+  isAgentNav,
+  staffNavLabel,
+} from "./shared/staff-nav.js";
 import "./admin/admin-app.js";
 import "./agent/agent-app.js";
 
@@ -17,24 +25,14 @@ export class OpenVoIPApp extends LitElement {
     error: { type: String },
     authOptions: { type: Object },
     me: { type: Object },
-    activeView: { type: String },
+    activeNav: { type: String },
     mustChangePassword: { type: Boolean },
     newPassword: { type: String },
+    clock: { type: String },
+    navBadges: { type: Object },
   };
 
   static styles = [...appStyles, css`
-    .workspace-switch {
-      display: flex;
-      gap: 8px;
-      padding: 10px 20px;
-      background: var(--ov-surface);
-      border-bottom: 1px solid var(--ov-border);
-    }
-    .workspace-switch button[aria-current="page"] {
-      font-weight: 700;
-      border-color: var(--ov-primary);
-      color: var(--ov-primary);
-    }
     [hidden] { display: none !important; }
     .empty { padding: 32px; }
   `];
@@ -46,16 +44,25 @@ export class OpenVoIPApp extends LitElement {
     this.error = "";
     this.authOptions = null;
     this.me = null;
-    this.activeView = "";
+    this.activeNav = "";
     this.mustChangePassword = false;
     this.newPassword = "";
+    this.clock = "";
+    this.navBadges = { inbound: 0 };
     this.onUnauthorized = () => {
       this.me = null;
-      this.activeView = "";
+      this.activeNav = "";
     };
     this.onSessionEnded = () => {
       this.me = null;
-      this.activeView = "";
+      this.activeNav = "";
+    };
+    this.onStaffNavigate = (event) => {
+      const id = event.detail?.id;
+      if (id) this.activeNav = id;
+    };
+    this.onStaffNavBadges = (event) => {
+      this.navBadges = { ...this.navBadges, ...event.detail };
     };
   }
 
@@ -63,6 +70,10 @@ export class OpenVoIPApp extends LitElement {
     super.connectedCallback();
     apiEvents.addEventListener("unauthorized", this.onUnauthorized);
     this.addEventListener("session-ended", this.onSessionEnded);
+    this.addEventListener("staff-navigate", this.onStaffNavigate);
+    this.addEventListener("staff-nav-badges", this.onStaffNavBadges);
+    this.#tickClock();
+    this.#clockTimer = setInterval(() => this.#tickClock(), 1000);
     authOptions().then((value) => {
       this.authOptions = value || {};
     }).catch(() => {
@@ -78,14 +89,25 @@ export class OpenVoIPApp extends LitElement {
     super.disconnectedCallback();
     apiEvents.removeEventListener("unauthorized", this.onUnauthorized);
     this.removeEventListener("session-ended", this.onSessionEnded);
+    this.removeEventListener("staff-navigate", this.onStaffNavigate);
+    this.removeEventListener("staff-nav-badges", this.onStaffNavBadges);
+    clearInterval(this.#clockTimer);
+  }
+
+  #clockTimer = null;
+
+  #tickClock() {
+    this.clock = formatDateTime();
   }
 
   async loadIdentity() {
     try {
       const identity = await authMe();
       this.me = identity;
-      const views = availableViews(identity);
-      if (!views[this.activeView]) this.activeView = views.agent ? "agent" : views.admin ? "admin" : "";
+      const navItems = buildStaffNav(identity);
+      if (!navItems.some((item) => item.id === this.activeNav)) {
+        this.activeNav = defaultStaffNavId(navItems);
+      }
       this.error = "";
     } catch (error) {
       clearAccessToken();
@@ -133,8 +155,21 @@ export class OpenVoIPApp extends LitElement {
     }
   }
 
-  #setView(view) {
-    this.activeView = view;
+  async #logout() {
+    try {
+      await logout();
+    } catch {
+      /* 仍清除本地会话 */
+    } finally {
+      clearAccessToken();
+      this.me = null;
+      this.activeNav = "";
+      this.dispatchEvent(new CustomEvent("session-ended", { bubbles: true, composed: true }));
+    }
+  }
+
+  #onNavigate(id) {
+    this.activeNav = id;
   }
 
   render() {
@@ -170,31 +205,44 @@ export class OpenVoIPApp extends LitElement {
           : "",
       });
     }
+
     const views = availableViews(this.me);
-    if (!views.admin && !views.agent) {
+    const navItems = buildStaffNav(this.me);
+    if (!navItems.length) {
       return html`<p class="empty">当前账号没有可用的管理或坐席权限，请联系管理员配置角色和坐席资料。</p>`;
     }
-    return html`
-      ${views.admin && views.agent ? html`
-        <nav class="workspace-switch" aria-label="工作区">
-          <button aria-current=${this.activeView === "agent" ? "page" : "false"}
-            @click=${() => this.#setView("agent")}>坐席工作台</button>
-          <button aria-current=${this.activeView === "admin" ? "page" : "false"}
-            @click=${() => this.#setView("admin")}>管理功能</button>
-        </nav>` : ""}
-      ${views.agent ? html`
-        <open-voip-agent-app
-          embedded
-          ?workspaceActive=${this.activeView === "agent"}
-          ?hidden=${this.activeView !== "agent"}
-        ></open-voip-agent-app>` : ""}
-      ${views.admin ? html`
-        <open-voip-admin-app
-          embedded
-          ?workspaceActive=${this.activeView === "admin"}
-          ?hidden=${this.activeView !== "admin"}
-        ></open-voip-admin-app>` : ""}
-    `;
+    const label = this.me.display_name || this.me.username || "用户";
+    return renderAppShell({
+      subtitle: "员工工作台",
+      navItems,
+      activeNav: this.activeNav,
+      onNavigate: (id) => this.#onNavigate(id),
+      breadcrumb: staffNavLabel(navItems, this.activeNav),
+      badges: this.navBadges,
+      topbar: html`
+        <span class="topbar-meta">${this.clock}</span>
+        <span class="topbar-meta">${label}</span>
+        <button type="button" @click=${() => this.#logout()}>退出</button>
+      `,
+      content: html`
+        ${views.agent ? html`
+          <open-voip-agent-app
+            embedded
+            content-only
+            staff-nav=${this.activeNav}
+            ?hidden=${!isAgentNav(this.activeNav)}
+            ?workspaceActive=${!!this.me}
+          ></open-voip-agent-app>` : ""}
+        ${views.admin ? html`
+          <open-voip-admin-app
+            embedded
+            content-only
+            staff-nav=${this.activeNav}
+            ?hidden=${!isAdminNav(this.activeNav)}
+            ?workspaceActive=${!!this.me}
+          ></open-voip-admin-app>` : ""}
+      `,
+    });
   }
 }
 

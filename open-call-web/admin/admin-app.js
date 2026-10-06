@@ -8,6 +8,7 @@ import { LitElement } from "lit";
 import { addQaMark, authMe, authOptions, bindQueueAgents, bindAgentSkills, createBridge, createQueue, createSkill, createWebhook, downloadCdrCsv, downloadRecording, endBridge, exchangeSSOTicket, fetchRecordingBlob, fetchAgentUtil, fetchHistoricalReport, fetchLiveReport, fetchStatus, forceCheckout, getCall, listAgents, listAudit, listCdr, listDids, listGroupMappings, listIvr, listOpenCalls, listPermissions, listQueues, listRoles, listSkills, listUsers, listWebhooks, listWrapUps, login, logout, patchQueue, popSSOTicket, replaceBridge, startSSO, upsertDid } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { canOpenAdminPage, firstAdminPage } from "../shared/workspace-permissions.js";
+import { isAdminNav } from "../shared/staff-nav.js";
 import { appStyles } from "../shared/styles/index.js";
 import "../shared/components/ivr/ivr-editor.js";
 
@@ -115,6 +116,8 @@ export class AdminApp extends LitElement {
     openCalls: { type: Array }, runtimeCall: { type: Object }, bridgeForm: { type: Object },
     embedded: { type: Boolean },
     workspaceActive: { type: Boolean },
+    contentOnly: { type: Boolean, attribute: "content-only" },
+    staffNav: { type: String, attribute: "staff-nav" },
   };
 
   static styles = appStyles;
@@ -168,6 +171,8 @@ export class AdminApp extends LitElement {
     this.bridgeForm = { bridge_id: "", leg_a: "", leg_b: "" };
     this.embedded = false;
     this.workspaceActive = false;
+    this.contentOnly = false;
+    this.staffNav = "";
   }
 
   #run(fn) {
@@ -200,6 +205,11 @@ export class AdminApp extends LitElement {
   updated(changed) {
     if (changed.has("workspaceActive") && this.workspaceActive) {
       this.feedback.activate();
+    }
+    if (this.contentOnly && changed.has("staffNav") && isAdminNav(this.staffNav) && this.staffNav !== this.nav) {
+      if (this.feedback) this.feedback.begin();
+      this.nav = this.staffNav;
+      void this.#loadNav(this.staffNav);
     }
   }
 

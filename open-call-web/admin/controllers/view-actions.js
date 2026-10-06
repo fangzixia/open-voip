@@ -4,6 +4,10 @@ export function adminViewActions(host, operations) {
   return {
     ...operations,
     navigate: (id) => {
+      if (host.contentOnly) {
+        host.dispatchEvent(new CustomEvent("staff-navigate", { detail: { id }, bubbles: true, composed: true }));
+        return;
+      }
       if (host.feedback) host.feedback.begin();
       else { host.error = ""; host.notice = ""; }
       host.nav = id;

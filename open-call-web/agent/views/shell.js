@@ -20,6 +20,28 @@ export const NAV = [
   { id: "device", label: "设备" },
 ];
 
+export function renderAppContent(host, actions) {
+  const sessionState = host.me?.session?.state || "offline";
+  const page = (render, stateKeys, actionKeys, ...rest) =>
+    render(project(host, stateKeys), project(actions, actionKeys), ...rest);
+  return html`
+    ${renderFeedback({ error: host.error, notice: host.outboundNotice || host.notice })}
+    ${host.nav === "desk" ? page(renderDeskView,
+      ["audioMuted", "audioPlaybackBlocked", "call", "cameraUnavailable", "consulting", "dest", "elapsed", "hasLocal", "held", "incoming", "pendingWrapId", "permissions", "recentCalls", "sharing", "showPad", "videoAsk", "videoMuted", "wrapNotes", "xferMode"],
+      ["answer", "askVideo", "completeXfer", "conf", "decline", "dial", "doCheckIn", "doCheckOut", "downgrade", "dtmf", "hangup", "hold", "playRemoteAudio", "respondVideo", "setDest", "setIdle", "setShowPad", "setWrapNotes", "setXferMode", "share", "stageCaller", "stageQueue", "submitWrap", "toggleBusy", "toggleMute", "waitingCount", "xfer"], sessionState) : ""}
+    ${host.nav === "inbound" ? page(renderInboundView, ["incoming", "permissions"], ["answer", "decline"]) : ""}
+    ${host.nav === "outbound" ? page(renderOutboundView,
+      ["dest", "guestExpiresAt", "guestLink", "guestMedia", "me", "permissions"],
+      ["copyGuestLink", "dial", "listen", "makeLink", "setDest", "setGuestMedia"]) : ""}
+    ${host.nav === "queue" ? page(renderQueueView,
+      ["busyReason", "queues", "selectedQueues"],
+      ["doCheckIn", "doCheckOut", "setBusyReason", "setSelectedQueues", "toggleBusy"], state) : ""}
+    ${host.nav === "device" ? page(renderDeviceView,
+      ["audioDeviceId", "call", "devices", "hasLocal", "speakerDeviceId", "videoDeviceId"],
+      ["onCamChange", "onMicChange", "onSpeakerChange", "preview"]) : ""}
+  `;
+}
+
 export function renderApp(host, actions) {
     if (!host.me) {
       if (host.embedded) {
@@ -32,6 +54,9 @@ export function renderApp(host, actions) {
           </div>`;
       }
       return renderLoginView(host, actions);
+    }
+    if (host.contentOnly) {
+      return renderAppContent(host, actions);
     }
     const state = host.me.session?.state || "offline";
     const can = (code) => host.permissions?.includes(code);
@@ -50,22 +75,7 @@ export function renderApp(host, actions) {
           ${renderStatusTag(agentStateLabel(state), agentStateTone(state))}
           <button @click=${() => actions.logout()}>退出</button>
       `,
-      content: html`
-        ${renderFeedback({ error: host.error, notice: host.outboundNotice || host.notice })}
-        ${host.nav === "desk" ? page(renderDeskView,
-          ["audioMuted", "audioPlaybackBlocked", "call", "cameraUnavailable", "consulting", "dest", "elapsed", "hasLocal", "held", "incoming", "pendingWrapId", "permissions", "recentCalls", "sharing", "showPad", "videoAsk", "videoMuted", "wrapNotes", "xferMode"],
-          ["answer", "askVideo", "completeXfer", "conf", "decline", "dial", "doCheckIn", "doCheckOut", "downgrade", "dtmf", "hangup", "hold", "playRemoteAudio", "respondVideo", "setDest", "setIdle", "setShowPad", "setWrapNotes", "setXferMode", "share", "stageCaller", "stageQueue", "submitWrap", "toggleBusy", "toggleMute", "waitingCount", "xfer"], state) : ""}
-        ${host.nav === "inbound" ? page(renderInboundView, ["incoming", "permissions"], ["answer", "decline"]) : ""}
-        ${host.nav === "outbound" ? page(renderOutboundView,
-          ["dest", "guestExpiresAt", "guestLink", "guestMedia", "me", "permissions"],
-          ["copyGuestLink", "dial", "listen", "makeLink", "setDest", "setGuestMedia"]) : ""}
-        ${host.nav === "queue" ? page(renderQueueView,
-          ["busyReason", "queues", "selectedQueues"],
-          ["doCheckIn", "doCheckOut", "setBusyReason", "setSelectedQueues", "toggleBusy"], state) : ""}
-        ${host.nav === "device" ? page(renderDeviceView,
-          ["audioDeviceId", "call", "devices", "hasLocal", "speakerDeviceId", "videoDeviceId"],
-          ["onCamChange", "onMicChange", "onSpeakerChange", "preview"]) : ""}
-      `,
+      content: renderAppContent(host, actions),
     });
   }
 

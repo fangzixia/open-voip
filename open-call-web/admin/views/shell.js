@@ -29,6 +29,38 @@ export const NAV = [
   { id: "identity", label: "用户与权限", group: "系统设置" },
 ];
 
+export function renderAppContent(host, actions) {
+  const page = (render, stateKeys, actionKeys) =>
+    render(project(host, stateKeys), project(actions, actionKeys));
+  return html`
+    ${renderFeedback({ error: host.error, notice: host.notice })}
+    ${host.nav === "overview" ? page(renderOverview,
+      ["agents", "cdr", "cdrCaller", "cdrResult", "hist", "live", "me", "queues", "status"],
+      ["exportCdr", "filteredCdr", "idleAgents", "navigate", "resetCdr", "search", "setCdrCaller", "setCdrResult", "waiting"]) : ""}
+    ${host.nav === "runtime" ? page(renderRuntime,
+      ["bridgeForm", "me", "openCalls", "runtimeCall"],
+      ["createBridge", "endBridge", "loadRuntime", "replaceBridge", "selectRuntimeCall", "setBridgeForm"]) : ""}
+    ${host.nav === "queues" ? page(renderQueues,
+      ["agents", "me", "newVideoQueue", "newVoiceQueue", "queues", "skillName", "skills"],
+      ["addSkill", "bindAll", "bindSkill", "createQueue", "setBindAgentId", "setBindSkillId", "setSkillName", "toggleVip", "updateNewQueue"]) : ""}
+    ${host.nav === "agents" ? page(renderAgents,
+      ["agents", "hist", "me", "utils"],
+      ["force", "navigate", "setForceAgentId"]) : ""}
+    ${host.nav === "dids" ? page(renderDids,
+      ["didForm", "dids", "ivrs", "me", "queues"], ["saveDid", "updateDidForm"]) : ""}
+    ${host.nav === "cdr" ? page(renderCdrPage,
+      ["cdrCaller", "cdrPage", "cdrPageSize", "cdrResult", "cdrTotal", "me", "playType", "playUrl", "qaCallId", "qaLabel", "wrapUps"],
+      ["cdrNext", "cdrPrev", "downloadRec", "exportCdr", "filteredCdr", "playRec", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}
+    ${host.nav === "ivr" ? page(renderIvr, ["ivrs", "queues"], ["load"]) : ""}
+    ${host.nav === "webhooks" ? page(renderHooks,
+      ["hookUrl", "hooks", "me"], ["addHook", "setHookUrl"]) : ""}
+    ${host.nav === "audit" ? page(renderAudit, ["audit"], []) : ""}
+    ${host.nav === "identity" ? page(renderIdentity,
+      ["agentProfileDraft", "groupMappings", "identities", "identityInput", "me", "newIdentityUser", "newMapping", "newRole", "permissionsCatalog", "roles", "selectedUser", "users"],
+      ["bindIdentity", "createIdentityUser", "deleteRole", "editRole", "revokeSessions", "saveAgentProfile", "saveUsername", "saveLoginName", "saveEmployeeNo", "saveMapping", "saveRole", "saveUserRoles", "selectUser", "toggleDisabled", "toggleMappingRole", "toggleNewUserRole", "togglePermission", "toggleUserRole", "unbindIdentity", "updateAgentProfile", "updateIdentityInput", "updateMapping", "updateNewIdentityUser", "updateRole"]) : ""}
+  `;
+}
+
 export function renderApp(host, operations) {
   const actions = adminViewActions(host, operations);
   if (!host.authed) {
@@ -48,6 +80,9 @@ export function renderApp(host, operations) {
     });
   }
 
+  if (host.contentOnly) {
+    return renderAppContent(host, actions);
+  }
   const page = (render, stateKeys, actionKeys) =>
     render(project(host, stateKeys), project(actions, actionKeys));
   const perms = host.me?.permissions || [];
@@ -62,32 +97,6 @@ export function renderApp(host, operations) {
       <span class="topbar-meta">${host.me?.username || "用户"}</span>
       <button @click=${actions.logout}>退出</button>
     `,
-    content: html`
-      ${renderFeedback({ error: host.error, notice:host.notice })}
-      ${host.nav === "overview" ? page(renderOverview,
-        ["agents", "cdr", "cdrCaller", "cdrResult", "hist", "live", "me", "queues", "status"],
-        ["exportCdr", "filteredCdr", "idleAgents", "navigate", "resetCdr", "search", "setCdrCaller", "setCdrResult", "waiting"]) : ""}
-      ${host.nav === "runtime" ? page(renderRuntime,
-        ["bridgeForm", "me", "openCalls", "runtimeCall"],
-        ["createBridge", "endBridge", "loadRuntime", "replaceBridge", "selectRuntimeCall", "setBridgeForm"]) : ""}
-      ${host.nav === "queues" ? page(renderQueues,
-        ["agents", "me", "newVideoQueue", "newVoiceQueue", "queues", "skillName", "skills"],
-        ["addSkill", "bindAll", "bindSkill", "createQueue", "setBindAgentId", "setBindSkillId", "setSkillName", "toggleVip", "updateNewQueue"]) : ""}
-      ${host.nav === "agents" ? page(renderAgents,
-        ["agents", "hist", "me", "utils"],
-        ["force", "navigate", "setForceAgentId"]) : ""}
-      ${host.nav === "dids" ? page(renderDids,
-        ["didForm", "dids", "ivrs", "me", "queues"], ["saveDid", "updateDidForm"]) : ""}
-      ${host.nav === "cdr" ? page(renderCdrPage,
-        ["cdrCaller", "cdrPage", "cdrPageSize", "cdrResult", "cdrTotal", "me", "playType", "playUrl", "qaCallId", "qaLabel", "wrapUps"],
-        ["cdrNext", "cdrPrev", "downloadRec", "exportCdr", "filteredCdr", "playRec", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}
-      ${host.nav === "ivr" ? page(renderIvr, ["ivrs", "queues"], ["load"]) : ""}
-      ${host.nav === "webhooks" ? page(renderHooks,
-        ["hookUrl", "hooks", "me"], ["addHook", "setHookUrl"]) : ""}
-      ${host.nav === "audit" ? page(renderAudit, ["audit"], []) : ""}
-      ${host.nav === "identity" ? page(renderIdentity,
-        ["agentProfileDraft", "groupMappings", "identities", "identityInput", "me", "newIdentityUser", "newMapping", "newRole", "permissionsCatalog", "roles", "selectedUser", "users"],
-        ["bindIdentity", "createIdentityUser", "deleteRole", "editRole", "revokeSessions", "saveAgentProfile", "saveUsername", "saveLoginName", "saveEmployeeNo", "saveMapping", "saveRole", "saveUserRoles", "selectUser", "toggleDisabled", "toggleMappingRole", "toggleNewUserRole", "togglePermission", "toggleUserRole", "unbindIdentity", "updateAgentProfile", "updateIdentityInput", "updateMapping", "updateNewIdentityUser", "updateRole"]) : ""}
-    `,
+    content: renderAppContent(host, actions),
   });
 }

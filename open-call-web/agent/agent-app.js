@@ -20,6 +20,7 @@ import {
   recentCallResultLabel,
   shouldPromptWrapUp,
 } from "../shared/call-outcome.js";
+import { isAgentNav } from "../shared/staff-nav.js";
 
 
 export class AgentApp extends LitElement {
@@ -64,6 +65,8 @@ export class AgentApp extends LitElement {
     live: { type: Object },
     embedded: { type: Boolean },
     workspaceActive: { type: Boolean },
+    contentOnly: { type: Boolean, attribute: "content-only" },
+    staffNav: { type: String, attribute: "staff-nav" },
     outboundNotice: { type: String },
   };
 
@@ -126,7 +129,17 @@ export class AgentApp extends LitElement {
     this.live = null;
     this.embedded = false;
     this.workspaceActive = false;
+    this.contentOnly = false;
+    this.staffNav = "";
     this.outboundNotice = "";
+  }
+
+  #emitNavBadges() {
+    this.dispatchEvent(new CustomEvent("staff-nav-badges", {
+      bubbles: true,
+      composed: true,
+      detail: { inbound: this.incoming ? 1 : 0 },
+    }));
   }
 
   #run(fn) {
@@ -182,6 +195,12 @@ export class AgentApp extends LitElement {
       this.feedback.activate();
       if (this.embedded && !this.me && getAccessToken()) void this.#restore();
     }
+    if (this.contentOnly && changed.has("staffNav") && isAgentNav(this.staffNav) && this.staffNav !== this.nav) {
+      this.feedback.begin();
+      this.nav = this.staffNav;
+      if (this.nav === "desk" && this.media.pc) this.media.bindVideos();
+    }
+    if (changed.has("incoming")) this.#emitNavBadges();
   }
 
   #tickClock() {
@@ -283,6 +302,7 @@ export class AgentApp extends LitElement {
     if (msg.type === "system.connected") { void this.#syncCalls(); return; }
     if (msg.type === "call.ringing") {
       this.incoming = msg.payload;
+      this.#emitNavBadges();
       setCallContext({ call_id: msg.payload?.call_id || "", queue_id: msg.payload?.queue_id || "" });
       reportEvent("call.ringing");
     } else if (msg.type === "call.ended") {
@@ -453,6 +473,7 @@ export class AgentApp extends LitElement {
       }
     }
     this.incoming = null;
+    this.#emitNavBadges();
   }
 
   async #hangup() {
@@ -751,6 +772,10 @@ export class AgentApp extends LitElement {
   }
 
   #navigate(id) {
+    if (this.contentOnly) {
+      this.dispatchEvent(new CustomEvent("staff-navigate", { detail: { id }, bubbles: true, composed: true }));
+      return;
+    }
     this.feedback.begin();
     this.nav = id;
     if (id === "desk" && this.media.pc) this.media.bindVideos();
