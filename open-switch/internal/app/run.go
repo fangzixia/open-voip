@@ -108,6 +108,9 @@ func Run(configPath string) error {
 	mediaSvc.SetSIPHangupHandler(func(ctx context.Context, callID string) {
 		_ = callControl.Hangup(ctx, callID, dto.HangupReasonNormal)
 	})
+	mediaSvc.SetPromptFinishedHandler(func(ctx context.Context, callID string, loop bool) {
+		callControl.OnIVRPromptFinished(ctx, callID, loop)
+	})
 	startInbound := func(ctx context.Context, trunkID, did, from, callID string) (string, string, error) {
 		route, err := ccCore.ResolveDID(ctx, trunkID, did)
 		if err != nil {

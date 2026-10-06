@@ -188,6 +188,31 @@ func (s *Service) beginIVR(ctx context.Context, callID string) {
 	s.runIVRNode(ctx, callID)
 }
 
+// OnIVRPromptFinished 非循环放音结束后立即推进 play 节点（菜单仍依赖 DTMF/超时）。
+func (s *Service) OnIVRPromptFinished(ctx context.Context, callID string, loop bool) {
+	if loop {
+		return
+	}
+	s.mu.Lock()
+	rt := s.calls[callID]
+	if rt == nil || rt.ivr == nil || rt.ivr.awaitingAnswer {
+		s.mu.Unlock()
+		return
+	}
+	node, ok := rt.ivr.doc.Nodes[rt.ivr.node]
+	if !ok || node.Type != "play" {
+		s.mu.Unlock()
+		return
+	}
+	next := node.Next
+	s.mu.Unlock()
+	if next == "" {
+		_ = s.enterQueue(ctx, callID)
+		return
+	}
+	s.gotoIVR(ctx, callID, next)
+}
+
 // tickIVR 在节点超时后沿默认或下一节点继续，没有目标时转入排队。
 func (s *Service) tickIVR(ctx context.Context, callID string) {
 	s.mu.Lock()
@@ -466,7 +491,9 @@ func (s *Service) enterQueue(ctx context.Context, callID string) error {
 		if !strings.HasSuffix(strings.ToLower(promptFile), ".wav") {
 			promptFile = ""
 		}
-		_ = s.injectCustomerAudio(ctx, callID, dto.AudioSource{FilePath: promptFile, Loop: true})
+		if promptFile != "" {
+			_ = s.injectCustomerAudio(ctx, callID, dto.AudioSource{FilePath: promptFile, Loop: true})
+		}
 	}
 	_ = s.cdrUpsert(ctx, callID, "queued")
 	s.publishPosition(ctx, callID)

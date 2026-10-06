@@ -29,15 +29,16 @@ func normalizePromptAsset(ref string) string {
 
 func promptOutboundMetadata(agentID, asset string) string {
 	raw, _ := json.Marshal(map[string]any{
-		"outbound_mode":     "prompt_outbound",
-		"prompt_asset_id":   asset,
+		"outbound_mode":      "prompt_outbound",
+		"prompt_asset_id":    asset,
 		"initiator_agent_id": agentID,
 	})
 	return string(raw)
 }
 
 func promptOutboundHangupDelay(dur time.Duration) time.Duration {
-	// 与 IVR playNodeWaitSeconds 同类余量 + SIP 起播 lead-in（10×20ms）。
+	// 从放音开始计算的总等待（素材时长 + 尾帧余量 + SIP 起播 lead-in）。
+	// Worker 的 PlayWAVToPeer 已按实时时钟播完，挂断侧不得再叠加本函数的 dur。
 	delay := dur + 600*time.Millisecond + 10*20*time.Millisecond
 	if delay > maxPromptOutboundDuration {
 		return maxPromptOutboundDuration
