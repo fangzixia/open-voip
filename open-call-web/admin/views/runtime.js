@@ -29,7 +29,7 @@ export function renderRuntime(state, actions) {
 
   const detail = state.runtimeCall ? renderCrudSection({
     title: "桥接编辑",
-    hint: `通话 ${state.runtimeCall.id} · 状态 ${state.runtimeCall.state} · version ${state.runtimeCall.version ?? "—"}`,
+    hint: `通话 ${state.runtimeCall.id} · 状态 ${state.runtimeCall.state} · version ${state.runtimeCall.version ?? "—"}${state.runtimeCall.result ? ` · 结果 ${state.runtimeCall.result}` : ""}${state.runtimeCall.end_message ? ` · ${state.runtimeCall.end_message}` : ""}${state.runtimeCall.error_code ? ` · ${state.runtimeCall.error_code}` : ""}${state.runtimeCall.pstn_dial_state ? ` · PSTN ${state.runtimeCall.pstn_dial_state}` : ""}`,
     list: renderDataTable([
       { label: "腿 ID", key: "id" },
       { label: "角色", key: "role" },

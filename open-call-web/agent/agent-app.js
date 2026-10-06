@@ -12,6 +12,13 @@ import { appStyles } from "../shared/styles/index.js";
 import { listMediaDevices } from "../shared/webrtc.js";
 import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
+import {
+  applyCallEnded,
+  notifyCallFailure,
+  outboundProgressLabel,
+  recentCallResultLabel,
+  shouldPromptWrapUp,
+} from "../shared/call-outcome.js";
 
 
 export class AgentApp extends LitElement {
@@ -56,6 +63,7 @@ export class AgentApp extends LitElement {
     live: { type: Object },
     embedded: { type: Boolean },
     workspaceActive: { type: Boolean },
+    outboundNotice: { type: String },
   };
 
   static styles = appStyles;
@@ -113,6 +121,7 @@ export class AgentApp extends LitElement {
     this.live = null;
     this.embedded = false;
     this.workspaceActive = false;
+    this.outboundNotice = "";
   }
 
   #run(fn) {
@@ -218,7 +227,16 @@ export class AgentApp extends LitElement {
       const ringing = items.find(c => c.state === "ringing" && c.agent_id === this.me.id && !c.legs?.some(l => l.agent_id === this.me.id));
       this.incoming = ringing ? { ...ringing, call_id: ringing.id } : null;
       const active = items.find(c => c !== ringing);
-      if (!active && this.call) this.#endLocal(this.call.id);
+      if (!active && this.call) {
+        let endMeta = { result: "failed" };
+        try {
+          const ended = await getCall(this.call.id);
+          if (ended?.result) endMeta = { result: ended.result };
+        } catch {
+          /* 已结束或不可读 */
+        }
+        this.#endLocal(this.call.id, endMeta);
+      }
       if (active) {
         this.call = active;
         if (active?.version != null) setCallVersion(active.version, active.id);
@@ -237,10 +255,25 @@ export class AgentApp extends LitElement {
       setCallContext({ call_id: msg.payload?.call_id || "", queue_id: msg.payload?.queue_id || "" });
       reportEvent("call.ringing");
     } else if (msg.type === "call.ended") {
-      reportEvent("call.ended", { reason: msg.payload?.reason || "" });
-      if (this.call?.id === msg.payload?.call_id || this.incoming?.call_id === msg.payload?.call_id) {
-        this.#endLocal(msg.payload?.call_id);
+      const p = msg.payload || {};
+      reportEvent("call.ended", { reason: p.reason || "", result: p.result || "", error_code: p.error_code || "" });
+      if (this.call?.id === p.call_id || this.incoming?.call_id === p.call_id) {
+        applyCallEnded(this, p, (meta) => {
+          this.outboundNotice = "";
+          this.#endLocal(p.call_id, meta);
+        });
       }
+    } else if (msg.type === "call.outbound_progress") {
+      const p = msg.payload || {};
+      if (this.call?.id !== p.call_id) return;
+      this.outboundNotice = p.message || outboundProgressLabel(p.phase);
+      if (p.phase === "failed") {
+        reportEvent("call.outbound_failed", { result: "failed", error_code: p.error_code || "", message: p.message || "" });
+        notifyCallFailure(this, p);
+      }
+      if (p.phase === "connected") this.#startTimer();
+    } else if (msg.type === "command.failed" || msg.type === "recording.failed" || msg.type === "leg.failed") {
+      notifyCallFailure(this, msg.payload || {});
     } else if (msg.type === "agent.routing_state_changed" && this.me) {
       this.me = { ...this.me, session: { ...this.me.session, state: msg.payload.state, busy_reason: msg.payload.busy_reason } };
     } else if (msg.type === "recording.notice") {
@@ -260,12 +293,17 @@ export class AgentApp extends LitElement {
       this.consulting = false;
       if (msg.payload?.from_agent_id === this.me?.id) {
         this.feedback.liveNotice("咨询转已完成，请填写小结");
-        this.#endLocal(this.call?.id);
+        this.#endLocal(this.call?.id, { result: "answered" });
       } else {
         this.feedback.liveNotice("咨询转已完成，客户已接回");
       }
     } else if (msg.type === "call.answered" && msg.payload?.call_id) {
-      void this.#syncCalls();
+      void this.#syncCalls().then(() => {
+        if (this.call?.state === "active") {
+          this.outboundNotice = "";
+          this.#startTimer();
+        }
+      });
     } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.call?.id) {
       this.feedback.liveNotice("交换服务已恢复，正在重新连接媒体…");
       void this.#syncCalls().then(() => this.media.rejoin(this.call?.session_type !== "audio"));
@@ -357,8 +395,8 @@ export class AgentApp extends LitElement {
     if (id) {
       try {
         await hangupCall(id);
-      } catch {
-        /* 对端可能已挂 */
+      } catch (e) {
+        this.feedback.fail(e instanceof Error ? e.message : String(e));
       }
     }
     this.#endLocal(id);
@@ -376,16 +414,25 @@ export class AgentApp extends LitElement {
   }
 
   /** 记录最近通话并释放本地媒体与界面状态。 */
-  #endLocal(endedId) {
+  #endLocal(endedId, endMeta = {}) {
     const wrapId = endedId || this.call?.id;
-    if (this.call || this.incoming) {
+    const hadCall = !!this.call;
+    const hadIncoming = !!this.incoming;
+    const elapsed = this.elapsed;
+    const resultKey = endMeta.result ?? this.call?.result;
+    if (hadCall || hadIncoming) {
       this.recentCalls = [
         {
           time: formatDateTime(),
           caller: this.call?.caller || this.incoming?.caller || this.dest || "—",
           queue: this.call?.queue_name || this.incoming?.queue_name || "—",
-          result: this.call ? "已接通" : "未接",
-          duration: this.elapsed,
+          result: recentCallResultLabel({
+            result: resultKey,
+            elapsed,
+            hadActiveCall: hadCall,
+            hadIncoming,
+          }),
+          duration: elapsed,
         },
         ...this.recentCalls,
       ].slice(0, 20);
@@ -404,7 +451,7 @@ export class AgentApp extends LitElement {
     this.elapsed = 0;
     this.consulting = false;
     this.showPad = false;
-    if (wrapId) {
+    if (wrapId && shouldPromptWrapUp({ result: resultKey, elapsed })) {
       this.pendingWrapId = wrapId;
       setCallContext({ call_id: wrapId, leg_id: "" });
     } else {
@@ -427,6 +474,7 @@ export class AgentApp extends LitElement {
       const leg = (call.legs || []).find((l) => l.agent_id === this.me?.id);
       setCallContext({ call_id: call.id, leg_id: leg?.id || "", queue_id: call.queue_id || "" });
       reportEvent("call.outbound_created", { state: call.state });
+      this.outboundNotice = call.pstn_dial_state === "dialing" ? "正在出局拨号…" : "";
       if (leg && (call.state === "active" || call.state === "ringing")) {
         await this.media.start({
           callId: call.id,

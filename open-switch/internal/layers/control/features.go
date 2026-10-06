@@ -400,7 +400,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 			continue
 		}
 		hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := s.Hangup(hctx, open, dto.HangupReasonError)
+		err := s.failCall(hctx, open, dto.HangupReasonError, codeCallSuperseded, "已发起新外呼，上一通话已结束")
 		cancel()
 		if err != nil {
 			slog.Warn("外呼前结束旧通话超时或失败", "call_id", open, "err", err)
@@ -447,7 +447,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	target, err := s.deps.Agents.ByExtension(ctx, req.Destination)
 	if err != nil {
 		if !errors.Is(err, errs.ErrNotFound) {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 			return "", err
 		}
 		s.mu.Lock()
@@ -456,7 +456,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 		return s.originateSIPCall(ctx, callID, rt, req)
 	}
 	if err := s.setAgentState(ctx, callID, target.AgentID, "idle", "ringing", "inbound-internal"); err != nil {
-		_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+		_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 		return "", err
 	}
 	s.mu.Lock()
@@ -468,7 +468,7 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	}
 	_ = s.cdrUpsert(ctx, callID, "queued")
 	if err := s.ringDevice(ctx, callID, target.AgentID); err != nil {
-		_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+		_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 		return "", err
 	}
 	return callID, s.publishCall(ctx, callID, "call.ringing", target.AgentID, map[string]any{
@@ -494,9 +494,12 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 	if err := s.transition(ctx, callID, stateRinging); err != nil {
 		return "", err
 	}
+	s.setPstnDialState(callID, "pending")
+	s.emitOutboundProgress(ctx, callID, req.AgentID, "dialing", "正在出局拨号…")
 	go func() {
 		dialCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
+		s.setPstnDialState(callID, "dialing")
 		err := s.deps.Media.OriginateSIP(dialCtx, callID, pstnLeg.ID, req.Destination, req.TrunkID)
 		s.mu.Lock()
 		ended := rt.rec.State == stateEnded
@@ -506,7 +509,10 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 			return
 		}
 		if err != nil {
-			go func() { _ = s.Hangup(context.Background(), callID, dto.HangupReasonError) }()
+			msg, code := failureFromErr(err)
+			s.setPstnDialState(callID, "failed")
+			s.emitOutboundProgress(context.Background(), callID, req.AgentID, "failed", msg)
+			_ = s.failCall(context.Background(), callID, dto.HangupReasonError, code, msg)
 			return
 		}
 		ctx, unlock := s.command(context.Background(), callID)
@@ -520,9 +526,11 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 		rt.answeredAt = new(time.Now().UTC())
 		s.mu.Unlock()
 		if s.transition(ctx, callID, stateActive) != nil {
-			go func() { _ = s.Hangup(context.Background(), callID, dto.HangupReasonError) }()
+			_ = s.failCall(ctx, callID, dto.HangupReasonError, codeCallState, "无法进入通话状态")
 			return
 		}
+		s.setPstnDialState(callID, "connected")
+		s.emitOutboundProgress(ctx, callID, req.AgentID, "connected", "")
 		_ = s.cdrUpsert(ctx, callID, "answered")
 		_ = s.publishCall(ctx, callID, "call.answered", req.AgentID, map[string]any{"call_id": callID, "agent_id": req.AgentID})
 	}()

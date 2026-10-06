@@ -155,7 +155,7 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 		var dres *sipgo.ErrDialogResponse
 		if !errors.As(err, &dres) || dres == nil || dres.Res == nil {
 			rtpSess.close()
-			return errs.Unprocessable("SIP 对端拒绝或超时", errs.CodeSIPDisabled)
+			return errs.Unprocessable("SIP 对端无应答或超时", "SIP_TIMEOUT")
 		}
 		code := dres.Res.StatusCode
 		if code >= 300 && code < 400 {
@@ -177,10 +177,31 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 			}
 		}
 		rtpSess.close()
-		return errs.Unprocessable("SIP 对端拒绝或超时", errs.CodeSIPDisabled)
+		rejectMsg, rejectCode := sipInviteRejectMessage(code)
+		return errs.Unprocessable(rejectMsg, rejectCode)
 	}
 	rtpSess.close()
 	return errs.Unprocessable("SIP 对端拒绝或超时", errs.CodeSIPDisabled)
+}
+
+func sipInviteRejectMessage(status int) (message, code string) {
+	switch status {
+	case 486, 600:
+		return "对端忙（486）", "SIP_BUSY"
+	case 480, 410:
+		return "对端暂时不可用（480）", "SIP_UNAVAILABLE"
+	case 404:
+		return "号码不存在（404）", "SIP_NOT_FOUND"
+	case 403:
+		return "呼叫被拒绝（403）", "SIP_FORBIDDEN"
+	case 408, 504:
+		return "对端无应答（408）", "SIP_TIMEOUT"
+	default:
+		if status >= 400 {
+			return fmt.Sprintf("SIP 拒绝（%d）", status), "SIP_REJECT"
+		}
+		return "SIP 对端拒绝或超时", errs.CodeSIPDisabled
+	}
 }
 
 func (u *sipUA) sendPRACK(ctx context.Context, dlg *sipgo.DialogClientSession, res *sip.Response) error {

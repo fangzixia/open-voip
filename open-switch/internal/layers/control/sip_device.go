@@ -47,6 +47,11 @@ func (s *Service) ringDevice(ctx context.Context, callID, agentID string) error 
 			err = s.Answer(context.WithValue(ctx, sipAnswerKey{}, true), callID, agentID)
 		}
 		if err != nil {
+			if api := errs.AsAPIError(err); api != nil {
+				s.setCallEndDetail(callID, api.Message, api.Code)
+			} else {
+				s.setCallEndDetail(callID, err.Error(), "")
+			}
 			_ = s.deps.Media.LeaveRoom(ctx, callID, legID)
 			// 不可达设备标记为 busy，避免 ACD 反复振铃同一离线坐席。
 			_ = s.setAgentState(ctx, callID, agentID, "", "busy", "sip_unavailable")
@@ -70,7 +75,7 @@ func (s *Service) ringDevice(ctx context.Context, callID, agentID string) error 
 			} else if current.rec.QueueID != nil {
 				_ = s.transition(ctx, callID, stateQueued)
 			} else {
-				_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+				_ = s.failCall(ctx, callID, dto.HangupReasonError, codeSIPDevice, "SIP 话机不可用或未注册")
 			}
 			_ = s.publishCall(ctx, callID, "call.device_failed", agentID, map[string]any{"call_id": callID})
 		}

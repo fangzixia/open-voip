@@ -294,8 +294,9 @@ func (s *Service) gotoIVR(ctx context.Context, callID, nodeID string) {
 	rt.ivr.hops++
 	if rt.ivr.hops > maxIVRHops {
 		s.mu.Unlock()
-		s.emitCall(ctx, callID, "command.failed", "", map[string]any{"call_id": callID, "reason": "ivr_hop_limit"})
-		_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+		msg := "IVR 跳转次数过多"
+		s.emitCommandFailed(ctx, callID, codeIVRHopLimit, msg, "ivr_hop_limit")
+		_ = s.failCall(ctx, callID, dto.HangupReasonError, codeIVRHopLimit, msg)
 		return
 	}
 	rt.ivr.node = nodeID
@@ -321,7 +322,8 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 	}
 	if node.Type == "play" || node.Type == "menu" || (node.Type == "csat" && node.File != "") {
 		if err := s.injectCustomerAudio(ctx, callID, dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"}); err != nil {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			s.emitCommandFailed(ctx, callID, codeIVRPromptFailed, "IVR 放音失败", "ivr_prompt")
+			_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 			return
 		}
 	}
@@ -352,7 +354,8 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 			rt.ivr.entered = time.Now().UTC()
 			rt.ivr.timeout = time.Duration(node.TimeoutSec) * time.Second
 			if err := s.deps.BusinessActions.BeginBusinessAction(ctx, ports.BusinessAction{ID: rt.ivr.actionID, CallID: callID, NodeID: rt.ivr.node, Action: node.Action, Outcomes: node.Choices, Deadline: rt.ivr.entered.Add(rt.ivr.timeout)}); err != nil {
-				_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+				s.emitCommandFailed(ctx, callID, codeIVRActionFailed, "IVR 业务动作启动失败", "ivr_action")
+				_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 			}
 		}
 	case "hangup":
@@ -362,7 +365,8 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 			rt.rec.SessionType = dto.SessionType(node.SessionType)
 		}
 		if err := s.routeQueue(ctx, callID, node.QueueID); err != nil {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			s.emitCommandFailed(ctx, callID, codeRouteQueueFailed, "转队列失败", "route_queue")
+			_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 		}
 	case "time_condition":
 		open := withinHoursFromSchedule(node.Schedule, s.deps.Config.Now(ctx))

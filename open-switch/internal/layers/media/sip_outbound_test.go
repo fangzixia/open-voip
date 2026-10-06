@@ -1,15 +1,20 @@
 package media
 
-import "testing"
+import (
+	"testing"
+)
 
-func TestSIPOutboundLooksPSTN(t *testing.T) {
-	if !sipOutboundLooksPSTN("13800138000") {
-		t.Fatal("mobile")
+func TestSipInviteRejectMessage(t *testing.T) {
+	msg, code := sipInviteRejectMessage(486)
+	if code != "SIP_BUSY" || msg == "" {
+		t.Fatalf("486: got %q %q", msg, code)
 	}
-	if sipOutboundLooksPSTN("8001") {
-		t.Fatal("short extension")
+	msg, code = sipInviteRejectMessage(480)
+	if code != "SIP_UNAVAILABLE" {
+		t.Fatalf("480: got %q", code)
 	}
-	if !sipOutboundLooksPSTN("+8613800138000") {
-		t.Fatal("e164")
+	msg, code = sipInviteRejectMessage(503)
+	if code != "SIP_REJECT" {
+		t.Fatalf("503: got %q", code)
 	}
 }

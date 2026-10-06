@@ -76,6 +76,10 @@ type runtimeCall struct {
 	consultFrom    string
 	transferMode   string
 	playbacks      map[string]string
+	endMessage     string
+	endCode        string
+	cdrResult      string
+	pstnDialState  string
 }
 
 // Service 实现 CallControlPort 与 SignalingPort。
@@ -237,7 +241,7 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 	}
 	if !req.SkipIVR && flowID != "" {
 		if err := s.bootIVR(ctx, callID, flowID); err != nil {
-			_ = s.Hangup(ctx, callID, dto.HangupReasonError)
+			_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 			return "", err
 		}
 		return callID, nil
@@ -410,6 +414,19 @@ func (s *Service) doDecline(ctx context.Context, callID, agentID string) error {
 	return s.tryDispatch(ctx, callID)
 }
 
+// setCallEndDetail 写入挂断事件附带的业务错误说明（如 SIP 出局失败），供 open-call / 坐席 UI 展示。
+func (s *Service) setCallEndDetail(callID, message, code string) {
+	if message == "" && code == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rt := s.calls[callID]; rt != nil {
+		rt.endMessage = message
+		rt.endCode = code
+	}
+}
+
 // Hangup 幂等结束通话，依次释放坐席、停止录音、写入话单并关闭媒体房间。
 func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupReason) error {
 	ctx, unlock := s.command(ctx, callID)
@@ -522,6 +539,11 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	if err := s.cdrUpsert(ctx, callID, result); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	rt.cdrResult = result
+	failureMsg := rt.endMessage
+	mergeCallEndIntoMetadata(&rt.rec, rt.endMessage, rt.endCode, result)
+	s.mu.Unlock()
 	if err := s.transition(ctx, callID, stateEnded); err != nil {
 		return err
 	}
@@ -538,11 +560,18 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 		_ = s.deps.IVRSessions.DeleteIVRSession(ctx, callID)
 	}
 	_ = s.deps.Media.CloseRoom(ctx, callID)
-	_ = s.publishCall(ctx, callID, "call.ended", offered, map[string]any{
+	endedPayload := map[string]any{
 		"call_id": callID,
 		"reason":  string(reason),
 		"result":  result,
-	})
+	}
+	if rt.endMessage != "" {
+		endedPayload["message"] = rt.endMessage
+	}
+	if rt.endCode != "" {
+		endedPayload["error_code"] = rt.endCode
+	}
+	_ = s.publishCall(ctx, callID, "call.ended", offered, endedPayload)
 	endedAt := *rt.rec.EndedAt
 	var waitMS, ringMS, talkMS int64
 	if !rt.queuedAt.IsZero() {
@@ -562,11 +591,16 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	if rt.answeredAt != nil {
 		talkMS = endedAt.Sub(*rt.answeredAt).Milliseconds()
 	}
-	observability.Event(ctx, "control", "call.trace.summary", "ended", result, string(reason), time.Time{},
+	traceFields := []any{
 		"session_type", string(rt.rec.SessionType),
 		"total_ms", endedAt.Sub(rt.rec.CreatedAt).Milliseconds(),
 		"queue_wait_ms", waitMS, "ring_ms", ringMS, "talk_ms", talkMS,
-		"video_started", rt.videoStartedAt != nil, "recording_id", rt.recordingID)
+		"video_started", rt.videoStartedAt != nil, "recording_id", rt.recordingID,
+	}
+	if failureMsg != "" {
+		traceFields = append(traceFields, "failure_message", failureMsg)
+	}
+	observability.Event(ctx, "control", "call.trace.summary", "ended", result, string(reason), time.Time{}, traceFields...)
 	s.mu.Lock()
 	delete(s.calls, callID)
 	s.mu.Unlock()
@@ -891,6 +925,7 @@ func toView(rt *runtimeCall) ports.CallView {
 		}
 		v.Legs = append(v.Legs, lv)
 	}
+	enrichCallView(&v, rt)
 	return v
 }
 

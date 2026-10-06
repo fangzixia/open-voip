@@ -118,3 +118,60 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/
 - `/etc/systemd/system/open-call.service`
 
 配置模板见各子项目 `deploy/config.example.yml`（复制为 `config.yml` 后按环境修改 DSN 与 SIP）。
+
+呼叫失败与 WebSocket 事件契约见 [call-events.md](call-events.md)。
+
+## HTTPS 与证书自动续期（open-switch.cn）
+
+生产环境在 ECS 上使用 **Nginx 终结 TLS**；证书由 **acme.sh** 管理，文件路径：
+
+- `/etc/nginx/ssl/open-switch.cn.crt`
+- `/etc/nginx/ssl/open-switch.cn.key`
+
+### 为何不用 certbot HTTP 验证
+
+Let's Encrypt 从**境外**访问 ECS 的 80 端口常会超时（国内访问正常）。因此不要用 `certbot --nginx` 做 HTTP-01。应使用 **DNS-01**，并由 **阿里云 DNS API** 自动添加/删除 `_acme-challenge` TXT 记录。
+
+### 一次性配置自动续期
+
+1. **阿里云 RAM**：创建子账号 AccessKey，授予 `open-switch.cn` 的 DNS 解析权限（例如系统策略 `AliyunDNSFullAccess`，或仅 `AddDomainRecord` / `DeleteDomainRecord` / `DescribeDomainRecords` / `UpdateDomainRecord`）。
+2. **在 ECS 上**创建密钥文件（勿写入 Git、勿发到聊天）：
+
+   ```bash
+   install -m 600 /dev/null /root/.acme.sh/ali.env
+   # 编辑填入 Ali_Key / Ali_Secret
+   ```
+
+3. **切换为 API 签发**（会覆盖原先「手动 TXT」方式，之后 cron 可全自动续期）：
+
+   ```bash
+   bash /opt/open-voip/src/scripts/deploy/acme-dns-ali-setup.sh
+   ```
+
+   脚本见 [scripts/deploy/acme-dns-ali-setup.sh](../scripts/deploy/acme-dns-ali-setup.sh)。
+
+4. **确认 cron**（acme.sh 安装时通常已写入）：
+
+   ```bash
+   crontab -l | grep acme
+   ```
+
+5. **试跑续期**（不真换证时可只看日志；强制试续期加 `--force`）：
+
+   ```bash
+   /root/.acme.sh/acme.sh --cron --home /root/.acme.sh
+   ```
+
+续期成功后会执行 `--install-cert` 时配置的 `nginx -t && systemctl reload nginx`。
+
+### 手动 TXT 方式（不推荐长期使用）
+
+若仍使用 `acme.sh --issue ... --dns --yes-I-know-dns-manual-mode-enough-go-ahead-please`，每次续期都要在阿里云再添加 TXT；**cron 无法无人值守续期**。请尽快改为上面的 `dns_ali` 方式。
+
+### 访问与验收
+
+- 员工：`https://open-switch.cn/`
+- 访客：`https://open-switch.cn/guest/`
+- `curl -sS https://open-switch.cn/health/ready`
+
+**注意**：在 ECS **本机** `curl https://open-switch.cn/` 可能超时（回环访问公网 IP），以外网或本机浏览器为准。

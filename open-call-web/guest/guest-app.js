@@ -10,6 +10,7 @@ import { appStyles } from "../shared/styles/index.js";
 import { listMediaDevices, microphoneConstraints, replaceInputDevice, setLocalMuted, startMediaSession, stopMedia } from "../shared/webrtc.js";
 import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
+import { userFacingCallEndMessage, userFacingFailureMessage } from "../shared/call-outcome.js";
 
 
 export class GuestApp extends LitElement {
@@ -166,10 +167,16 @@ export class GuestApp extends LitElement {
       reportEvent("call.answered");
       await this.#enterMedia(true);
     } else if (msg.type === "call.ended") {
-      reportEvent("call.ended", { reason: msg.payload?.reason || "" });
+      const p = msg.payload || {};
+      reportEvent("call.ended", { reason: p.reason || "", result: p.result || "", error_code: p.error_code || "" });
+      const endMsg = userFacingCallEndMessage(p);
+      if (endMsg) this.notice = endMsg;
       this.#cleanup();
       this.step = "ended";
       this.nav = "talk";
+    } else if (msg.type === "command.failed" || msg.type === "recording.failed") {
+      const notice = userFacingFailureMessage(msg.payload);
+      if (notice) this.feedback.liveNotice(notice);
     } else if (msg.type === "queue.position" || msg.type === "queue.position_changed") {
       this.permissionHint = msg.payload?.message || "正在排队…";
       this.position = msg.payload?.position ?? this.position;

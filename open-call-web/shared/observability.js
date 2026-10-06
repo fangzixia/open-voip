@@ -7,7 +7,7 @@ const MAX_QUEUE = 200;
 const FLUSH_MS = 5000;
 const MAX_BACKOFF_MS = 60000;
 const SAFE_DETAIL_KEYS = new Set([
-  "attempt", "code", "delay_ms", "direction", "duration_ms", "error_name",
+  "attempt", "code", "error_code", "result", "delay_ms", "direction", "duration_ms", "error_name",
   "fps", "ice_connection_state", "ice_gathering_state", "kind", "message",
   "packets", "packets_lost", "peer_connection_state", "phase", "reason",
   "received_bytes", "remote_candidate_type", "rtt_ms", "sent_bytes",

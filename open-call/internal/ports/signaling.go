@@ -35,6 +35,10 @@ type CallView struct {
 	RecordingNotice string `json:"recording_notice,omitempty"`
 	// Legs 通话腿列表。
 	Legs []LegView `json:"legs"`
+	Result        string `json:"result,omitempty"`
+	EndMessage    string `json:"end_message,omitempty"`
+	ErrorCode     string `json:"error_code,omitempty"`
+	PstnDialState string `json:"pstn_dial_state,omitempty"`
 }
 
 // LegView 通话腿视图。

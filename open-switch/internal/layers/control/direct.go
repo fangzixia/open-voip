@@ -237,7 +237,11 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 			return
 		}
 		if err != nil {
-			s.emitCall(lockedCtx, callID, "leg.failed", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "error": err.Error()})
+			msg, code := failureFromErr(err)
+			s.emitCall(lockedCtx, callID, "leg.failed", "", map[string]any{
+				"call_id": callID, "leg_id": leg.ID, "error": err.Error(),
+				"message": msg, "error_code": code,
+			})
 			if s.deps.Commands != nil && commandID != "" {
 				_ = s.deps.Commands.Complete(lockedCtx, commandID, "failed", "dial_failed", map[string]any{"leg_id": leg.ID, "error": err.Error()})
 			}

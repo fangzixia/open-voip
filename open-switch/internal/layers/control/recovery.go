@@ -21,7 +21,7 @@ func (s *Service) Recover(ctx context.Context) error {
 		return err
 	}
 	for _, rec := range records {
-		if err := s.Hangup(ctx, rec.ID, dto.HangupReasonError); err != nil {
+		if err := s.failCall(ctx, rec.ID, dto.HangupReasonError, codeSwitchRecover, "交换服务恢复，通话已结束"); err != nil {
 			slog.Warn("结束孤儿通话", "call_id", rec.ID, "err", err)
 		}
 	}
@@ -84,11 +84,24 @@ func (s *Service) hangupPersistOnly(ctx context.Context, callID string, rec port
 	if s.deps.Media != nil {
 		_ = s.deps.Media.CloseRoom(ctx, callID)
 	}
-	_ = s.publishCall(ctx, callID, "call.ended", rec.AgentID, map[string]any{
+	endedPayload := map[string]any{
 		"call_id": callID,
 		"reason":  string(reason),
 		"result":  result,
-	})
+	}
+	if result == "failed" {
+		msg := defaultEndMessage(reason)
+		if reason == dto.HangupReasonError {
+			msg = "通话异常结束"
+		}
+		if msg != "" {
+			endedPayload["message"] = msg
+		}
+		if reason == dto.HangupReasonError {
+			endedPayload["error_code"] = codeCallState
+		}
+	}
+	_ = s.publishCall(ctx, callID, "call.ended", rec.AgentID, endedPayload)
 	return nil
 }
 
@@ -98,7 +111,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		return err
 	}
 	for _, call := range calls {
-		if err := s.Hangup(ctx, call.ID, dto.HangupReasonError); err != nil {
+		if err := s.failCall(ctx, call.ID, dto.HangupReasonError, codeSwitchRecover, "服务关闭，通话已结束"); err != nil {
 			return err
 		}
 	}

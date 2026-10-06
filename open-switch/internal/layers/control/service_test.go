@@ -153,7 +153,13 @@ func (f *fakeAgents) ByExtension(_ context.Context, extension string) (ports.Age
 	return ports.AgentInfo{}, errs.ErrNotFound
 }
 func (f *fakeAgents) ByID(_ context.Context, id string) (ports.AgentInfo, error) {
-	return ports.AgentInfo{AgentID: id}, nil
+	f.mu.Lock()
+	st := f.states[id]
+	f.mu.Unlock()
+	if st == "" {
+		st = "idle"
+	}
+	return ports.AgentInfo{AgentID: id, State: st}, nil
 }
 func (f *fakeAgents) SetCallState(_ context.Context, _ string, agentID, from, to, _ string) error {
 	f.mu.Lock()
@@ -283,10 +289,19 @@ func (r recPolicy) NotifyMessageForMode(_ context.Context, mode string) string {
 	return ""
 }
 
-type fakeEvents struct{ types []string }
+type fakeEvents struct {
+	types    []string
+	payloads map[string][]map[string]any
+}
 
 func (f *fakeEvents) PublishCallEvent(_ context.Context, ev ports.CallEvent) error {
 	f.types = append(f.types, ev.Type)
+	if f.payloads == nil {
+		f.payloads = map[string][]map[string]any{}
+	}
+	if len(ev.Payload) > 0 {
+		f.payloads[ev.Type] = append(f.payloads[ev.Type], ev.Payload)
+	}
 	return nil
 }
 
@@ -555,6 +570,48 @@ func TestRecordingStartsOnActiveNotOnHold(t *testing.T) {
 	}
 	if media.stops != 1 {
 		t.Fatalf("hangup should stop recording, stops=%d", media.stops)
+	}
+}
+
+func TestOutboundSIPOriginateFailureEmitsEndedMessage(t *testing.T) {
+	svc, media, _, ev := newTestService("ag1")
+	media.sipOK = false
+	ctx := context.Background()
+	id, err := svc.Outbound(ctx, dto.OutboundRequest{AgentID: "ag1", Destination: "+8613800138000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	var view ports.CallView
+	for {
+		var gerr error
+		view, gerr = svc.GetCall(ctx, id)
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		if view.State == stateEnded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout state=%s result=%s message=%q", view.State, view.Result, view.EndMessage)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if view.Result != "failed" || view.EndMessage == "" {
+		t.Fatalf("view result=%q end_message=%q", view.Result, view.EndMessage)
+	}
+	var ended map[string]any
+	for _, p := range ev.payloads["call.ended"] {
+		if p["call_id"] == id {
+			ended = p
+			break
+		}
+	}
+	if ended == nil {
+		t.Fatalf("missing call.ended payloads=%v types=%v", ev.payloads, ev.types)
+	}
+	if ended["result"] != "failed" || ended["message"] == "" {
+		t.Fatalf("ended payload=%v", ended)
 	}
 }
 

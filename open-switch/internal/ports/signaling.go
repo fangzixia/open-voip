@@ -35,6 +35,14 @@ type CallView struct {
 	RecordingNotice string `json:"recording_notice,omitempty"`
 	// Legs 通话腿列表。
 	Legs []LegView `json:"legs"`
+	// Result 话单结果（ended 后或与 CDR 对齐），进行中可空。
+	Result string `json:"result,omitempty"`
+	// EndMessage 结束说明，与 call.ended 的 message 对齐。
+	EndMessage string `json:"end_message,omitempty"`
+	// ErrorCode 结束错误码，与 call.ended 的 error_code 对齐。
+	ErrorCode string `json:"error_code,omitempty"`
+	// PstnDialState 外呼 PSTN 腿阶段：pending / dialing / connected / failed。
+	PstnDialState string `json:"pstn_dial_state,omitempty"`
 }
 
 // LegView 通话腿视图。

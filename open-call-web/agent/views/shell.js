@@ -28,7 +28,7 @@ export function renderApp(host, actions) {
             ${getAccessToken()
               ? html`<p class="muted">正在加载坐席工作台…</p>`
               : html`<p class="muted">请稍候，正在同步登录状态…</p>`}
-            ${renderFeedback({ error: host.error, notice: host.notice })}
+            ${renderFeedback({ error: host.error, notice: host.outboundNotice || host.notice })}
           </div>`;
       }
       return renderLoginView(host, actions);
@@ -51,7 +51,7 @@ export function renderApp(host, actions) {
           <button @click=${() => actions.logout()}>退出</button>
       `,
       content: html`
-        ${renderFeedback({ error: host.error, notice: host.notice })}
+        ${renderFeedback({ error: host.error, notice: host.outboundNotice || host.notice })}
         ${host.nav === "desk" ? page(renderDeskView,
           ["audioMuted", "audioPlaybackBlocked", "call", "cameraUnavailable", "consulting", "dest", "elapsed", "hasLocal", "held", "incoming", "pendingWrapId", "permissions", "recentCalls", "sharing", "showPad", "videoAsk", "videoMuted", "wrapNotes", "xferMode"],
           ["answer", "askVideo", "completeXfer", "conf", "decline", "dial", "doCheckIn", "doCheckOut", "downgrade", "dtmf", "hangup", "hold", "playRemoteAudio", "respondVideo", "setDest", "setIdle", "setShowPad", "setWrapNotes", "setXferMode", "share", "stageCaller", "stageQueue", "submitWrap", "toggleBusy", "toggleMute", "waitingCount", "xfer"], state) : ""}
