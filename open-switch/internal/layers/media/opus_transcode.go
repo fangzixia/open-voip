@@ -31,6 +31,7 @@ func rtpPayloadToPCMU(payloadType uint8, payload []byte) []byte {
 	}
 }
 
+// opusToPCMU 将 Opus 帧解码并重采样为 20 ms@8 kHz 的 PCMU 载荷。
 func opusToPCMU(opusFrame []byte) []byte {
 	if len(opusFrame) == 0 {
 		return nil

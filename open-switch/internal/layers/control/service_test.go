@@ -450,7 +450,7 @@ func TestDoubleAnswerIdempotent(t *testing.T) {
 	if err := svc.Answer(ctx, id, "ag1"); err != nil {
 		t.Fatal(err)
 	}
-	if media.handoffs != 1 || media.stopInjected != 0 {
+	if media.handoffs != 1 || media.stopInjected != 1 {
 		t.Fatalf("queue answer: handoffs=%d stopInjected=%d", media.handoffs, media.stopInjected)
 	}
 	err = svc.Answer(ctx, id, "ag1")

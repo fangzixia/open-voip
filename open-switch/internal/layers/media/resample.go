@@ -1,5 +1,8 @@
 package media
 
+// 录音与混音路径上的 PCM 重采样（与 open-call/aibot/realtime 算法对齐）。
+// Opus 解码为 48k 后需降到录音率或 8k 混音轨时使用，避免简单抽点混叠。
+
 // downsamplePCMTo8k 将 16-bit PCM 转为 8 kHz；16 kHz 采用相邻样本均值以降低混叠。
 func downsamplePCMTo8k(pcm []int16, rate int) ([]int16, int) {
 	if rate <= 0 || rate == 8000 {
@@ -42,6 +45,7 @@ func resamplePCM(pcm []int16, fromRate, toRate int) []int16 {
 	return linearResample(pcm, fromRate, toRate)
 }
 
+// linearResample 线性插值重采样。
 func linearResample(pcm []int16, fromRate, toRate int) []int16 {
 	outLen := len(pcm) * toRate / fromRate
 	if outLen <= 0 {
@@ -68,6 +72,7 @@ func linearResample(pcm []int16, fromRate, toRate int) []int16 {
 	return out
 }
 
+// decimateWithLowpass 降采样前盒式低通，减轻混叠。
 func decimateWithLowpass(in []int16, fromRate, toRate int) []int16 {
 	ratio := fromRate / toRate
 	if ratio < 2 {

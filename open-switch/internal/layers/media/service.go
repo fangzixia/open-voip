@@ -116,24 +116,25 @@ func (s *Service) UnbridgeLegs(callID string) {
 	}
 }
 
+// recorder 单次通话的录制状态（音频 WAV、可选视频合成或 Ogg）。
 type recorder struct {
 	id        string
 	callID    string
-	path      string
+	path      string // 主录音或合成视频最终路径
 	audioPath string
 	mode      string
 	videoRec  *videoRecording
 	file      *os.File
 	ogg       *oggwriter.OggWriter
-	pcm       *pcmMix
-	legPCM    map[string]*pcmMix
-	legPaths  map[string]string
+	pcm       *pcmMix              // 主混音（SIP 为 16 kHz 线性 PCM）
+	legPCM    map[string]*pcmMix   // 按 leg_id 分轨
+	legPaths  map[string]string    // leg_id -> 分轨 WAV 路径
 	sampleRateHz int
 	mu        sync.Mutex
 	bytes     int64
 	ended     *time.Time
 	started                time.Time
-	gateInboundUntilPrompt bool
+	gateInboundUntilPrompt bool // IVR 阶段是否屏蔽对端上行写入录音
 	pcmAnchored            bool
 }
 
@@ -169,7 +170,7 @@ type Service struct {
 	answers           answerGate
 	queueAnswerGrace  time.Duration
 	queueAnswerFade   time.Duration
-	onPromptFinished  func(ctx context.Context, callID string, loop bool)
+	onPromptFinished PromptFinishedHandler // 非循环放音结束通知 L3
 }
 
 // PromptFinishedHandler 非循环 IVR 放音结束时通知 L3 推进节点。
@@ -180,8 +181,7 @@ func (s *Service) SetPromptFinishedHandler(h PromptFinishedHandler) {
 	s.onPromptFinished = h
 }
 
-// NewService 根据 ICE/TURN/录音目录创建媒体服务。
-// NewService 初始化 WebRTC 媒体能力及 SIP 配置，并建立房间与录音索引。
+// NewService 初始化 WebRTC 媒体能力、SIP 与录音目录，并建立房间与录音索引。
 func NewService(opt Options) (*Service, error) {
 	if opt.VideoFormat == "" {
 		opt.VideoFormat = "webm"
@@ -763,6 +763,8 @@ func (s *Service) PromptDuration(ctx context.Context, fileRef string) (time.Dura
 	return time.Duration(len(pcm)) * time.Second / time.Duration(rate), nil
 }
 
+// InjectAudio 向指定 leg（常为 bot/主叫）注入 WAV 提示音或内置等待音。
+// 通过 promptSeq 可打断上一轮放音；放音结束回调 control.OnIVRPromptFinished 推进 IVR。
 func (s *Service) InjectAudio(ctx context.Context, callID, botLegID string, source dto.AudioSource) error {
 	r := s.getRoom(callID)
 	if r == nil {
@@ -865,6 +867,9 @@ func (s *Service) SendDTMF(ctx context.Context, callID, legID string, digit dto.
 }
 
 // StartRecording 按策略创建音视频录制器，并返回可查询的录音 ID。
+//
+// SIP 音频：主 WAV 为 16k 线性混音（hqRecordingRate），并可为每 leg 开分轨文件；
+// WebRTC 纯音频可能走 Ogg；video_composite 另写视频轨。策略 off 时直接返回空 ID。
 func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.RecordingPolicy) (string, error) {
 	if policy.Mode == "" || policy.Mode == "off" {
 		return "", nil
@@ -1177,6 +1182,10 @@ func recordPromptToMix(rec *recorder, payload []byte) {
 	})
 }
 
+// writeRTP 将一帧 RTP 写入录像轨或音频混音；SIP 音频走 decodeRTPAudio + 线性混音。
+//
+// gateInboundUntilPrompt：IVR 首段仅录提示音，首帧 prompt 到达时 anchor 时间轴；
+// 应答前对端上行不入轨，避免振铃期底噪。video_composite 模式只累加 payload 字节。
 func (rec *recorder) writeRTP(legID string, kind webrtc.RTPCodecType, mime string, pkt *rtp.Packet) {
 	if rec == nil || pkt == nil {
 		return

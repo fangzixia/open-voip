@@ -17,21 +17,21 @@ import (
 	"open-call/internal/config"
 )
 
-// Session OpenAI Realtime 双向音频会话。
+// Session 与 OpenAI/通义 Realtime WebSocket 的双向音频会话。
 type Session struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
-	onAudio func(pcm []byte)
+	onAudio func(pcm []byte) // TTS 下行 PCM 增量回调
 
-	log       *slog.Logger
+	log       *slog.Logger // 可选，由 BindCallLog 注入
 	callID    string
-	provider  string
-	inRateHz  int
-	outRateHz int
+	provider  string // qwen / openai 等
+	inRateHz  int    // 本端假定上行采样率
+	outRateHz int    // 本端假定下行采样率
 
-	outBytes   atomic.Int64
-	outChunks  atomic.Int64
-	outSamples atomic.Int64
+	outBytes   atomic.Int64 // 累计下行 PCM 字节
+	outChunks  atomic.Int64 // 下行 delta 包数
+	outSamples atomic.Int64 // 累计 PCM 样本数（16-bit）
 }
 
 // Connect 建立 Realtime WebSocket 并完成 session.update。
@@ -92,6 +92,7 @@ func (s *Session) BindCallLog(log *slog.Logger, callID string) {
 	s.mu.Unlock()
 }
 
+// readLoop 处理 Realtime 事件；音频 delta 交给 onAudio，并输出诊断日志。
 func (s *Session) readLoop() {
 	for {
 		_, data, err := s.conn.Read(context.Background())
@@ -106,6 +107,7 @@ func (s *Session) readLoop() {
 			continue
 		}
 		switch env.Type {
+		// OpenAI 与通义事件名略有差异，统一当作 PCM16 增量处理。
 		case "response.audio.delta", "response.output_audio.delta":
 			if env.Delta == "" {
 				continue
@@ -148,6 +150,7 @@ func (s *Session) readLoop() {
 	}
 }
 
+// logAudioSummary 在一段 TTS 结束时输出累计 PCM 统计，用于核对采样率假设。
 func (s *Session) logAudioSummary(reason string) {
 	if s == nil || s.log == nil {
 		return
@@ -176,6 +179,7 @@ func (s *Session) logAudioSummary(reason string) {
 	)
 }
 
+// OnAudio 注册 TTS PCM 增量回调（在 readLoop 中调用）。
 func (s *Session) OnAudio(fn func([]byte)) {
 	s.mu.Lock()
 	s.onAudio = fn
@@ -202,6 +206,7 @@ func (s *Session) writeJSON(ctx context.Context, v any) error {
 	return s.conn.Write(ctx, websocket.MessageText, b)
 }
 
+// Close 正常关闭 Realtime WebSocket。
 func (s *Session) Close() error {
 	if s.conn == nil {
 		return nil

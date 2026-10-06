@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"open-switch/internal/datetime"
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 	"strings"
@@ -54,10 +55,11 @@ func TestResponseContract(t *testing.T) {
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func TestTimestampResponseAndDecode(t *testing.T) {
-	at := time.Date(2026, 9, 25, 10, 12, 35, 0, time.UTC)
+	at := time.Date(2026, 9, 25, 10, 12, 35, 0, time.Local)
 	rec := httptest.NewRecorder()
 	Write(rec, http.StatusOK, ports.CallView{CreatedAt: at})
-	if !strings.Contains(rec.Body.String(), `"created_at":"2026-09-25 10:12:35"`) {
+	want := datetime.Format(at)
+	if !strings.Contains(rec.Body.String(), `"created_at":"`+want+`"`) {
 		t.Fatal(rec.Body.String())
 	}
 	var out ports.CallView

@@ -1,6 +1,10 @@
+// Package realtime 封装 OpenAI/通义 Realtime WebSocket 与音频工具（重采样等）。
 package realtime
 
-// ResamplePCM 单声道 PCM 重采样：升采样线性插值；降采样先低通再插值，减轻混叠与发闷。
+// ResamplePCM 单声道 PCM 重采样。
+//
+// 降采样（如 24k→8k）：先盒式低通抑制混叠，再按时间轴抽取，避免「每 N 点取 1」的发闷失真。
+// 升采样：线性插值并限幅到 int16。
 func ResamplePCM(in []int16, fromRate, toRate int) []int16 {
 	if fromRate <= 0 || toRate <= 0 || len(in) == 0 || fromRate == toRate {
 		return in
@@ -20,6 +24,7 @@ func ResampleSimple(in []int16, fromRate, toRate int) []int16 {
 	return ResamplePCM(in, fromRate, toRate)
 }
 
+// linearResample 线性插值重采样（用于升采样或小幅比率变化）。
 func linearResample(in []int16, fromRate, toRate int) []int16 {
 	outLen := len(in) * toRate / fromRate
 	if outLen <= 0 {

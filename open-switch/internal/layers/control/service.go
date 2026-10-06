@@ -274,6 +274,7 @@ func (s *Service) Answer(ctx context.Context, callID, agentID string) error {
 	})
 }
 
+// doAnswer 落库坐席 leg、建媒体房间，并处理入队/咨询场景下的注入音与 handoff。
 func (s *Service) doAnswer(ctx context.Context, callID, agentID string) error {
 	s.mu.Lock()
 	rt := s.calls[callID]
@@ -319,8 +320,9 @@ func (s *Service) doAnswer(ctx context.Context, callID, agentID string) error {
 			return err
 		}
 	} else if rt.rec.QueueID != nil {
+		// 入队等待音在应答时必须停掉，否则与坐席/AI 下行混在一起。
 		_ = s.deps.Media.StopInjectedAudio(ctx, callID)
-		// 极短 handoff：避免默认 500ms 内屏蔽坐席→主叫（AI 自动接听需要立刻出声）。
+		// 极短 handoff：结束「仅播放注入音」阶段，允许坐席 RTP 立刻进混音（AI 自动接听依赖此窗口）。
 		if err := s.deps.Media.BeginQueueAnswerHandoff(ctx, callID, time.Nanosecond, time.Nanosecond); err != nil {
 			return err
 		}

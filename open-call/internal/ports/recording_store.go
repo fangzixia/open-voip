@@ -25,7 +25,7 @@ type RecordingMeta struct {
 	FileSize int64 `json:"file_size"`
 	// SampleRateHz 主混音 WAV 采样率。
 	SampleRateHz int `json:"sample_rate_hz,omitempty"`
-	// LegPaths 分轨录音路径。
+	// LegPaths 分轨 WAV：键为 leg_id，值为 Switch 落盘绝对路径。
 	LegPaths map[string]string `json:"leg_paths,omitempty"`
 }
 

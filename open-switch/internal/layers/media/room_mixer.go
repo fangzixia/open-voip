@@ -16,10 +16,12 @@ type roomMixer struct {
 	ts     map[string]uint32
 }
 
+// newRoomMixer 创建会议混音器，缓存各腿最近一帧 8 kHz PCMU 解码 PCM。
 func newRoomMixer() *roomMixer {
 	return &roomMixer{frames: map[string][]int16{}, seq: map[string]uint16{}, ts: map[string]uint32{}}
 }
 
+// ingest 更新某腿的当前帧（PCMU 载荷长度即 20 ms 样本数）。
 func (m *roomMixer) ingest(fromLeg string, pcmu []byte) {
 	if m == nil || len(pcmu) == 0 {
 		return
@@ -33,6 +35,8 @@ func (m *roomMixer) ingest(fromLeg string, pcmu []byte) {
 	m.mu.Unlock()
 }
 
+// mixExcept 混音除 skipLeg 外所有腿的当前帧（发给该腿听他人）。
+// 每腿只保留「最近一帧」：会议混音假设各方包络同步，不做历史对齐缓冲。
 func (m *roomMixer) mixExcept(skipLeg string) []int16 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -58,6 +62,7 @@ func (m *roomMixer) mixExcept(skipLeg string) []int16 {
 	return out
 }
 
+// pcmToPCMU 将线性 PCM 编码为 PCMU 字节。
 func pcmToPCMU(pcm []int16) []byte {
 	out := make([]byte, len(pcm))
 	for i, s := range pcm {
@@ -66,6 +71,7 @@ func pcmToPCMU(pcm []int16) []byte {
 	return out
 }
 
+// nextRTP 为指定腿生成下一 outbound RTP 包（维护独立 seq/ts）。
 func (m *roomMixer) nextRTP(legID string, pcmu []byte) *rtp.Packet {
 	m.mu.Lock()
 	seq := m.seq[legID]

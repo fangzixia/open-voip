@@ -6,9 +6,11 @@ import (
 	"github.com/pion/opus"
 )
 
+// hqRecordingRate SIP 场景主混音与分轨 WAV 的目标采样率（宽带存档）。
 const hqRecordingRate = 16000
 
 // decodeRTPAudio 将 RTP 音频载荷解码为线性 PCM 及采样率。
+// PT=0/8 为 8k G.711；Opus 解码为 48k，后续由 addLinearPCM 重采样到录音率（通常 16k）。
 func decodeRTPAudio(payloadType uint8, mime string, payload []byte) ([]int16, int) {
 	if len(payload) == 0 {
 		return nil, 0
@@ -36,6 +38,7 @@ var (
 	opusHQInit bool
 )
 
+// decodeOpusMono 将单帧 Opus 解码为 48 kHz 单声道 PCM（供录音混音）。
 func decodeOpusMono(payload []byte) ([]int16, int) {
 	opusHQMu.Lock()
 	if !opusHQInit {

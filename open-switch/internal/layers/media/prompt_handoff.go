@@ -149,6 +149,9 @@ func (s *Service) handoffWatchdog(callID string, gen uint64, wait time.Duration,
 }
 
 // BeginQueueAnswerHandoff 排队接听：保留等待音 grace 时长，再淡出停止注入，并短暂屏蔽坐席→主叫转发。
+//
+// grace/fade 为纳秒级时表示「几乎立即」结束注入（AI 自动接听），仍走同一套 handoff 状态机，
+// 避免坐席 RTP 在注入轨未释放时被丢弃。
 func (s *Service) BeginQueueAnswerHandoff(ctx context.Context, callID string, grace, fade time.Duration) error {
 	if grace <= 0 {
 		grace = s.queueAnswerGrace

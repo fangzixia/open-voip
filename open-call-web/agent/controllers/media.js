@@ -37,6 +37,7 @@ export class AgentMediaController {
     this.#host.sharing = false;
   }
 
+  // 与 switch 信令交换 SDP，建立 PC；重复 start 会先 tear down 旧连接，避免双 PC。
   async start(opts) {
     if (this.#connecting) return null;
     this.#connecting = true;
@@ -55,6 +56,7 @@ export class AgentMediaController {
     }
   }
 
+  // 会话类型切换（纯音↔视频/屏幕共享）或 ICE 失败后按当前 call/leg 重新入会。
   async rejoin(video) {
     const host = this.#host;
     if (!host.call || host.me?.terminal_type === "sip" || this.#connecting) return;

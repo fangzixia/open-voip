@@ -108,6 +108,7 @@ func Run(configPath string) error {
 	mediaSvc.SetSIPHangupHandler(func(ctx context.Context, callID string) {
 		_ = callControl.Hangup(ctx, callID, dto.HangupReasonNormal)
 	})
+	// 非循环 IVR 放音结束时推进 play 节点，避免仅靠超时等待。
 	mediaSvc.SetPromptFinishedHandler(func(ctx context.Context, callID string, loop bool) {
 		callControl.OnIVRPromptFinished(ctx, callID, loop)
 	})

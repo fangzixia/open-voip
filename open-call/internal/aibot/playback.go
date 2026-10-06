@@ -13,6 +13,9 @@ import (
 )
 
 // PlayWAVToPeer 解码 WAV 并以 8kHz PCMU 写入 WebRTC 发送轨。
+//
+// 非 8k 素材先 ResamplePCM 到 8k，再按 20ms/160 样本节拍写入，与 pcm_pacer 一致，
+// 避免一次性塞满导致对端 jitter buffer 突发。用于外呼语音通知等预录素材。
 func PlayWAVToPeer(ctx context.Context, peer *PeerSession, wavData []byte) (time.Duration, error) {
 	pcm, rate, err := decodeWAV(wavData)
 	if err != nil {
@@ -118,6 +121,7 @@ func intBufferToMono16(buf *audio.IntBuffer) []int16 {
 	return out
 }
 
+// resamplePCM16 播放前将 WAV 样本重采样到 8 kHz（与 realtime 算法一致）。
 func resamplePCM16(in []int16, fromRate, toRate int) []int16 {
 	return realtime.ResamplePCM(in, fromRate, toRate)
 }

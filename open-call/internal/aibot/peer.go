@@ -14,19 +14,21 @@ import (
 	"open-call/internal/ports/dto"
 )
 
+// agentSampleRate Switch 混音房间对端可能送 Opus，解码输出按 48 kHz 处理。
 const agentSampleRate = 48000
 
-// PeerSession 服务端 Offer 模式下的 WebRTC 会话。
+// PeerSession 虚拟坐席与 open-switch 之间的 WebRTC 会话（Answer 模式）。
 type PeerSession struct {
 	pc         *webrtc.PeerConnection
-	localTrack *webrtc.TrackLocalStaticSample
-	opusDec    opus.Decoder
-	downlink   string
-	onRemote   func(pcm []int16, sampleRate int)
+	localTrack *webrtc.TrackLocalStaticSample // 本端发送轨，当前为 8 kHz PCMU
+	opusDec    opus.Decoder                   // 解码对端 Opus（若协商成功）
+	downlink   string                         // 下行编解码描述，供日志诊断
+	onRemote   func(pcm []int16, sampleRate int) // 对端上行 PCM 回调
 	mu         sync.Mutex
 	closed     bool
 }
 
+// newPeerSession 创建 PeerConnection；widebandWebRTC 预留宽带 Opus，当前仍发 PCMU。
 func newPeerSession(turn dto.TURNConfig, widebandWebRTC bool, onICE func(*webrtc.ICECandidate)) (*PeerSession, error) {
 	servers := []webrtc.ICEServer{}
 	if len(turn.STUNURLs) > 0 {
@@ -71,6 +73,7 @@ func newPeerSession(turn dto.TURNConfig, widebandWebRTC bool, onICE func(*webrtc
 	return s, nil
 }
 
+// readRemoteTrack 读取 Switch 发来的音频 RTP，解码为单声道 PCM 交给 onRemote。
 func (s *PeerSession) readRemoteTrack(tr *webrtc.TrackRemote) {
 	pcmBuf := make([]byte, 5760*2)
 	for {
@@ -124,6 +127,7 @@ func (s *PeerSession) DownlinkCodec() string {
 	return s.downlink
 }
 
+// SetRemotePCMHandler 注册上行音频处理（通常重采样后送入 Realtime）。
 func (s *PeerSession) SetRemotePCMHandler(fn func([]int16, int)) {
 	s.mu.Lock()
 	s.onRemote = fn
@@ -171,7 +175,8 @@ func (s *PeerSession) WaitConnected(ctx context.Context) error {
 	}
 }
 
-// WritePCMU8k 发送 8kHz 单声道 PCM（按 20ms/160 样本分帧）。
+// WritePCMU8k 将任意长度 PCM 切成 20ms@8kHz 帧并编码为 PCMU 写入 Sample 轨。
+// 末帧不足 160 样本时 writePCMUFrame 用静音补齐，保证 RTP 时间戳连续。
 func (s *PeerSession) WritePCMU8k(pcm []int16) error {
 	const frame = 160
 	for off := 0; off < len(pcm); {
@@ -187,6 +192,7 @@ func (s *PeerSession) WritePCMU8k(pcm []int16) error {
 	return nil
 }
 
+// writePCMUFrame 将一帧 20 ms@8 kHz PCM 编码为 PCMU 写入 Sample 轨。
 func writePCMUFrame(track *webrtc.TrackLocalStaticSample, pcm []int16) error {
 	const frame = 160
 	if track == nil {

@@ -12,16 +12,16 @@ import (
 	"open-call/internal/ports/dto"
 )
 
-// MediaAPI Switch 呼叫与媒体信令。
+// MediaAPI 虚拟坐席访问 open-switch 的呼叫与 WebRTC 信令。
 type MediaAPI interface {
-	JoinWebRTCOffer(ctx context.Context, callID, legID string) (map[string]string, error)
-	AcceptLegAnswer(ctx context.Context, callID, legID, sdp, typ string) error
+	JoinWebRTCOffer(ctx context.Context, callID, legID string) (map[string]string, error) // 获取 SFU Offer SDP
+	AcceptLegAnswer(ctx context.Context, callID, legID, sdp, typ string) error            // 提交本端 Answer
 	TrickleLegICE(ctx context.Context, callID, legID string, body map[string]any) error
 	TURNCredentials(ctx context.Context, callID, subject string) (dto.TURNConfig, error)
 	BridgeCall(ctx context.Context, callID, legA, legB string) error
 	GetCall(ctx context.Context, callID string) (ports.CallView, error)
 	Hangup(ctx context.Context, callID string, reason dto.HangupReason) error
-	Answer(ctx context.Context, callID, agentID string) error
+	Answer(ctx context.Context, callID, agentID string) error // 坐席应答
 	CheckIn(ctx context.Context, agentID string, queueIDs []string) error
 	DownloadIVRAsset(ctx context.Context, assetRef string) ([]byte, error)
 }
@@ -80,6 +80,7 @@ func (a switchMediaAdapter) DownloadIVRAsset(ctx context.Context, assetRef strin
 	return a.client.DownloadIVRAsset(ctx, assetRef)
 }
 
+// Connect 拉取 TURN、完成 Switch Offer/Answer 与 ICE 串通，返回可收发媒体的 PeerSession。
 func (s *Signaling) Connect(ctx context.Context, callID, legID, subject string, widebandWebRTC bool) (*PeerSession, error) {
 	turn, err := s.api.TURNCredentials(ctx, callID, subject)
 	if err != nil {

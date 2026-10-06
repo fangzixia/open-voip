@@ -6,13 +6,13 @@ import (
 	"time"
 )
 
-// pcmMix 将 G.711 按墙钟混音为 16-bit PCM，供 WAV 落盘。
+// pcmMix 按墙钟时间轴将多路音频混为 16-bit PCM，流式写入 WAV。
 type pcmMix struct {
-	started time.Time
-	rate    int
-	samples []int16
+	started time.Time // 混音时间轴起点
+	rate    int         // 目标采样率 Hz
+	samples []int16     // 未刷盘的尾部缓冲
 	file    *os.File
-	written int
+	written int // 已写入文件的样本数
 	err     error
 }
 
@@ -71,6 +71,7 @@ func (m *pcmMix) flush(count int) {
 	m.err = m.header(m.written)
 }
 
+// newPCMMix 创建混音器，rate 为主录音目标采样率（如 16000）。
 func newPCMMix(rate int, started time.Time) *pcmMix {
 	if rate <= 0 {
 		rate = 8000
@@ -91,6 +92,9 @@ func (m *pcmMix) anchorAt(t time.Time) {
 }
 
 // addLinearPCM 将线性 PCM 混音到墙钟时间轴（用于 G.711 解码后或 Opus 解码后的高质量录音）。
+//
+// 用到达时间 at 映射到样本下标 idx，多路音频在同一时间窗口做饱和相加。
+// 流式写盘时 flush 已落盘前缀，内存只保留约 1 秒滑动窗口，避免长通话 OOM。
 func (m *pcmMix) addLinearPCM(samples []int16, sampleRate int, at time.Time) {
 	if m == nil || len(samples) == 0 || sampleRate <= 0 {
 		return
@@ -125,6 +129,7 @@ func (m *pcmMix) addLinearPCM(samples []int16, sampleRate int, at time.Time) {
 	}
 }
 
+// add 将一帧 G.711 载荷按墙钟位置叠加进混音（兼容旧路径，新录音优先 addLinearPCM）。
 func (m *pcmMix) add(payloadType uint8, payload []byte) {
 	if m == nil || len(payload) == 0 {
 		return

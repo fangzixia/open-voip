@@ -1,3 +1,4 @@
+// AI 坐席相关 BFF：队列提示词、IVR 模板等。
 import { apiFetch } from "./client.js";
 
 export function fetchAibotIVRTemplate(queueId) {

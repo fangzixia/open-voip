@@ -13,7 +13,12 @@ export function formatDateTime(value = new Date()) {
 
 // 纯日期参数使用日历日，不带时间和时区后缀。
 export function formatDate(value = new Date()) {
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split("-").map((n) => Number(n));
+    const probe = new Date(y, m - 1, d);
+    if (probe.getFullYear() !== y || probe.getMonth() !== m - 1 || probe.getDate() !== d) return "";
+    return value;
+  }
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;

@@ -110,6 +110,10 @@ func waitCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // OnCallEvent 由 WS Hub 回调，驱动自动接听与语音通知。
+//
+// call.ringing：ACD 分给本 agent 时自动 RunInboundAI（与人工点应答等价，但由 Worker 代答）。
+// call.outbound_progress / call.answered：外呼语音通知在媒体就绪后播放素材 WAV。
+// active 表保证每 call_id 仅一个会话 goroutine。
 func (w *Worker) OnCallEvent(ctx context.Context, ev ports.CallEvent) {
 	if !w.cfg.Enabled {
 		return
@@ -142,6 +146,7 @@ func (w *Worker) OnCallEvent(ctx context.Context, ev ports.CallEvent) {
 	}
 }
 
+// startInbound 为振铃呼入启动独立 goroutine 跑 RunInboundAI。
 func (w *Worker) startInbound(parent context.Context, callID string) {
 	w.mu.Lock()
 	if _, ok := w.active[callID]; ok {
@@ -160,6 +165,7 @@ func (w *Worker) startInbound(parent context.Context, callID string) {
 	}()
 }
 
+// maybePrompt 对外呼语音通知在媒体就绪后播放 IVR 素材。
 func (w *Worker) maybePrompt(ctx context.Context, callID string) {
 	if callID == "" {
 		return

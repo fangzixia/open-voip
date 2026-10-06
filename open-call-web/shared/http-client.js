@@ -1,3 +1,4 @@
+// 统一 HTTP 客户端：鉴权头、刷新令牌、超时与 ApiError 语义。
 import { getAccessToken, getRefreshToken, setAuthTokens, clearAccessToken } from "./auth-store.js";
 import { createId, getCallContext } from "./call-context.js";
 import { currentFeedbackEpoch } from "./feedback.js";

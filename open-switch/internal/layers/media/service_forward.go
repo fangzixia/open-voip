@@ -9,7 +9,11 @@ import (
 	"open-switch/internal/ports/dto"
 )
 
-// forward 将输入 RTP 轨道转发给房间内其他通话腿，并写入录音。
+// forward 处理某一 leg 的入站 RTP。
+//
+// 若房间开启 mixAudio（典型：SIP 主叫 + WebRTC 坐席/AI）：
+//   各 leg 解码为 8k PCMU 帧 → roomMixer 混音 → 对其它 leg 下发「除自己外的混音」，避免回声。
+// 否则：原样转发 RTP 包。录音侧始终 writeRTP，由 recorder 解码为线性 PCM 混音。
 func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 	buf := make([]byte, 1500)
 	pkt := &rtp.Packet{}
@@ -44,7 +48,7 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 			}
 		}
 		if unmarshaled && !muted && !held && remote.Kind() == webrtc.RTPCodecTypeAudio && r.mixer != nil && r.mixAudio {
-			if pkt.PayloadType != 101 {
+			if pkt.PayloadType != 101 { // 101=telephone-event，不参与语音混音
 				pcmu := rtpPayloadToPCMU(pkt.PayloadType, append([]byte(nil), pkt.Payload...))
 				if len(pcmu) > 0 {
 					r.mixer.ingest(fromLeg, pcmu)

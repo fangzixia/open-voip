@@ -8,6 +8,7 @@ import (
 	"github.com/pion/rtp"
 )
 
+// sanitizeLegID 将 leg UUID 转为安全文件名片段。
 func sanitizeLegID(legID string) string {
 	legID = strings.TrimSpace(legID)
 	if legID == "" {
@@ -34,6 +35,7 @@ func sanitizeLegID(legID string) string {
 	return out
 }
 
+// ensureLegPCM 懒创建某通话腿的 16-bit 分轨混音器及对应 WAV 路径。
 func (rec *recorder) ensureLegPCM(legID string, rate int) *pcmMix {
 	if rec == nil || rec.legPCM == nil {
 		return nil
@@ -56,6 +58,10 @@ func (rec *recorder) ensureLegPCM(legID string, rate int) *pcmMix {
 	return m
 }
 
+// writeHQAudio 解码 RTP 音频后写入主混音与各 leg 分轨（线性 PCM，非直接叠 G.711）。
+//
+// 主文件为多方混音；分轨文件仅含该 leg 的解码 PCM，便于质检区分主叫/坐席/AI。
+// 解码在 G.711 之前完成，避免「编解码后再叠轨」带来的额外窄带损失。
 func (rec *recorder) writeHQAudio(legID string, mime string, pkt *rtp.Packet) {
 	if rec.pcm == nil || pkt == nil {
 		return

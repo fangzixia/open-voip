@@ -188,7 +188,10 @@ func (s *Service) beginIVR(ctx context.Context, callID string) {
 	s.runIVRNode(ctx, callID)
 }
 
-// OnIVRPromptFinished 非循环放音结束后立即推进 play 节点（菜单仍依赖 DTMF/超时）。
+// OnIVRPromptFinished 由媒体层在 Inject 放音结束时回调。
+//
+// 对 type=play 且非循环的节点：放音一结束就跳转 next，不必再等 timeout_sec，
+// 缩短「欢迎语播完到入队/下一节点」的空白。menu 等仍靠 DTMF 与 tickIVR 超时。
 func (s *Service) OnIVRPromptFinished(ctx context.Context, callID string, loop bool) {
 	if loop {
 		return
