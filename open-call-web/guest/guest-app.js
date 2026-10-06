@@ -10,7 +10,7 @@ import { appStyles } from "../shared/styles/index.js";
 import { listMediaDevices, microphoneConstraints, replaceInputDevice, setLocalMuted, startMediaSession, stopMedia } from "../shared/webrtc.js";
 import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
-import { userFacingCallEndMessage, userFacingFailureMessage } from "../shared/call-outcome.js";
+import { isStaleCallMediaError, userFacingCallEndMessage, userFacingFailureMessage } from "../shared/call-outcome.js";
 
 
 export class GuestApp extends LitElement {
@@ -51,6 +51,8 @@ export class GuestApp extends LitElement {
   #timer = null;
   #started = 0;
   #waitTimer = null;
+  #joinEpoch = 0;
+  #joinEnded = false;
   feedback = new FeedbackController(this);
 
   constructor() {
@@ -143,6 +145,8 @@ export class GuestApp extends LitElement {
       return;
     }
     try {
+      this.#joinEpoch += 1;
+      this.#joinEnded = false;
       const join = await guestJoin(queue.id, video ? "video" : "audio", vip ? 10 : 0, userId);
       this.join = join;
       setCallContext({ call_id: join.call_id, leg_id: join.leg_id, queue_id: queue.id });
@@ -168,6 +172,8 @@ export class GuestApp extends LitElement {
       await this.#enterMedia(true);
     } else if (msg.type === "call.ended") {
       const p = msg.payload || {};
+      this.#joinEpoch += 1;
+      this.#joinEnded = true;
       reportEvent("call.ended", { reason: p.reason || "", result: p.result || "", error_code: p.error_code || "" });
       const endMsg = userFacingCallEndMessage(p);
       if (endMsg) this.notice = endMsg;
@@ -249,6 +255,7 @@ export class GuestApp extends LitElement {
 
   /** 等候阶段播放远端音频，接通后绑定通话媒体和计时器。 */
   async #enterMedia(talking) {
+    const joinEpoch = this.#joinEpoch;
     try {
       if (!this.#pc) {
         if (!this.#mediaPromise) {
@@ -260,6 +267,7 @@ export class GuestApp extends LitElement {
           });
         }
         const session = await this.#mediaPromise;
+        if (joinEpoch !== this.#joinEpoch || this.#joinEnded || this.step === "ended") return;
         this.#pc = session.pc;
         this.#local = session.localStream;
         this.#remote = session.remoteStream;
@@ -303,6 +311,14 @@ export class GuestApp extends LitElement {
         void this.#playRemoteAudio();
       }
     } catch (e) {
+      if (
+        this.#joinEnded ||
+        this.step === "ended" ||
+        joinEpoch !== this.#joinEpoch ||
+        isStaleCallMediaError(e, { callEnded: this.#joinEnded, joinEpoch, currentJoinEpoch: this.#joinEpoch })
+      ) {
+        return;
+      }
       this.feedback.liveError(e);
     } finally {
       this.#mediaPromise = null;

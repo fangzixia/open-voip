@@ -14,7 +14,7 @@ import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
 import {
   applyCallEnded,
-  isStaleOutboundMediaError,
+  isStaleCallMediaError,
   notifyCallFailure,
   outboundProgressLabel,
   recentCallResultLabel,
@@ -75,10 +75,10 @@ export class AgentApp extends LitElement {
   #timer = null;
   #startedAt = 0;
   #clockTimer = null;
-  /** 外呼操作世代：失败或新拨号时递增，作废进行中的 WebRTC join。 */
-  #dialEpoch = 0;
+  /** 媒体 join 世代：挂断/失败/新拨号时递增，作废进行中的 WebRTC。 */
+  #joinEpoch = 0;
   /** 已通过 WS 提示过失败文案的 call_id，避免与 call.ended 重复 toast。 */
-  #outboundFailureNotifiedId = "";
+  #failureNotifiedCallId = "";
   feedback = new FeedbackController(this);
   media = new AgentMediaController(this);
 
@@ -131,6 +131,25 @@ export class AgentApp extends LitElement {
 
   #run(fn) {
     return runFeedbackAction(this.feedback, fn);
+  }
+
+  getJoinEpoch() {
+    return this.#joinEpoch;
+  }
+
+  shouldSuppressJoinError(err, callId, joinEpoch) {
+    return isStaleCallMediaError(err, {
+      callId,
+      failedCallId: this.#failureNotifiedCallId,
+      joinEpoch,
+      currentJoinEpoch: this.#joinEpoch,
+    });
+  }
+
+  #invalidateJoin(callIdForNotice = "") {
+    this.#joinEpoch += 1;
+    this.media.stop();
+    if (callIdForNotice) this.#failureNotifiedCallId = callIdForNotice;
   }
 
   connectedCallback() {
@@ -247,7 +266,14 @@ export class AgentApp extends LitElement {
         if (active?.version != null) setCallVersion(active.version, active.id);
         const activeLeg = active.legs?.find((item) => item.agent_id === this.me.id);
         setCallContext({ call_id: active.id, leg_id: activeLeg?.id || "", queue_id: active.queue_id || "" });
-        if (["active", "held"].includes(active.state) && !this.media.pc && this.me.terminal_type !== "sip") await this.media.rejoin(active.session_type !== "audio");
+        if (["active", "held"].includes(active.state) && !this.media.pc && this.me.terminal_type !== "sip") {
+          const joinEpoch = this.#joinEpoch;
+          try {
+            await this.media.rejoin(active.session_type !== "audio");
+          } catch (err) {
+            if (!this.shouldSuppressJoinError(err, active.id, joinEpoch)) throw err;
+          }
+        }
       }
     });
   }
@@ -263,28 +289,30 @@ export class AgentApp extends LitElement {
       const p = msg.payload || {};
       reportEvent("call.ended", { reason: p.reason || "", result: p.result || "", error_code: p.error_code || "" });
       if (this.call?.id === p.call_id || this.incoming?.call_id === p.call_id) {
-        const suppressToast = this.#outboundFailureNotifiedId === p.call_id;
-        if (this.call?.id === p.call_id) this.#dialEpoch += 1;
+        const suppressToast = this.#failureNotifiedCallId === p.call_id;
+        this.#invalidateJoin();
         applyCallEnded(this, p, (meta) => {
           this.outboundNotice = "";
           this.#endLocal(p.call_id, meta);
         }, { suppressToast });
-        if (suppressToast) this.#outboundFailureNotifiedId = "";
+        if (suppressToast) this.#failureNotifiedCallId = "";
       }
     } else if (msg.type === "call.outbound_progress") {
       const p = msg.payload || {};
       if (this.call?.id !== p.call_id) return;
       this.outboundNotice = p.message || outboundProgressLabel(p.phase);
       if (p.phase === "failed") {
-        this.#outboundFailureNotifiedId = p.call_id;
-        this.#dialEpoch += 1;
-        this.media.stop();
+        this.#invalidateJoin(p.call_id);
         reportEvent("call.outbound_failed", { result: "failed", error_code: p.error_code || "", message: p.message || "" });
         notifyCallFailure(this, p);
       }
       if (p.phase === "connected") this.#startTimer();
-    } else if (msg.type === "command.failed" || msg.type === "recording.failed" || msg.type === "leg.failed") {
+    } else if (msg.type === "command.failed" || msg.type === "recording.failed") {
       notifyCallFailure(this, msg.payload || {});
+    } else if (msg.type === "leg.failed") {
+      const p = msg.payload || {};
+      if (this.call?.id === p.call_id) this.#invalidateJoin(p.call_id);
+      notifyCallFailure(this, p);
     } else if (msg.type === "agent.routing_state_changed" && this.me) {
       this.me = { ...this.me, session: { ...this.me.session, state: msg.payload.state, busy_reason: msg.payload.busy_reason } };
     } else if (msg.type === "recording.notice") {
@@ -309,15 +337,33 @@ export class AgentApp extends LitElement {
         this.feedback.liveNotice("咨询转已完成，客户已接回");
       }
     } else if (msg.type === "call.answered" && msg.payload?.call_id) {
-      void this.#syncCalls().then(() => {
-        if (this.call?.state === "active") {
-          this.outboundNotice = "";
-          this.#startTimer();
+      void this.#syncCalls().then(async () => {
+        if (this.call?.state !== "active") return;
+        this.outboundNotice = "";
+        if (!this.media.pc && this.me?.terminal_type !== "sip") {
+          const joinEpoch = this.#joinEpoch;
+          try {
+            await this.media.rejoin(this.call.session_type !== "audio");
+          } catch (err) {
+            if (!this.shouldSuppressJoinError(err, this.call?.id, joinEpoch)) {
+              this.feedback.fail(err instanceof Error ? err.message : String(err));
+            }
+          }
         }
+        this.#startTimer();
       });
     } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.call?.id) {
       this.feedback.liveNotice("交换服务已恢复，正在重新连接媒体…");
-      void this.#syncCalls().then(() => this.media.rejoin(this.call?.session_type !== "audio"));
+      void this.#syncCalls().then(async () => {
+        const joinEpoch = this.#joinEpoch;
+        try {
+          await this.media.rejoin(this.call?.session_type !== "audio");
+        } catch (err) {
+          if (!this.shouldSuppressJoinError(err, this.call?.id, joinEpoch)) {
+            this.feedback.fail(err instanceof Error ? err.message : String(err));
+          }
+        }
+      });
     }
   }
 
@@ -364,9 +410,11 @@ export class AgentApp extends LitElement {
     if (this.media.connecting) return;
     await this.#run(async (epoch) => {
       if (this.me?.terminal_type === "sip") { this.feedback.ok("请在 SIP 话机接听", epoch); return; }
+      const joinEpoch = ++this.#joinEpoch;
       const incomingId = this.incoming.call_id;
       await answerCall(incomingId);
       const call = await getCall(incomingId);
+      if (joinEpoch !== this.#joinEpoch) return;
       this.call = call;
       this.incoming = null;
       this.nav = "desk";
@@ -375,14 +423,20 @@ export class AgentApp extends LitElement {
       if (!leg?.id) throw new Error("未找到坐席通话腿");
       setCallContext({ call_id: call.id, leg_id: leg.id, queue_id: call.queue_id || "" });
       reportEvent("call.answered");
-      await this.media.start({
-        callId: call.id,
-        legId: leg.id,
-        video,
-        audioDeviceId: this.audioDeviceId,
-        videoDeviceId: this.videoDeviceId,
-        allowAudioOnlyForVideo: true,
-      });
+      try {
+        await this.media.start({
+          callId: call.id,
+          legId: leg.id,
+          video,
+          audioDeviceId: this.audioDeviceId,
+          videoDeviceId: this.videoDeviceId,
+          allowAudioOnlyForVideo: true,
+        });
+      } catch (err) {
+        if (this.shouldSuppressJoinError(err, call.id, joinEpoch)) return;
+        throw err;
+      }
+      if (joinEpoch !== this.#joinEpoch) return;
       this.feedback.clear();
       this.media.bindVideos();
       this.#startTimer();
@@ -459,6 +513,7 @@ export class AgentApp extends LitElement {
     this.videoAsk = null;
     this.call = null;
     this.incoming = null;
+    if (endedId && this.#failureNotifiedCallId === endedId) this.#failureNotifiedCallId = "";
     this.elapsed = 0;
     this.consulting = false;
     this.showPad = false;
@@ -478,16 +533,16 @@ export class AgentApp extends LitElement {
       }
       await this.#ensureCheckedIn();
       if (this.me?.terminal_type === "sip") { this.feedback.ok("已自动签入，请从已注册的 SIP 话机拨号", epoch); return; }
-      const dialEpoch = ++this.#dialEpoch;
-      this.#outboundFailureNotifiedId = "";
+      const joinEpoch = ++this.#joinEpoch;
+      this.#failureNotifiedCallId = "";
       let call;
       try {
         call = await outboundCall(this.dest.trim());
       } catch (err) {
-        this.#dialEpoch += 1;
+        this.#joinEpoch += 1;
         throw err;
       }
-      if (dialEpoch !== this.#dialEpoch) return;
+      if (joinEpoch !== this.#joinEpoch) return;
       this.call = call;
       this.nav = "desk";
       this.feedback.clear();
@@ -497,19 +552,12 @@ export class AgentApp extends LitElement {
       this.outboundNotice = call.pstn_dial_state === "dialing" ? "正在出局拨号…" : "";
       if (leg && (call.state === "active" || call.state === "ringing")) {
         try {
-          await this.#joinOutboundMedia(call, leg, dialEpoch);
+          await this.#joinOutboundMedia(call, leg, joinEpoch);
         } catch (err) {
-          if (isStaleOutboundMediaError(err, {
-            callId: call.id,
-            failedCallId: this.#outboundFailureNotifiedId,
-            dialEpoch,
-            currentDialEpoch: this.#dialEpoch,
-          })) {
-            return;
-          }
+          if (this.shouldSuppressJoinError(err, call.id, joinEpoch)) return;
           throw err;
         }
-        if (dialEpoch !== this.#dialEpoch) return;
+        if (joinEpoch !== this.#joinEpoch) return;
         if (call.state === "active") {
           this.media.bindVideos();
           this.#startTimer();
@@ -518,8 +566,8 @@ export class AgentApp extends LitElement {
     });
   }
 
-  async #joinOutboundMedia(call, leg, dialEpoch) {
-    if (dialEpoch !== this.#dialEpoch) return;
+  async #joinOutboundMedia(call, leg, joinEpoch) {
+    if (joinEpoch !== this.#joinEpoch) return;
     await this.media.start({
       callId: call.id,
       legId: leg.id,
@@ -585,18 +633,26 @@ export class AgentApp extends LitElement {
 
   async #listen() {
     await this.#run(async () => {
+      const joinEpoch = ++this.#joinEpoch;
       const id = this.incoming?.call_id || this.dest;
       const out = await listenCall(id);
+      if (joinEpoch !== this.#joinEpoch) return;
       setCallContext({ call_id: out.call_id, leg_id: out.leg_id });
       reportEvent("call.listen_started");
       this.call = await getCall(out.call_id);
       this.nav = "desk";
-      await this.media.start({
-        callId: out.call_id,
-        legId: out.leg_id,
-        video: false,
-        recvOnly: true,
-      });
+      try {
+        await this.media.start({
+          callId: out.call_id,
+          legId: out.leg_id,
+          video: false,
+          recvOnly: true,
+        });
+      } catch (err) {
+        if (this.shouldSuppressJoinError(err, out.call_id, joinEpoch)) return;
+        throw err;
+      }
+      if (joinEpoch !== this.#joinEpoch) return;
       this.media.bindVideos();
       this.#startTimer();
     });

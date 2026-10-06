@@ -60,9 +60,11 @@ export class AgentMediaController {
     if (!host.call || host.me?.terminal_type === "sip" || this.#connecting) return;
     const leg = (host.call.legs || []).find((l) => l.agent_id === host.me?.id) || host.call.legs?.[1];
     if (!leg) return;
-    await runFeedbackAction(host.feedback, async () => {
+    const joinEpoch = host.getJoinEpoch?.() ?? 0;
+    const callId = host.call.id;
+    try {
       await this.start({
-        callId: host.call.id,
+        callId,
         legId: leg.id,
         video,
         audioDeviceId: host.audioDeviceId,
@@ -71,7 +73,10 @@ export class AgentMediaController {
       });
       host.feedback.clear();
       host.call = { ...host.call, session_type: video ? "mixed" : "audio" };
-    });
+    } catch (err) {
+      if (host.shouldSuppressJoinError?.(err, callId, joinEpoch)) return;
+      host.feedback.fail(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async toggleMute(kind) {

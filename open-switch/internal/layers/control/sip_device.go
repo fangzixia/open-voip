@@ -23,6 +23,9 @@ func (s *Service) ringDevice(ctx context.Context, callID, agentID string) error 
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
 		return err
 	}
+	if err := s.deps.Media.PreflightOriginateSIP(ctx, info.SIPUsername, "@device"); err != nil {
+		return err
+	}
 	legID := uuid.New().String()
 	offerCtx, cancel := context.WithTimeout(context.Background(), offerTimeout)
 	s.mu.Lock()

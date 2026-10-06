@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyCallEnded,
+  isStaleCallMediaError,
   notifyCallFailure,
   outboundProgressLabel,
   recentCallResultLabel,
@@ -37,6 +38,17 @@ test("shouldPromptWrapUp only after real talk", () => {
 
 test("outboundProgressLabel", () => {
   assert.equal(outboundProgressLabel("dialing"), "正在出局拨号…");
+});
+
+test("isStaleCallMediaError ignores join after call ended", () => {
+  assert.equal(
+    isStaleCallMediaError(new Error("当前状态无法加入媒体"), { callEnded: true }),
+    true,
+  );
+  assert.equal(
+    isStaleCallMediaError(new Error("当前状态无法加入媒体"), { joinEpoch: 1, currentJoinEpoch: 2 }),
+    true,
+  );
 });
 
 test("applyCallEnded invokes callback", () => {

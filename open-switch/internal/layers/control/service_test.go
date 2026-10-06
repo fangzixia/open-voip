@@ -362,6 +362,23 @@ func TestAgentMayJoinOutboundRinging(t *testing.T) {
 	if svc.agentMayJoinOutboundRinging(view, "pstn-leg") {
 		t.Fatal("pstn leg should not use agent pre-join rule")
 	}
+	internal := ports.CallView{
+		State:     stateRinging,
+		Direction: "internal",
+		AgentID:   "ag2",
+		Legs: []ports.LegView{
+			{ID: "caller-leg", Role: dto.LegRoleAgent, AgentID: "ag1"},
+		},
+	}
+	if !svc.agentMayJoinOutboundRinging(internal, "caller-leg") {
+		t.Fatal("internal outbound caller should join while ringing")
+	}
+	calleeView := ports.CallView{State: stateRinging, Direction: "internal", AgentID: "ag2", Legs: []ports.LegView{
+		{ID: "callee-leg", Role: dto.LegRoleAgent, AgentID: "ag2"},
+	}}
+	if svc.agentMayJoinOutboundRinging(calleeView, "callee-leg") {
+		t.Fatal("internal callee should not pre-join via outbound rule")
+	}
 }
 
 func TestInboundAnswerHangup(t *testing.T) {

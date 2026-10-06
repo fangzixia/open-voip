@@ -718,10 +718,14 @@ func (s *Service) agentMayJoinOutboundRinging(view ports.CallView, legID string)
 	if !isAgent || legAgent == "" {
 		return false
 	}
-	if view.AgentID != "" && view.AgentID != legAgent {
+	// 被叫振铃腿（AgentID 为 offered）不可用外呼预 join 规则。
+	if view.AgentID != "" && view.AgentID == legAgent && !hasPSTN {
 		return false
 	}
-	return view.Direction == "outbound" || hasPSTN
+	if !(view.Direction == "outbound" || view.Direction == "internal" || hasPSTN) {
+		return false
+	}
+	return true
 }
 
 func (s *Service) AcceptAnswer(ctx context.Context, callID, legID string, answerSDP string) error {

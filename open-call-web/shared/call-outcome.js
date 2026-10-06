@@ -69,9 +69,10 @@ export function applyCallEnded(host, payload, onEndLocal, opts = {}) {
   onEndLocal(payload || {});
 }
 
-/** 出局失败后 JoinWebRTC 的泛化冲突文案，不应覆盖真实业务错误。 */
-export function isStaleOutboundMediaError(err, { callId, failedCallId, dialEpoch, currentDialEpoch } = {}) {
-  if (dialEpoch != null && currentDialEpoch != null && dialEpoch !== currentDialEpoch) {
+/** 通话已结束或 join 世代已作废时，JoinWebRTC 冲突文案应忽略。 */
+export function isStaleCallMediaError(err, { callId, failedCallId, joinEpoch, currentJoinEpoch, callEnded } = {}) {
+  if (callEnded) return true;
+  if (joinEpoch != null && currentJoinEpoch != null && joinEpoch !== currentJoinEpoch) {
     return true;
   }
   const msg = err instanceof Error ? err.message : String(err ?? "");
@@ -79,6 +80,17 @@ export function isStaleOutboundMediaError(err, { callId, failedCallId, dialEpoch
   if (failedCallId && callId && failedCallId === callId) return true;
   if (failedCallId && !callId) return true;
   return false;
+}
+
+/** @deprecated 使用 isStaleCallMediaError */
+export function isStaleOutboundMediaError(err, opts = {}) {
+  return isStaleCallMediaError(err, {
+    callId: opts.callId,
+    failedCallId: opts.failedCallId,
+    joinEpoch: opts.dialEpoch ?? opts.joinEpoch,
+    currentJoinEpoch: opts.currentDialEpoch ?? opts.currentJoinEpoch,
+    callEnded: opts.callEnded,
+  });
 }
 
 /** @param {{ result?: string, elapsed?: number }} opts */
