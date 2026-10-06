@@ -40,8 +40,16 @@ export default defineConfig(({ mode }) => {
       {
         name: "inject-open-voip-api-base",
         transformIndexHtml(html) {
-          if (!injectSnippet) return html;
-          return html.replace("</head>", `${injectSnippet}</head>`);
+          const faviconSnippet =
+            '<link rel="icon" href="/favicon.ico" sizes="32x32" />' +
+            '<link rel="icon" href="/favicon.svg" type="image/svg+xml" />' +
+            '<link rel="apple-touch-icon" href="/favicon.svg" />';
+          let out = html.replace(
+            /<link rel="(?:icon|apple-touch-icon)"[^>]*>\s*/g,
+            "",
+          );
+          out = out.replace("</head>", `${faviconSnippet}${injectSnippet}</head>`);
+          return out;
         },
       },
     ],

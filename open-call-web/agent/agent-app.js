@@ -204,6 +204,7 @@ export class AgentApp extends LitElement {
     if (this.contentOnly && changed.has("staffNav") && isAgentNav(this.staffNav) && this.staffNav !== this.nav) {
       this.feedback.begin();
       this.nav = this.staffNav;
+      if (this.nav === "outbound") void this.#loadIvrAssets();
       if (this.nav === "desk" && this.media.pc) this.media.bindVideos();
     }
     if (changed.has("incoming")) this.#emitNavBadges();
@@ -563,8 +564,10 @@ export class AgentApp extends LitElement {
     try {
       const data = await listIvrAssets();
       this.ivrAssets = data?.items || [];
-    } catch {
+    } catch (err) {
       this.ivrAssets = [];
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg && !msg.includes("CANCELED")) this.feedback.fail(`无法加载语音素材：${msg}`);
     }
   }
 
