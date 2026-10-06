@@ -1,6 +1,8 @@
 package aibot
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -19,12 +21,13 @@ type PeerSession struct {
 	pc         *webrtc.PeerConnection
 	localTrack *webrtc.TrackLocalStaticSample
 	opusDec    opus.Decoder
+	downlink   string
 	onRemote   func(pcm []int16, sampleRate int)
 	mu         sync.Mutex
 	closed     bool
 }
 
-func newPeerSession(turn dto.TURNConfig, onICE func(*webrtc.ICECandidate)) (*PeerSession, error) {
+func newPeerSession(turn dto.TURNConfig, widebandWebRTC bool, onICE func(*webrtc.ICECandidate)) (*PeerSession, error) {
 	servers := []webrtc.ICEServer{}
 	if len(turn.STUNURLs) > 0 {
 		servers = append(servers, webrtc.ICEServer{URLs: turn.STUNURLs})
@@ -53,7 +56,11 @@ func newPeerSession(turn dto.TURNConfig, onICE func(*webrtc.ICECandidate)) (*Pee
 		return nil, err
 	}
 	dec, _ := opus.NewDecoderWithOutput(agentSampleRate, 1)
-	s := &PeerSession{pc: pc, localTrack: track, opusDec: dec}
+	downlink := "PCMU/8000"
+	if widebandWebRTC {
+		downlink = "PCMU/8000(wideband_pending_opus_encoder)"
+	}
+	s := &PeerSession{pc: pc, localTrack: track, opusDec: dec, downlink: downlink}
 	pc.OnICECandidate(onICE)
 	pc.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		if tr.Kind() != webrtc.RTPCodecTypeAudio {
@@ -109,6 +116,14 @@ func bytesLEToMono(b []byte) []int16 {
 	return out
 }
 
+// DownlinkCodec 当前 Bot 下行 WebRTC 编解码描述（用于诊断日志）。
+func (s *PeerSession) DownlinkCodec() string {
+	if s == nil {
+		return ""
+	}
+	return s.downlink
+}
+
 func (s *PeerSession) SetRemotePCMHandler(fn func([]int16, int)) {
 	s.mu.Lock()
 	s.onRemote = fn
@@ -132,6 +147,28 @@ func (s *PeerSession) CompleteOffer(offerSDP string) error {
 
 func (s *PeerSession) LocalDescription() *webrtc.SessionDescription {
 	return s.pc.LocalDescription()
+}
+
+// WaitConnected 等待本地 PeerConnection 进入 connected（DTLS 就绪，便于 Switch 桥接）。
+func (s *PeerSession) WaitConnected(ctx context.Context) error {
+	if s.pc == nil {
+		return fmt.Errorf("peer 未初始化")
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		switch s.pc.ConnectionState() {
+		case webrtc.PeerConnectionStateConnected:
+			return nil
+		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+			return fmt.Errorf("webrtc 连接失败: %s", s.pc.ConnectionState())
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // WritePCMU8k 发送 8kHz 单声道 PCM（按 20ms/160 样本分帧）。

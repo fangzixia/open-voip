@@ -110,13 +110,13 @@ func (s *Service) playPCMToRoom(callID, targetLegID string, pcm []int16, rate in
 			}
 			mulaw := pcmToG711(frame, 0)
 			if !s.playOnePromptFrame(callID, targetLegID, seq, &rtpSeq, &rtpTS, rtpSSRC, mulaw, g722, &nextSend, &lateTotal) {
-				s.emitPromptPlaySummary(ctx, callID, sent, lateTotal, codecLabel)
+				s.emitPromptPlaySummary(ctx, callID, sent, lateTotal, codecLabel, loop)
 				return
 			}
 			sent++
 		}
 		if !loop {
-			s.emitPromptPlaySummary(ctx, callID, sent, lateTotal, codecLabel)
+			s.emitPromptPlaySummary(ctx, callID, sent, lateTotal, codecLabel, loop)
 			return
 		}
 	}

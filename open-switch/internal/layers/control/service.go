@@ -319,7 +319,9 @@ func (s *Service) doAnswer(ctx context.Context, callID, agentID string) error {
 			return err
 		}
 	} else if rt.rec.QueueID != nil {
-		if err := s.deps.Media.BeginQueueAnswerHandoff(ctx, callID, 0, 0); err != nil {
+		_ = s.deps.Media.StopInjectedAudio(ctx, callID)
+		// 极短 handoff：避免默认 500ms 内屏蔽坐席→主叫（AI 自动接听需要立刻出声）。
+		if err := s.deps.Media.BeginQueueAnswerHandoff(ctx, callID, time.Nanosecond, time.Nanosecond); err != nil {
 			return err
 		}
 	} else if err := s.deps.Media.StopInjectedAudio(ctx, callID); err != nil {
@@ -523,7 +525,14 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	}
 	if rt.recordingID != "" {
 		if meta, err := s.deps.Media.RecordingInfo(ctx, rt.recordingID); err == nil {
-			_ = s.publishCall(ctx, callID, "recording.stopped", "", map[string]any{"call_id": callID, "recording_id": rt.recordingID, "file_path": meta.FilePath, "file_size": meta.FileSize})
+			payload := map[string]any{"call_id": callID, "recording_id": rt.recordingID, "file_path": meta.FilePath, "file_size": meta.FileSize}
+			if meta.SampleRateHz > 0 {
+				payload["sample_rate_hz"] = meta.SampleRateHz
+			}
+			if len(meta.LegPaths) > 0 {
+				payload["leg_paths"] = meta.LegPaths
+			}
+			_ = s.publishCall(ctx, callID, "recording.stopped", "", payload)
 		}
 	}
 	s.mu.Lock()

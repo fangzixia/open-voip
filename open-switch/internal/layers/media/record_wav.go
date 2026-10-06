@@ -90,6 +90,41 @@ func (m *pcmMix) anchorAt(t time.Time) {
 	}
 }
 
+// addLinearPCM 将线性 PCM 混音到墙钟时间轴（用于 G.711 解码后或 Opus 解码后的高质量录音）。
+func (m *pcmMix) addLinearPCM(samples []int16, sampleRate int, at time.Time) {
+	if m == nil || len(samples) == 0 || sampleRate <= 0 {
+		return
+	}
+	if sampleRate != m.rate {
+		samples = resamplePCM(samples, sampleRate, m.rate)
+	}
+	idx := int(at.Sub(m.started).Seconds() * float64(m.rate))
+	if idx < 0 {
+		idx = 0
+	}
+	if m.file != nil {
+		m.flush(idx - m.written - m.rate)
+		idx -= m.written
+	}
+	need := idx + len(samples)
+	if cap(m.samples) < need {
+		n := make([]int16, need, need*2)
+		copy(n, m.samples)
+		m.samples = n
+	} else if len(m.samples) < need {
+		m.samples = m.samples[:need]
+	}
+	for i, s := range samples {
+		v := int32(m.samples[idx+i]) + int32(s)
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		m.samples[idx+i] = int16(v)
+	}
+}
+
 func (m *pcmMix) add(payloadType uint8, payload []byte) {
 	if m == nil || len(payload) == 0 {
 		return

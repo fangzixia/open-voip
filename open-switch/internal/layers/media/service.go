@@ -126,6 +126,9 @@ type recorder struct {
 	file      *os.File
 	ogg       *oggwriter.OggWriter
 	pcm       *pcmMix
+	legPCM    map[string]*pcmMix
+	legPaths  map[string]string
+	sampleRateHz int
 	mu        sync.Mutex
 	bytes     int64
 	ended     *time.Time
@@ -166,6 +169,15 @@ type Service struct {
 	answers           answerGate
 	queueAnswerGrace  time.Duration
 	queueAnswerFade   time.Duration
+	onPromptFinished  func(ctx context.Context, callID string, loop bool)
+}
+
+// PromptFinishedHandler 非循环 IVR 放音结束时通知 L3 推进节点。
+type PromptFinishedHandler func(ctx context.Context, callID string, loop bool)
+
+// SetPromptFinishedHandler 注册放音结束回调（仅组合根调用）。
+func (s *Service) SetPromptFinishedHandler(h PromptFinishedHandler) {
+	s.onPromptFinished = h
 }
 
 // NewService 根据 ICE/TURN/录音目录创建媒体服务。
@@ -895,20 +907,19 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 		rec.path = videoRec.outputPath
 		rec.audioPath = ""
 	} else if sipAudio {
-		recRate := 8000
+		recRate := hqRecordingRate
 		if r != nil {
 			r.mu.RLock()
 			switch r.audioProfile {
 			case ports.AudioProfileHDWebRTC:
 				recRate = 48000
-			default:
-				if r.preferWideband {
-					recRate = 16000
-				}
 			}
 			r.mu.RUnlock()
 		}
 		rec.pcm = newPCMMix(recRate, rec.started)
+		rec.sampleRateHz = recRate
+		rec.legPCM = map[string]*pcmMix{}
+		rec.legPaths = map[string]string{}
 		if err := rec.pcm.startFile(audioPath); err != nil {
 			return "", err
 		}
@@ -954,7 +965,16 @@ func (s *Service) StopRecording(ctx context.Context, recordingID string) error {
 	if err != nil {
 		result = "error"
 	}
-	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: rec.callID}), "media", "recording.closed", "stop", result, "", started, "recording_id", recordingID, "bytes", rec.bytes)
+	attrs := []any{"recording_id", recordingID, "bytes", rec.bytes}
+	if meta, err := s.RecordingInfo(ctx, recordingID); err == nil {
+		if meta.SampleRateHz > 0 {
+			attrs = append(attrs, "record_sample_rate_hz", meta.SampleRateHz)
+		}
+		if len(meta.LegPaths) > 0 {
+			attrs = append(attrs, "leg_paths", meta.LegPaths)
+		}
+	}
+	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: rec.callID}), "media", "recording.closed", "stop", result, "", started, attrs...)
 	return err
 }
 
@@ -999,6 +1019,26 @@ func (s *Service) OriginateSIP(ctx context.Context, callID, legID, dial, trunkID
 	return s.sip.originate(ctx, callID, legID, dial, trunkID)
 }
 
+// webrtcLegMediaReady ICE 已连通时允许桥接，避免 DTLS 尚在 connecting 导致语音通知桥接失败。
+func webrtcLegMediaReady(pc *webrtc.PeerConnection) bool {
+	if pc == nil {
+		return false
+	}
+	switch pc.ConnectionState() {
+	case webrtc.PeerConnectionStateConnected:
+		return true
+	case webrtc.PeerConnectionStateConnecting:
+		switch pc.ICEConnectionState() {
+		case webrtc.ICEConnectionStateConnected, webrtc.ICEConnectionStateCompleted:
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
 func (s *Service) BridgeLegs(ctx context.Context, callID, legA, legB string) error {
 	r := s.getRoom(callID)
 	if r == nil {
@@ -1006,7 +1046,7 @@ func (s *Service) BridgeLegs(ctx context.Context, callID, legA, legB string) err
 	}
 	r.mu.RLock()
 	for _, id := range []string{legA, legB} {
-		if p := r.peers[id]; p != nil && p.pc != nil && p.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
+		if p := r.peers[id]; p != nil && p.pc != nil && webrtcLegMediaReady(p.pc) {
 			continue
 		}
 		found := false
@@ -1161,10 +1201,11 @@ func (rec *recorder) writeRTP(legID string, kind webrtc.RTPCodecType, mime strin
 		rec.bytes += int64(len(pkt.Payload))
 		return
 	}
-	if kind == webrtc.RTPCodecTypeAudio && rec.pcm != nil && (pkt.PayloadType == 0 || pkt.PayloadType == 8) {
-		rec.pcm.add(pkt.PayloadType, pkt.Payload)
-		rec.bytes = rec.pcm.byteSize()
-		return
+	if kind == webrtc.RTPCodecTypeAudio && rec.pcm != nil {
+		if pkt.PayloadType == 0 || pkt.PayloadType == 8 || pkt.PayloadType == opusPayloadType || mime == "audio/opus" {
+			rec.writeHQAudio(legID, mime, pkt)
+			return
+		}
 	}
 	if kind == webrtc.RTPCodecTypeAudio && rec.ogg != nil && pkt.PayloadType != 0 && pkt.PayloadType != 8 && pkt.PayloadType != 101 {
 		if err := rec.ogg.WriteRTP(pkt); err == nil {
@@ -1210,6 +1251,19 @@ func (rec *recorder) close() error {
 		}
 		rec.pcm = nil
 	}
+	for legID, mix := range rec.legPCM {
+		if mix == nil {
+			continue
+		}
+		path := rec.legPaths[legID]
+		if path == "" {
+			continue
+		}
+		if _, werr := mix.writeWAV(path); werr != nil && err == nil {
+			err = werr
+		}
+	}
+	rec.legPCM = nil
 	if rec.file != nil {
 		_ = rec.file.Close()
 		rec.file = nil
@@ -1231,10 +1285,18 @@ func (rec *recorder) close() error {
 func (rec *recorder) snapshot() ports.RecordingMeta {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	return ports.RecordingMeta{
+	meta := ports.RecordingMeta{
 		ID: rec.id, CallID: rec.callID, FilePath: rec.path, MediaType: rec.mode,
 		StartedAt: rec.started, EndedAt: rec.ended, FileSize: rec.bytes,
+		SampleRateHz: rec.sampleRateHz,
 	}
+	if len(rec.legPaths) > 0 {
+		meta.LegPaths = map[string]string{}
+		for k, v := range rec.legPaths {
+			meta.LegPaths[k] = v
+		}
+	}
+	return meta
 }
 
 func mulawToneFrame() []byte {

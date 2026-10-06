@@ -48,10 +48,13 @@ func (s *Service) roomNeedsG722(callID string) bool {
 	return false
 }
 
-func (s *Service) emitPromptPlaySummary(ctx context.Context, callID string, frames int, lateMS int, codec string) {
+func (s *Service) emitPromptPlaySummary(ctx context.Context, callID string, frames int, lateMS int, codec string, loop bool) {
 	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}),
 		"media", "prompt.play", "complete", "ok", "", time.Now(),
 		"frames_sent", frames, "prompt_late_ms", lateMS, "codec_negotiated", codec)
 	slog.Info("IVR 播放完成", "call_id", callID, "codec_negotiated", codec,
 		"frames_sent", frames, "prompt_late_ms", lateMS)
+	if !loop && s.onPromptFinished != nil {
+		s.onPromptFinished(ctx, callID, loop)
+	}
 }

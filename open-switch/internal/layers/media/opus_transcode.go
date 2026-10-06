@@ -35,27 +35,28 @@ func opusToPCMU(opusFrame []byte) []byte {
 	if len(opusFrame) == 0 {
 		return nil
 	}
-	pcm48 := make([]byte, 5760*2)
+	pcm48 := make([]int16, 5760)
 	opusDecMu.Lock()
-	_, _, err := opusDec.Decode(opusFrame, pcm48)
+	n, err := opusDec.DecodeToInt16(opusFrame, pcm48)
 	opusDecMu.Unlock()
-	if err != nil {
+	if err != nil || n < 160 {
 		return nil
 	}
-	samples48 := len(pcm48) / 2
-	if samples48 < 960 {
+	pcm8 := resamplePCM(pcm48[:n], 48000, 8000)
+	out := make([]byte, len(pcm8))
+	for i, s := range pcm8 {
+		out[i] = linearToMulaw(s)
+	}
+	return out
+}
+
+func bytesLEToMonoInt16(b []byte) []int16 {
+	if len(b) < 2 {
 		return nil
 	}
-	// 48 kHz → 8 kHz：每 6 个样本取 1 个（单声道 S16LE）。
-	outLen := samples48 / 6
-	if outLen == 0 {
-		return nil
-	}
-	out := make([]byte, outLen)
-	for i := 0; i < outLen; i++ {
-		off := i * 6 * 2
-		sample := int16(int(pcm48[off]) | int(pcm48[off+1])<<8)
-		out[i] = linearToMulaw(sample)
+	out := make([]int16, len(b)/2)
+	for i := range out {
+		out[i] = int16(int(b[2*i]) | int(b[2*i+1])<<8)
 	}
 	return out
 }

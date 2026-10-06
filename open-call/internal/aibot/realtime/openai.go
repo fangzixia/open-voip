@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/coder/websocket"
 
@@ -20,6 +22,16 @@ type Session struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
 	onAudio func(pcm []byte)
+
+	log       *slog.Logger
+	callID    string
+	provider  string
+	inRateHz  int
+	outRateHz int
+
+	outBytes   atomic.Int64
+	outChunks  atomic.Int64
+	outSamples atomic.Int64
 }
 
 // Connect 建立 Realtime WebSocket 并完成 session.update。
@@ -33,24 +45,51 @@ func Connect(ctx context.Context, cfg config.AibotOpenAIConfig, systemPrompt str
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{conn: conn}
+	s := &Session{
+		conn:      conn,
+		provider:  strings.TrimSpace(cfg.Provider),
+		inRateHz:  RealtimeInputRate(cfg),
+		outRateHz: RealtimeOutputRate(cfg),
+	}
+	inFmt, outFmt := sessionAudioFormats(cfg)
 	update := map[string]any{
 		"type": "session.update",
 		"session": map[string]any{
-			"modalities":        []string{"text", "audio"},
-			"instructions":      systemPrompt,
-			"voice":             cfg.Voice,
-			"input_audio_format":  "pcm16",
-			"output_audio_format": "pcm16",
-			"turn_detection":    map[string]any{"type": "server_vad"},
+			"modalities":          []string{"text", "audio"},
+			"instructions":        systemPrompt,
+			"voice":               cfg.Voice,
+			"input_audio_format":  inFmt,
+			"output_audio_format": outFmt,
+			"turn_detection":      map[string]any{"type": "server_vad"},
 		},
 	}
 	if err := s.writeJSON(ctx, update); err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "session.update failed")
 		return nil, err
 	}
+	if s.log != nil {
+		s.log.Info("aibot.realtime.session",
+			"provider", s.provider,
+			"model", cfg.Model,
+			"input_audio_format", inFmt,
+			"output_audio_format", outFmt,
+			"input_rate_hz", s.inRateHz,
+			"output_rate_hz", s.outRateHz,
+		)
+	}
 	go s.readLoop()
 	return s, nil
+}
+
+// BindCallLog 绑定通话级日志（可选）。
+func (s *Session) BindCallLog(log *slog.Logger, callID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.log = log
+	s.callID = callID
+	s.mu.Unlock()
 }
 
 func (s *Session) readLoop() {
@@ -75,16 +114,66 @@ func (s *Session) readLoop() {
 			if err != nil {
 				continue
 			}
+			s.outBytes.Add(int64(len(pcm)))
+			s.outChunks.Add(1)
+			s.outSamples.Add(int64(len(pcm) / 2))
+			if s.outChunks.Load() == 1 && s.log != nil {
+				s.mu.Lock()
+				callID := s.callID
+				outHz := s.outRateHz
+				s.mu.Unlock()
+				ms := int64(len(pcm)/2) * 1000 / int64(outHz)
+				if outHz <= 0 {
+					ms = 0
+				}
+				s.log.Info("aibot.realtime.audio_first_delta",
+					"call_id", callID,
+					"bytes", len(pcm),
+					"pcm_samples", len(pcm)/2,
+					"implied_ms_at_output_rate", ms,
+					"output_rate_hz", outHz,
+				)
+			}
 			s.mu.Lock()
 			fn := s.onAudio
 			s.mu.Unlock()
 			if fn != nil {
 				fn(pcm)
 			}
+		case "response.audio.done", "response.output_audio.done", "response.done", "response.completed":
+			s.logAudioSummary(env.Type)
 		case "error":
 			return
 		}
 	}
+}
+
+func (s *Session) logAudioSummary(reason string) {
+	if s == nil || s.log == nil {
+		return
+	}
+	bytes := s.outBytes.Load()
+	chunks := s.outChunks.Load()
+	samples := s.outSamples.Load()
+	s.mu.Lock()
+	callID := s.callID
+	outHz := s.outRateHz
+	prov := s.provider
+	s.mu.Unlock()
+	var durMs int64
+	if outHz > 0 {
+		durMs = samples * 1000 / int64(outHz)
+	}
+	s.log.Info("aibot.realtime.audio_summary",
+		"call_id", callID,
+		"provider", prov,
+		"reason", reason,
+		"output_rate_hz", outHz,
+		"chunks", chunks,
+		"pcm_bytes", bytes,
+		"pcm_samples", samples,
+		"implied_audio_ms", durMs,
+	)
 }
 
 func (s *Session) OnAudio(fn func([]byte)) {
@@ -132,31 +221,28 @@ func PCM16BytesToSamples(b []byte) []int16 {
 	return out
 }
 
-// ResampleSimple 简单线性重采样（单声道）。
-func ResampleSimple(in []int16, fromRate, toRate int) []int16 {
-	if fromRate <= 0 || toRate <= 0 || fromRate == toRate {
-		return in
+// RealtimeInputRate 返回 provider 约定的上行 PCM 采样率（通义 16kHz，OpenAI 24kHz）。
+func RealtimeInputRate(cfg config.AibotOpenAIConfig) int {
+	if isQwenRealtime(cfg) {
+		return 16000
 	}
-	outLen := len(in) * toRate / fromRate
-	if outLen == 0 {
-		return nil
-	}
-	out := make([]int16, outLen)
-	for i := range out {
-		src := i * fromRate / toRate
-		if src >= len(in) {
-			src = len(in) - 1
-		}
-		out[i] = in[src]
-	}
-	return out
+	return 24000
 }
 
-// RealtimeInputRate OpenAI Realtime 默认输入采样率。
-const RealtimeInputRate = 24000
+// RealtimeOutputRate 返回 provider 约定的下行 PCM 采样率。
+func RealtimeOutputRate(cfg config.AibotOpenAIConfig) int {
+	if isQwenRealtime(cfg) {
+		return 24000
+	}
+	return 24000
+}
 
-// RealtimeOutputRate 输出 PCM 采样率。
-const RealtimeOutputRate = 24000
+func sessionAudioFormats(cfg config.AibotOpenAIConfig) (input, output string) {
+	if isQwenRealtime(cfg) {
+		return "pcm", "pcm"
+	}
+	return "pcm16", "pcm16"
+}
 
 func ValidateConfig(cfg config.AibotOpenAIConfig) error {
 	if strings.TrimSpace(cfg.BaseURL) == "" {

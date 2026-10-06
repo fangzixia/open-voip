@@ -31,11 +31,18 @@ func downsamplePCMTo8k(pcm []int16, rate int) ([]int16, int) {
 	return resamplePCM(pcm, rate, outRate), outRate
 }
 
-// resamplePCM 线性插值重采样（含降采样低通：先低通再抽取由调用方 rate 选择处理）。
+// resamplePCM 单声道重采样：降采样先低通再抽取，升采样线性插值。
 func resamplePCM(pcm []int16, fromRate, toRate int) []int16 {
 	if fromRate <= 0 || toRate <= 0 || len(pcm) == 0 || fromRate == toRate {
 		return pcm
 	}
+	if fromRate > toRate {
+		return decimateWithLowpass(pcm, fromRate, toRate)
+	}
+	return linearResample(pcm, fromRate, toRate)
+}
+
+func linearResample(pcm []int16, fromRate, toRate int) []int16 {
 	outLen := len(pcm) * toRate / fromRate
 	if outLen <= 0 {
 		return nil
@@ -50,7 +57,54 @@ func resamplePCM(pcm []int16, fromRate, toRate int) []int16 {
 			continue
 		}
 		a, b := float64(pcm[j]), float64(pcm[j+1])
-		out[i] = int16(a + (b-a)*frac)
+		v := a + (b-a)*frac
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		out[i] = int16(v)
+	}
+	return out
+}
+
+func decimateWithLowpass(in []int16, fromRate, toRate int) []int16 {
+	ratio := fromRate / toRate
+	if ratio < 2 {
+		return linearResample(in, fromRate, toRate)
+	}
+	win := ratio
+	if win > 12 {
+		win = 12
+	}
+	filtered := make([]int16, len(in))
+	for i := range in {
+		var sum int64
+		var n int
+		for k := -win; k <= win; k++ {
+			j := i + k
+			if j < 0 || j >= len(in) {
+				continue
+			}
+			sum += int64(in[j])
+			n++
+		}
+		if n > 0 {
+			filtered[i] = int16(sum / int64(n))
+		}
+	}
+	outLen := len(filtered) * toRate / fromRate
+	if outLen <= 0 {
+		return nil
+	}
+	out := make([]int16, outLen)
+	for i := range out {
+		srcPos := float64(i) * float64(fromRate) / float64(toRate)
+		j := int(srcPos)
+		if j >= len(filtered) {
+			j = len(filtered) - 1
+		}
+		out[i] = filtered[j]
 	}
 	return out
 }

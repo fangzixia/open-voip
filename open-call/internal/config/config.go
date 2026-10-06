@@ -39,6 +39,8 @@ type AibotConfig struct {
 	QueueIDs     []string              `yaml:"queue_ids"`
 	SystemPrompt string                `yaml:"system_prompt"`
 	OpenAI       AibotOpenAIConfig     `yaml:"openai_realtime"`
+	// WidebandWebRTC 为 true 时 Bot 与 Switch 优先协商 Opus 宽带（SIP 侧仍为 8 kHz G.711）。
+	WidebandWebRTC bool `yaml:"wideband_webrtc"`
 }
 
 type AibotOpenAIConfig struct {

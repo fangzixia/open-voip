@@ -2,11 +2,13 @@ package aibot
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"open-call/internal/config"
+	"open-call/internal/errs"
 	"open-call/internal/integration/switchapi"
 	"open-call/internal/ports"
 )
@@ -19,22 +21,28 @@ type Worker struct {
 	log     *slog.Logger
 	agentID string
 
-	mu       sync.Mutex
-	active   map[string]context.CancelFunc
+	mu          sync.Mutex
+	active      map[string]context.CancelFunc
 	queuePrompt map[string]string // reserved
 }
 
 // NewWorker 构造 Worker。
 func NewWorker(cfg config.AibotConfig, sw *switchapi.Client, usage *UsageRecorder, log *slog.Logger) *Worker {
 	return &Worker{
-		cfg:    cfg,
-		sig:    NewSignaling(sw),
-		usage:  usage,
-		log:    log,
+		cfg:     cfg,
+		sig:     NewSignaling(sw),
+		usage:   usage,
+		log:     log,
 		agentID: cfg.AgentID,
-		active: make(map[string]context.CancelFunc),
+		active:  make(map[string]context.CancelFunc),
 	}
 }
+
+const (
+	checkInBackoffMin   = 500 * time.Millisecond
+	checkInBackoffMax   = 5 * time.Second
+	checkInSteadyPeriod = 30 * time.Second
+)
 
 // Run 登录、签入并阻塞至 ctx 结束。
 func (w *Worker) Run(ctx context.Context) error {
@@ -42,13 +50,63 @@ func (w *Worker) Run(ctx context.Context) error {
 		return nil
 	}
 	if len(w.cfg.QueueIDs) > 0 {
-		if err := w.sig.api.CheckIn(ctx, w.agentID, w.cfg.QueueIDs); err != nil && w.log != nil {
-			w.log.Warn("AI 坐席签入失败", "err", err)
-		}
+		go w.maintainCheckIn(ctx)
 	}
 	<-ctx.Done()
 	w.stopAll()
 	return ctx.Err()
+}
+
+// maintainCheckIn 在 Switch 未就绪时退避重试签入，成功后定期重新签入以从 ACW/离线恢复。
+func (w *Worker) maintainCheckIn(ctx context.Context) {
+	queueIDs := w.cfg.QueueIDs
+	backoff := checkInBackoffMin
+	checkedIn := false
+	for {
+		err := w.sig.api.CheckIn(ctx, w.agentID, queueIDs)
+		wait := checkInSteadyPeriod
+		if err != nil {
+			if w.log != nil && !isBusyCheckIn(err) {
+				w.log.Warn("AI 坐席签入失败", "err", err)
+			}
+			checkedIn = false
+			wait = backoff
+			if backoff < checkInBackoffMax {
+				backoff *= 2
+				if backoff > checkInBackoffMax {
+					backoff = checkInBackoffMax
+				}
+			}
+		} else {
+			if !checkedIn && w.log != nil {
+				w.log.Info("AI 坐席已签入", "agent_id", w.agentID, "queue_ids", queueIDs)
+			}
+			checkedIn = true
+			backoff = checkInBackoffMin
+		}
+		if !waitCtx(ctx, wait) {
+			return
+		}
+	}
+}
+
+func isBusyCheckIn(err error) bool {
+	var api *errs.APIError
+	if errors.As(err, &api) {
+		return api.Code == errs.CodeAgentBusy
+	}
+	return false
+}
+
+func waitCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // OnCallEvent 由 WS Hub 回调，驱动自动接听与语音通知。
@@ -129,11 +187,14 @@ func (w *Worker) maybePrompt(ctx context.Context, callID string) {
 		w.mu.Unlock()
 		return
 	}
-	sctx, cancel := context.WithCancel(ctx)
+	sctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	w.active[callID] = cancel
 	w.mu.Unlock()
 	go func() {
-		defer w.clearCall(callID)
+		defer func() {
+			cancel()
+			w.clearCall(callID)
+		}()
 		time.Sleep(200 * time.Millisecond)
 		if err := RunPromptOutbound(sctx, w.sig, callID, w.agentID, view.PromptAssetID, w.log); err != nil && w.log != nil {
 			w.log.Warn("语音通知失败", "call_id", callID, "err", err)

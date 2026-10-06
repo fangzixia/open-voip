@@ -456,6 +456,13 @@ func (s *Service) StopDirectRecording(ctx context.Context, callID string) (ports
 	s.mu.Lock()
 	rt.recordingID = ""
 	s.mu.Unlock()
-	_ = s.publishCall(ctx, callID, "recording.stopped", "", map[string]any{"call_id": callID, "recording_id": id, "file_path": meta.FilePath, "file_size": meta.FileSize})
+	payload := map[string]any{"call_id": callID, "recording_id": id, "file_path": meta.FilePath, "file_size": meta.FileSize}
+	if meta.SampleRateHz > 0 {
+		payload["sample_rate_hz"] = meta.SampleRateHz
+	}
+	if len(meta.LegPaths) > 0 {
+		payload["leg_paths"] = meta.LegPaths
+	}
+	_ = s.publishCall(ctx, callID, "recording.stopped", "", payload)
 	return meta, nil
 }

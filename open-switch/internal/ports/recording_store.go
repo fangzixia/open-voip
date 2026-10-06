@@ -23,6 +23,10 @@ type RecordingMeta struct {
 	RetainUntil *time.Time `json:"retain_until"`
 	// FileSize 字节数。
 	FileSize int64 `json:"file_size"`
+	// SampleRateHz 主混音 WAV 采样率（如 16000）。
+	SampleRateHz int `json:"sample_rate_hz,omitempty"`
+	// LegPaths 分轨 WAV：leg_id -> 文件路径。
+	LegPaths map[string]string `json:"leg_paths,omitempty"`
 }
 
 // RecordingStorePort 由 L4 实现，供 L3 持久化录音元数据。

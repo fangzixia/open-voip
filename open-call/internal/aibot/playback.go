@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
+
+	"open-call/internal/aibot/realtime"
 )
 
 // PlayWAVToPeer 解码 WAV 并以 8kHz PCMU 写入 WebRTC 发送轨。
@@ -17,7 +19,7 @@ func PlayWAVToPeer(ctx context.Context, peer *PeerSession, wavData []byte) (time
 		return 0, err
 	}
 	if rate != 8000 {
-		pcm = resamplePCM(pcm, rate, 8000)
+		pcm = resamplePCM16(pcm, rate, 8000)
 	}
 	if len(pcm) == 0 {
 		return 0, nil
@@ -49,6 +51,31 @@ func PlayWAVToPeer(ctx context.Context, peer *PeerSession, wavData []byte) (time
 		}
 	}
 	return dur, nil
+}
+
+// PlaySilenceToPeer 按 20ms 帧发送 8kHz 静音，保持 RTP 直到挂断。
+func PlaySilenceToPeer(ctx context.Context, peer *PeerSession, d time.Duration) error {
+	if peer == nil || d <= 0 {
+		return nil
+	}
+	frames := int(d / (20 * time.Millisecond))
+	if frames < 1 {
+		frames = 1
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	silence := make([]int16, 160)
+	for i := 0; i < frames; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := peer.WritePCMU8k(silence); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func decodeWAV(data []byte) ([]int16, int, error) {
@@ -91,21 +118,6 @@ func intBufferToMono16(buf *audio.IntBuffer) []int16 {
 	return out
 }
 
-func resamplePCM(in []int16, fromRate, toRate int) []int16 {
-	if fromRate <= 0 || toRate <= 0 || fromRate == toRate {
-		return in
-	}
-	outLen := len(in) * toRate / fromRate
-	if outLen == 0 {
-		return nil
-	}
-	out := make([]int16, outLen)
-	for i := range out {
-		src := i * fromRate / toRate
-		if src >= len(in) {
-			src = len(in) - 1
-		}
-		out[i] = in[src]
-	}
-	return out
+func resamplePCM16(in []int16, fromRate, toRate int) []int16 {
+	return realtime.ResamplePCM(in, fromRate, toRate)
 }

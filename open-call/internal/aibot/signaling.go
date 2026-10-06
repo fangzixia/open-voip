@@ -80,7 +80,7 @@ func (a switchMediaAdapter) DownloadIVRAsset(ctx context.Context, assetRef strin
 	return a.client.DownloadIVRAsset(ctx, assetRef)
 }
 
-func (s *Signaling) Connect(ctx context.Context, callID, legID, subject string) (*PeerSession, error) {
+func (s *Signaling) Connect(ctx context.Context, callID, legID, subject string, widebandWebRTC bool) (*PeerSession, error) {
 	turn, err := s.api.TURNCredentials(ctx, callID, subject)
 	if err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *Signaling) Connect(ctx context.Context, callID, legID, subject string) 
 	if offerSDP == "" {
 		return nil, fmt.Errorf("switch 未返回 offer sdp")
 	}
-	peer, err := newPeerSession(turn, func(cand *webrtc.ICECandidate) {
+	peer, err := newPeerSession(turn, widebandWebRTC, func(cand *webrtc.ICECandidate) {
 		if cand == nil {
 			return
 		}
