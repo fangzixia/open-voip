@@ -237,6 +237,13 @@ func (f *fakeMedia) StopRecording(context.Context, string) error {
 	f.stops++
 	return nil
 }
+func (f *fakeMedia) PreflightOriginateSIP(context.Context, string, string) error {
+	if f.sipOK {
+		return nil
+	}
+	return errs.Unprocessable("SIP 未启用", errs.CodeSIPDisabled)
+}
+
 func (f *fakeMedia) OriginateSIP(context.Context, string, string, string, string) error {
 	if f.sipOK {
 		return nil
@@ -573,45 +580,17 @@ func TestRecordingStartsOnActiveNotOnHold(t *testing.T) {
 	}
 }
 
-func TestOutboundSIPOriginateFailureEmitsEndedMessage(t *testing.T) {
-	svc, media, _, ev := newTestService("ag1")
+func TestOutboundSIPPreflightFailsBeforeRinging(t *testing.T) {
+	svc, media, _, _ := newTestService("ag1")
 	media.sipOK = false
 	ctx := context.Background()
-	id, err := svc.Outbound(ctx, dto.OutboundRequest{AgentID: "ag1", Destination: "+8613800138000"})
-	if err != nil {
-		t.Fatal(err)
+	_, err := svc.Outbound(ctx, dto.OutboundRequest{AgentID: "ag1", Destination: "+8613800138000"})
+	if err == nil {
+		t.Fatal("expected outbound preflight error")
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	var view ports.CallView
-	for {
-		var gerr error
-		view, gerr = svc.GetCall(ctx, id)
-		if gerr != nil {
-			t.Fatal(gerr)
-		}
-		if view.State == stateEnded {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timeout state=%s result=%s message=%q", view.State, view.Result, view.EndMessage)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if view.Result != "failed" || view.EndMessage == "" {
-		t.Fatalf("view result=%q end_message=%q", view.Result, view.EndMessage)
-	}
-	var ended map[string]any
-	for _, p := range ev.payloads["call.ended"] {
-		if p["call_id"] == id {
-			ended = p
-			break
-		}
-	}
-	if ended == nil {
-		t.Fatalf("missing call.ended payloads=%v types=%v", ev.payloads, ev.types)
-	}
-	if ended["result"] != "failed" || ended["message"] == "" {
-		t.Fatalf("ended payload=%v", ended)
+	api := errs.AsAPIError(err)
+	if api == nil || api.Message == "" {
+		t.Fatalf("err=%v", err)
 	}
 }
 

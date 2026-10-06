@@ -14,6 +14,7 @@ import { BusinessWebSocket } from "../shared/ws.js";
 import { reportEvent } from "../shared/observability.js";
 import {
   applyCallEnded,
+  isStaleOutboundMediaError,
   notifyCallFailure,
   outboundProgressLabel,
   recentCallResultLabel,
@@ -74,6 +75,10 @@ export class AgentApp extends LitElement {
   #timer = null;
   #startedAt = 0;
   #clockTimer = null;
+  /** 外呼操作世代：失败或新拨号时递增，作废进行中的 WebRTC join。 */
+  #dialEpoch = 0;
+  /** 已通过 WS 提示过失败文案的 call_id，避免与 call.ended 重复 toast。 */
+  #outboundFailureNotifiedId = "";
   feedback = new FeedbackController(this);
   media = new AgentMediaController(this);
 
@@ -258,16 +263,22 @@ export class AgentApp extends LitElement {
       const p = msg.payload || {};
       reportEvent("call.ended", { reason: p.reason || "", result: p.result || "", error_code: p.error_code || "" });
       if (this.call?.id === p.call_id || this.incoming?.call_id === p.call_id) {
+        const suppressToast = this.#outboundFailureNotifiedId === p.call_id;
+        if (this.call?.id === p.call_id) this.#dialEpoch += 1;
         applyCallEnded(this, p, (meta) => {
           this.outboundNotice = "";
           this.#endLocal(p.call_id, meta);
-        });
+        }, { suppressToast });
+        if (suppressToast) this.#outboundFailureNotifiedId = "";
       }
     } else if (msg.type === "call.outbound_progress") {
       const p = msg.payload || {};
       if (this.call?.id !== p.call_id) return;
       this.outboundNotice = p.message || outboundProgressLabel(p.phase);
       if (p.phase === "failed") {
+        this.#outboundFailureNotifiedId = p.call_id;
+        this.#dialEpoch += 1;
+        this.media.stop();
         reportEvent("call.outbound_failed", { result: "failed", error_code: p.error_code || "", message: p.message || "" });
         notifyCallFailure(this, p);
       }
@@ -467,7 +478,16 @@ export class AgentApp extends LitElement {
       }
       await this.#ensureCheckedIn();
       if (this.me?.terminal_type === "sip") { this.feedback.ok("已自动签入，请从已注册的 SIP 话机拨号", epoch); return; }
-      const call = await outboundCall(this.dest.trim());
+      const dialEpoch = ++this.#dialEpoch;
+      this.#outboundFailureNotifiedId = "";
+      let call;
+      try {
+        call = await outboundCall(this.dest.trim());
+      } catch (err) {
+        this.#dialEpoch += 1;
+        throw err;
+      }
+      if (dialEpoch !== this.#dialEpoch) return;
       this.call = call;
       this.nav = "desk";
       this.feedback.clear();
@@ -476,17 +496,35 @@ export class AgentApp extends LitElement {
       reportEvent("call.outbound_created", { state: call.state });
       this.outboundNotice = call.pstn_dial_state === "dialing" ? "正在出局拨号…" : "";
       if (leg && (call.state === "active" || call.state === "ringing")) {
-        await this.media.start({
-          callId: call.id,
-          legId: leg.id,
-          video: false,
-          audioDeviceId: this.audioDeviceId,
-        });
+        try {
+          await this.#joinOutboundMedia(call, leg, dialEpoch);
+        } catch (err) {
+          if (isStaleOutboundMediaError(err, {
+            callId: call.id,
+            failedCallId: this.#outboundFailureNotifiedId,
+            dialEpoch,
+            currentDialEpoch: this.#dialEpoch,
+          })) {
+            return;
+          }
+          throw err;
+        }
+        if (dialEpoch !== this.#dialEpoch) return;
         if (call.state === "active") {
           this.media.bindVideos();
           this.#startTimer();
         }
       }
+    });
+  }
+
+  async #joinOutboundMedia(call, leg, dialEpoch) {
+    if (dialEpoch !== this.#dialEpoch) return;
+    await this.media.start({
+      callId: call.id,
+      legId: leg.id,
+      video: false,
+      audioDeviceId: this.audioDeviceId,
     });
   }
 

@@ -188,6 +188,9 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 	if rt.rec.SessionType != dto.SessionTypeAudio {
 		return ports.DirectSIPResult{}, errs.Unprocessable("SIP 腿仅支持语音", "")
 	}
+	if err := s.deps.Media.PreflightOriginateSIP(ctx, req.Destination, req.TrunkID); err != nil {
+		return ports.DirectSIPResult{}, err
+	}
 	s.deps.Media.PrepareSIP(callID)
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
 		return ports.DirectSIPResult{}, err

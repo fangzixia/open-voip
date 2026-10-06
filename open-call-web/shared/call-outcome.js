@@ -56,12 +56,29 @@ export function notifyCallFailure(host, payload, opts = {}) {
  * @param {Record<string, unknown>} payload
  * @param {(meta: Record<string, unknown>) => void} onEndLocal
  */
-export function applyCallEnded(host, payload, onEndLocal) {
+export function applyCallEnded(host, payload, onEndLocal, opts = {}) {
   const notice = userFacingCallEndMessage(payload);
-  if (notice && payload?.result !== "answered" && host?.feedback?.fail) {
+  if (
+    !opts.suppressToast &&
+    notice &&
+    payload?.result !== "answered" &&
+    host?.feedback?.fail
+  ) {
     host.feedback.fail(notice);
   }
   onEndLocal(payload || {});
+}
+
+/** 出局失败后 JoinWebRTC 的泛化冲突文案，不应覆盖真实业务错误。 */
+export function isStaleOutboundMediaError(err, { callId, failedCallId, dialEpoch, currentDialEpoch } = {}) {
+  if (dialEpoch != null && currentDialEpoch != null && dialEpoch !== currentDialEpoch) {
+    return true;
+  }
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  if (!msg.includes("无法加入媒体")) return false;
+  if (failedCallId && callId && failedCallId === callId) return true;
+  if (failedCallId && !callId) return true;
+  return false;
 }
 
 /** @param {{ result?: string, elapsed?: number }} opts */

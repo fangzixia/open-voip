@@ -18,8 +18,8 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
-// originate 选择中继、网关模组或已注册话机，发起 SIP INVITE 并处理协商响应。
-func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID string) error {
+// preflightOriginate 同步校验出局路由，避免 HTTP 已 ringing 后立刻因配置错误挂断。
+func (u *sipUA) preflightOriginate(dial, trunkID string) error {
 	if trunkID == "" && u.wantGatewayOutbound(dial) {
 		trunkID = "@gateway"
 	}
@@ -30,9 +30,7 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 		if gw == "" || u.lookupReg(gw) == nil {
 			return errs.Unprocessable("SIP 网关模组未注册", errs.CodeSIPDisabled)
 		}
-		slog.Info("SIP 网关外呼", "gateway", gw, "dial", dial)
 	case "@device":
-		tr = nil
 		if u.lookupReg(dial) == nil {
 			return errs.Unprocessable("SIP 坐席未注册", errs.CodeSIPDisabled)
 		}
@@ -47,6 +45,30 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 	}
 	if tr == nil && trunkID != "@gateway" && u.lookupReg(dial) == nil {
 		return errs.Unprocessable("未找到 SIP 中继或已注册分机", errs.CodeSIPDisabled)
+	}
+	return nil
+}
+
+// originate 选择中继、网关模组或已注册话机，发起 SIP INVITE 并处理协商响应。
+func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID string) error {
+	if err := u.preflightOriginate(dial, trunkID); err != nil {
+		return err
+	}
+	if trunkID == "" && u.wantGatewayOutbound(dial) {
+		trunkID = "@gateway"
+	}
+	var tr *config.SIPTrunkConfig
+	switch trunkID {
+	case "@gateway":
+		gw := strings.TrimSpace(u.cfg.GatewayDevice)
+		slog.Info("SIP 网关外呼", "gateway", gw, "dial", dial)
+	case "@device":
+		tr = nil
+	default:
+		tr = u.pickTrunk(trunkID)
+		if u.lookupReg(dial) != nil && trunkID == "" {
+			tr = nil
+		}
 	}
 	if tr != nil {
 		dial = tr.NormalizeDial(dial)

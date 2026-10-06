@@ -478,6 +478,10 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 
 // originateSIPCall 异步拨号；回调前重新检查通话状态，避免已挂断后被接通。
 func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runtimeCall, req dto.OutboundRequest) (string, error) {
+	if err := s.deps.Media.PreflightOriginateSIP(ctx, req.Destination, req.TrunkID); err != nil {
+		_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
+		return "", err
+	}
 	now := time.Now().UTC()
 	pstnLeg := ports.CallLegRecord{ID: uuid.New().String(), CallID: callID, Role: dto.LegRolePSTN, CreatedAt: now}
 	if err := s.deps.Calls.InsertLeg(ctx, pstnLeg); err != nil {

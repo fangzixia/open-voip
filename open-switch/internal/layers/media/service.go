@@ -985,6 +985,13 @@ func (s *Service) RecordingInfo(ctx context.Context, recordingID string) (ports.
 	return rec.snapshot(), nil
 }
 
+func (s *Service) PreflightOriginateSIP(_ context.Context, dial, trunkID string) error {
+	if s.sip == nil || !s.sip.enabled {
+		return errs.Unprocessable("SIP 未启用", errs.CodeSIPDisabled)
+	}
+	return s.sip.preflightOriginate(dial, trunkID)
+}
+
 func (s *Service) OriginateSIP(ctx context.Context, callID, legID, dial, trunkID string) error {
 	if s.sip == nil || !s.sip.enabled {
 		return errs.Unprocessable("SIP 未启用", errs.CodeSIPDisabled)

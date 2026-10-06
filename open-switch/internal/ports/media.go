@@ -46,6 +46,8 @@ type MediaPort interface {
 	SetCallAudioProfile(ctx context.Context, callID, profile string) error
 	// StopRecording 停止录制并落盘。
 	StopRecording(ctx context.Context, recordingID string) error
+	// PreflightOriginateSIP 同步校验出局路由（中继/网关/分机），不发起 INVITE。
+	PreflightOriginateSIP(ctx context.Context, dial, trunkID string) error
 	// OriginateSIP 发起 SIP leg（PSTN 可选模块）。
 	OriginateSIP(ctx context.Context, callID, legID, dial, trunkID string) error
 	// BridgeLegs 桥接两条 leg 的媒体。
