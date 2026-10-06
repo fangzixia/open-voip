@@ -562,32 +562,9 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 		_ = s.publishCall(ctx, callID, "call.answered", req.AgentID, map[string]any{"call_id": callID, "agent_id": req.AgentID})
 		s.mu.Lock()
 		prompt := rt.promptOutbound
-		asset := rt.promptAsset
 		s.mu.Unlock()
-		if prompt && asset != "" {
-			if err := s.deps.Media.InjectAudio(ctx, callID, pstnLeg.ID, dto.AudioSource{FilePath: asset, Loop: false}); err != nil {
-				slog.Warn("语音通知放音失败", "call_id", callID, "err", err)
-				_ = s.failCall(ctx, callID, dto.HangupReasonError, codeIVRPromptFailed, "通知放音失败")
-				return
-			}
-			s.emitOutboundProgress(ctx, callID, req.AgentID, "playing", "正在播放通知…")
-			dur, _ := s.deps.Media.PromptDuration(ctx, asset)
-			delay := promptOutboundHangupDelay(dur)
-			timer := time.AfterFunc(delay, func() {
-				hctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				s.mu.Lock()
-				if rt := s.calls[callID]; rt != nil && rt.rec.State != stateEnded {
-					rt.endMessage = "通知已播放完成"
-				}
-				s.mu.Unlock()
-				_ = s.Hangup(hctx, callID, dto.HangupReasonNormal)
-			})
-			s.mu.Lock()
-			if rt := s.calls[callID]; rt != nil {
-				rt.promptHangupTimer = timer
-			}
-			s.mu.Unlock()
+		if prompt {
+			s.emitOutboundProgress(ctx, callID, req.AgentID, "media_ready", "等待媒体 Worker 播放通知…")
 		}
 	}()
 	return callID, nil

@@ -45,6 +45,8 @@ type CallView struct {
 	PstnDialState string `json:"pstn_dial_state,omitempty"`
 	// OutboundMode 外呼子模式，如 prompt_outbound（语音通知）。
 	OutboundMode string `json:"outbound_mode,omitempty"`
+	// PromptAssetID 语音通知素材（prompt_outbound），由 Worker 播放。
+	PromptAssetID string `json:"prompt_asset_id,omitempty"`
 }
 
 // LegView 通话腿视图。

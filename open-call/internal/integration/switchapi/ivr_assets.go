@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 
 	"open-call/internal/httpapi"
@@ -60,4 +61,24 @@ func (c *Client) UploadIVRAsset(ctx context.Context, filename string, wav []byte
 	}
 	observability.Emit(ctx, "switch.request.completed", fields)
 	return out, nil
+}
+
+// DownloadIVRAsset 下载 Switch 侧 IVR 素材 WAV（assetRef 可为 uuid 或 uuid.wav）。
+func (c *Client) DownloadIVRAsset(ctx context.Context, assetRef string) ([]byte, error) {
+	id := strings.TrimSpace(assetRef)
+	id = strings.TrimSuffix(id, ".wav")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/switch/v1/ivr-assets/"+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	setTraceHeaders(req, ctx)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		return nil, httpapi.Decode(res, nil)
+	}
+	return io.ReadAll(io.LimitReader(res.Body, 32<<20))
 }

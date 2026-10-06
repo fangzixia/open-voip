@@ -12,3 +12,4 @@ export * from "./ivr.js";
 export * from "./webhooks.js";
 export * from "./dids.js";
 export * from "./audit.js";
+export * from "./aibot.js";

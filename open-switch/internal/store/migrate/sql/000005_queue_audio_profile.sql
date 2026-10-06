@@ -1,0 +1,1 @@
+ALTER TABLE os_queues ADD COLUMN IF NOT EXISTS audio_profile VARCHAR(32) DEFAULT '';

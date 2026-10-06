@@ -47,6 +47,7 @@ type Hub struct {
 	connCount      atomic.Int64
 	sequence       atomic.Uint64
 	allowedOrigins []string
+	callHooks      []func(context.Context, ports.CallEvent)
 
 	mu      sync.Mutex
 	byAgent map[string]map[*client]struct{}
@@ -89,6 +90,16 @@ func (h *Hub) ConnectionCount() int {
 	return int(h.connCount.Load())
 }
 
+// RegisterCallEventHook 注册 Switch 通话事件回调（如 AI Worker）。
+func (h *Hub) RegisterCallEventHook(fn func(context.Context, ports.CallEvent)) {
+	if fn == nil {
+		return
+	}
+	h.mu.Lock()
+	h.callHooks = append(h.callHooks, fn)
+	h.mu.Unlock()
+}
+
 func (h *Hub) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 	ctx = observability.With(ctx, observability.Context{CallID: ev.CallID, AgentID: ev.AgentID})
 	observability.Emit(ctx, "ws.call_event.published", map[string]any{"type": ev.Type})
@@ -96,6 +107,12 @@ func (h *Hub) PublishCallEvent(ctx context.Context, ev ports.CallEvent) error {
 	h.retain(ev.CallID, ev.AgentID, msg)
 	h.persistBufferedEvent(ctx, ev.CallID, ev.AgentID, msg)
 	h.broadcast(ctx, ev.CallID, ev.AgentID, msg)
+	h.mu.Lock()
+	hooks := append([]func(context.Context, ports.CallEvent){}, h.callHooks...)
+	h.mu.Unlock()
+	for _, fn := range hooks {
+		fn(ctx, ev)
+	}
 	if h.hooks != nil {
 		if err := h.hooks.Dispatch(ctx, ev.Type, ev.Payload); err != nil {
 			return err

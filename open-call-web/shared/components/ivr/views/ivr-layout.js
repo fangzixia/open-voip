@@ -10,7 +10,7 @@ export function renderIvrLayout(host) {
     const published=host.flows.find(f=>f.id===host.selectedId)?.published_version;
     return html`<div class="wrap">
       <div class="header"><div><h2>IVR 流程设计器</h2><input class="flow-name" aria-label="流程名称" .value=${host.flowName} @input=${e=>{host.flowName=e.target.value;host.dirty=true}} placeholder="流程名称" /><br /><span class="muted">${host.selectedId ? `线上 v${published||"未发布"}` : "新流程"} ${host.dirty?" · 草稿有未保存修改":""}</span></div>
-      <div class="toolbar"><button @click=${()=>host.mutate(d=>{delete d.layout})}>自动排列</button><button @click=${()=>host.runSimulation()}>模拟路径</button><button @click=${()=>host.save()} ?disabled=${host.busy}>保存草稿</button><button class="primary" @click=${()=>host.publish()} ?disabled=${host.busy}>检查并发布</button></div></div>
+      <div class="toolbar"><button @click=${()=>host.applyAITemplate()} ?disabled=${host.busy}>AI 呼入模板</button><button @click=${()=>host.mutate(d=>{delete d.layout})}>自动排列</button><button @click=${()=>host.runSimulation()}>模拟路径</button><button @click=${()=>host.save()} ?disabled=${host.busy}>保存草稿</button><button class="primary" @click=${()=>host.publish()} ?disabled=${host.busy}>检查并发布</button></div></div>
       ${host.problem ? html`<div class="error" role="alert">${host.problem}</div>` : nothing}${host.notice ? html`<div class="success" role="status">${host.notice}</div>` : nothing}
       <div class="workspace">
         <div class="pane"><h3>流程</h3><div class="list flow-list">${host.flows.map(f=>html`<button class=${host.selectedId===f.id?"active":""} @click=${()=>host.chooseFlow(f.id)}>${f.name}\u3000${f.published_version?`v${f.published_version}`:"草稿"}</button>`)}</div><button @click=${()=>host.newFlow()}>＋ 新建流程</button>

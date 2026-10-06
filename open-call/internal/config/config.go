@@ -26,7 +26,28 @@ type Config struct {
 	Security    SecurityConfig    `yaml:"security"`
 	// FFmpegPath FFmpeg 可执行文件；为空时启动时在 PATH 中查找 ffmpeg。
 	FFmpegPath string    `yaml:"ffmpeg_path"`
-	TTS        TTSConfig `yaml:"tts"`
+	TTS        TTSConfig  `yaml:"tts"`
+	Aibot      AibotConfig `yaml:"aibot"`
+}
+
+// AibotConfig 虚拟坐席 Worker（AI 呼入与语音通知 WebRTC 媒体）。
+type AibotConfig struct {
+	Enabled      bool                  `yaml:"enabled"`
+	Username     string                `yaml:"username"`
+	Password     string                `yaml:"password"`
+	AgentID      string                `yaml:"agent_id"`
+	QueueIDs     []string              `yaml:"queue_ids"`
+	SystemPrompt string                `yaml:"system_prompt"`
+	OpenAI       AibotOpenAIConfig     `yaml:"openai_realtime"`
+}
+
+type AibotOpenAIConfig struct {
+	// Provider 可选：qwen（通义/百炼 Realtime）、openai（官方 Realtime）；空则按 base_url 推断。
+	Provider string `yaml:"provider"`
+	BaseURL  string `yaml:"base_url"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`
+	Voice    string `yaml:"voice"`
 }
 
 // TTSConfig 控制 IVR 素材文本转语音（业务侧合成后上传至 Switch）。
@@ -222,6 +243,22 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if c.Aibot.Enabled {
+		if strings.TrimSpace(c.Aibot.Username) == "" || strings.TrimSpace(c.Aibot.Password) == "" {
+			problems = append(problems, "aibot.enabled 时必须配置 username 与 password")
+		}
+		if strings.TrimSpace(c.Aibot.AgentID) == "" {
+			problems = append(problems, "aibot.enabled 时必须配置 agent_id")
+		}
+		if len(c.Aibot.QueueIDs) > 0 {
+			if strings.TrimSpace(c.Aibot.OpenAI.BaseURL) == "" {
+				problems = append(problems, "aibot 配置了 queue_ids 时必须配置 openai_realtime.base_url（兼容 Realtime 的网关地址，无默认值）")
+			}
+			if strings.TrimSpace(c.Aibot.OpenAI.APIKey) == "" || strings.TrimSpace(c.Aibot.OpenAI.Model) == "" {
+				problems = append(problems, "aibot 配置了 queue_ids 时必须配置 openai_realtime.api_key 与 model")
+			}
+		}
+	}
 	if c.TTS.Enabled {
 		provider := strings.ToLower(strings.TrimSpace(c.TTS.Provider))
 		switch provider {
@@ -311,5 +348,11 @@ func (c *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(c.TTS.OpenAI.ResponseFormat) == "" {
 		c.TTS.OpenAI.ResponseFormat = "mp3"
+	}
+	if strings.TrimSpace(c.Aibot.OpenAI.Model) == "" {
+		c.Aibot.OpenAI.Model = "gpt-4o-realtime-preview"
+	}
+	if strings.TrimSpace(c.Aibot.OpenAI.Voice) == "" {
+		c.Aibot.OpenAI.Voice = "alloy"
 	}
 }

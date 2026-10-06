@@ -45,6 +45,25 @@ tts:
     voice: alloy
     response_format: mp3
 
+# 虚拟坐席 Worker：AI 呼入（WebRTC + Realtime）与语音通知放音（WebRTC）。
+# 语音通知 API 的 agent_id 须与本节 agent_id 一致（媒体服务账号）。
+aibot:
+  enabled: false
+  username: "ai-bot"
+  password: "REPLACE-AIBOT-PASSWORD-12+"
+  agent_id: ""
+  queue_ids: []
+  system_prompt: "你是呼叫中心智能助手，简洁友好地解答用户问题；需要人工时说转人工。"
+  openai_realtime:
+    # provider: qwen 时使用 DashScope 头；openai 时使用 OpenAI-Beta。
+    provider: ""
+    # 兼容 OpenAI Realtime 协议的网关根地址（https 或 wss）；无默认值，请填写自有或代理地址。
+    # 通义示例：wss://maas.qianwenaiapi.com/api-ws/v1/realtime
+    base_url: ""
+    api_key: ""
+    model: "gpt-4o-realtime-preview"
+    voice: "alloy"
+
 jwt:
   access_ttl_sec: 3600
   refresh_ttl_sec: 604800

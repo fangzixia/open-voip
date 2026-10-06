@@ -4,6 +4,7 @@ import { NODE_TYPES, validateIVR, simulateIVR, layoutIVR } from "./ivr-model.js"
 import { randomId } from "../../random-id.js";
 import { ivrEditorStyles } from "./views/ivr-styles.js";
 import { renderIvrLayout } from "./views/ivr-layout.js";
+import { fetchAibotIVRTemplate } from "../../api/aibot.js";
 
 const blank = () => ({ start: "", nodes: {} });
 const copy = value => structuredClone(value);
@@ -201,6 +202,23 @@ export class IVRFlowEditor extends LitElement {
     try { await this.service.deleteIvrFlow(this.selectedId); this.flows=this.flows.filter(f=>f.id!==this.selectedId); this.selectedId=""; this.draft=blank(); this.selectedNode=""; this.dirty=false; this.notice="流程已删除"; this.dispatchEvent(new CustomEvent("ivr-changed",{bubbles:true,composed:true})); }
     catch(e) { this.problem=e.message; }
     finally { this.busy=false; }
+  }
+  async applyAITemplate() {
+    const q = this.bindingQueueId || this.queues.find(x => !x.video_enabled)?.id;
+    if (!q) { this.problem = "请先配置语音队列或在下方绑定区选择队列"; return; }
+    this.busy = true;
+    try {
+      const res = await fetchAibotIVRTemplate(q);
+      this.draft = copy(res.draft || blank());
+      this.selectedNode = this.draft.start || "welcome";
+      this.dirty = true;
+      this.notice = res.hint || "已载入 AI 呼入模板（欢迎语 + 转 AI 队列）";
+      this.problem = "";
+    } catch (e) {
+      this.problem = e instanceof Error ? e.message : String(e);
+    } finally {
+      this.busy = false;
+    }
   }
   async bindQueue() {
     if (!this.selectedId || !this.bindingQueueId) { this.problem="请选择已发布流程和队列"; return; }

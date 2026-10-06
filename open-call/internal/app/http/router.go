@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"gorm.io/gorm"
 
 	"open-call/internal/app/http/middleware"
 	"open-call/internal/config"
@@ -63,6 +64,7 @@ type RouterDeps struct {
 	FFmpeg string
 	TTS    *tts.Engine
 	Switch *switchapi.Client
+	DB *gorm.DB
 }
 
 // NewRouter 构建 chi 路由。
@@ -155,6 +157,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 				admin.With(middleware.RequirePermission("ivr.write")).Post("/ivr/flows/{flowId}/publish", deps.handleIVRPublish)
 				admin.With(middleware.RequirePermission("ivr.read")).Get("/ivr-assets/tts-options", deps.handleIVRAssetTTSOptions)
 				admin.With(middleware.RequirePermission("ivr.write")).Post("/ivr-assets/synthesize", deps.handleIVRAssetSynthesize)
+				admin.With(middleware.RequirePermission("ivr.read")).Get("/aibot/ivr-template", deps.handleAibotIVRTemplate)
+				admin.With(middleware.RequirePermission("queues.read")).Get("/aibot/queues/{queueId}/profile", deps.handleAibotQueueProfileGet)
+				admin.With(middleware.RequirePermission("queues.write")).Put("/aibot/queues/{queueId}/profile", deps.handleAibotQueueProfilePut)
 				admin.With(middleware.RequirePermission("cdr.export")).Get("/cdr/export.csv", deps.handleCDRExport)
 				admin.With(middleware.RequirePermission("webhooks.read")).Get("/webhooks/subscriptions", deps.handleWebhookList)
 				admin.With(middleware.RequirePermission("webhooks.write")).Post("/webhooks/subscriptions", deps.handleWebhookCreate)

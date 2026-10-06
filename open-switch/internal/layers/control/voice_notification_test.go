@@ -8,7 +8,7 @@ import (
 	"open-switch/internal/ports/dto"
 )
 
-func TestVoiceNotificationRejectsJoinWebRTC(t *testing.T) {
+func TestVoiceNotificationAllowsJoinWebRTC(t *testing.T) {
 	svc, media, _, _ := newTestService("ag1")
 	media.sipOK = true
 	ctx := context.Background()
@@ -28,6 +28,9 @@ func TestVoiceNotificationRejectsJoinWebRTC(t *testing.T) {
 		if view.OutboundMode != "prompt_outbound" {
 			t.Fatalf("expected prompt_outbound mode, got %q", view.OutboundMode)
 		}
+		if view.PromptAssetID == "" {
+			t.Fatal("expected prompt_asset_id on call view")
+		}
 		for _, leg := range view.Legs {
 			if leg.AgentID == "ag1" {
 				agentLeg = leg.ID
@@ -41,13 +44,12 @@ func TestVoiceNotificationRejectsJoinWebRTC(t *testing.T) {
 	if agentLeg == "" {
 		t.Fatal("missing agent leg")
 	}
-	_, err = svc.JoinWebRTC(ctx, id, agentLeg)
-	if err == nil {
-		t.Fatal("expected join conflict for voice notification")
+	if _, err := svc.JoinWebRTC(ctx, id, agentLeg); err != nil {
+		t.Fatalf("JoinWebRTC: %v", err)
 	}
 }
 
-func TestVoiceNotificationInjectOnAnswer(t *testing.T) {
+func TestVoiceNotificationDoesNotInjectOnAnswer(t *testing.T) {
 	svc, media, _, _ := newTestService("ag1")
 	media.sipOK = true
 	ctx := context.Background()
@@ -68,7 +70,7 @@ func TestVoiceNotificationInjectOnAnswer(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if media.injects < 1 {
-		t.Fatalf("expected InjectAudio on answer, injects=%d", media.injects)
+	if media.injects != 0 {
+		t.Fatalf("server must not InjectAudio for voice notification, injects=%d", media.injects)
 	}
 }

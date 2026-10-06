@@ -39,6 +39,7 @@ import (
 	"open-call/internal/layers/biz/webhook"
 	"open-call/internal/store"
 	"open-call/internal/store/migrate"
+	"open-call/internal/aibot"
 	"open-call/internal/tts"
 )
 
@@ -124,6 +125,17 @@ func Run(configPath string) error {
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
+	usageRec := aibot.NewUsageRecorder(db, hookSvc, log)
+	aiWorker := aibot.NewWorker(cfg.Aibot, switchClient, usageRec, log)
+	wsHub.RegisterCallEventHook(aiWorker.OnCallEvent)
+	if cfg.Aibot.Enabled {
+		go func() {
+			if err := aiWorker.Run(workerCtx); err != nil && workerCtx.Err() == nil {
+				log.Warn("AI Worker 退出", "err", err)
+			}
+		}()
+	}
+
 	ffmpegBin, err := ffmpeg.Resolve(cfg.FFmpegPath)
 	if err != nil {
 		return err
@@ -139,6 +151,7 @@ func Run(configPath string) error {
 		FFmpeg:             ffmpegBin,
 		TTS:                ttsEngine,
 		Switch:             switchClient,
+		DB:                 db,
 		SwitchEventHandler: SwitchEventHTTP(db, wsHub, businessActions, switchClient),
 		Auth:               authSvc,
 		Authorization:      authzSvc,

@@ -694,9 +694,6 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string) (dto.Loc
 	if !found {
 		return dto.LocalOffer{}, errs.NotFound("通话腿不存在")
 	}
-	if view.OutboundMode == "prompt_outbound" && role == dto.LegRoleAgent {
-		return dto.LocalOffer{}, errs.Conflict("语音通知无需加入媒体", "")
-	}
 	preAnswerCustomer := role == dto.LegRoleCustomer && (view.State == stateQueued || view.State == stateRinging)
 	preAnswerOutboundAgent := view.State == stateRinging && role == dto.LegRoleAgent && s.agentMayJoinOutboundRinging(view, legID)
 	if !preAnswerCustomer && !preAnswerOutboundAgent && view.State != stateCreated && view.State != stateActive && view.State != stateIVR && view.State != stateHeld && view.State != stateTransferring {
@@ -728,9 +725,6 @@ func (s *Service) agentMayJoinOutboundRinging(view ports.CallView, legID string)
 	}
 	// 被叫振铃腿（AgentID 为 offered）不可用外呼预 join 规则。
 	if view.AgentID != "" && view.AgentID == legAgent && !hasPSTN {
-		return false
-	}
-	if view.OutboundMode == "prompt_outbound" {
 		return false
 	}
 	if !(view.Direction == "outbound" || view.Direction == "internal" || hasPSTN) {
