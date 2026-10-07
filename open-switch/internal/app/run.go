@@ -89,7 +89,7 @@ func Run(configPath string) error {
 		BusinessActions: ccCore, Media: mediaSvc, ACD: ccCore, Config: ccCore, Agents: ccCore,
 		RecordingPolicy: ccCore, CDR: ccCore, Recordings: ccCore,
 		CallEvents: eventStore, Commands: commandStore,
-		Bridges: store.Bridges{DB: db}, IVRSessions: store.IVRSessions{DB: db},
+		Bridges: store.Bridges{DB: db},
 		Routing: routingStore,
 	}
 	callStore := store.NewCallStore(db, eventStore)

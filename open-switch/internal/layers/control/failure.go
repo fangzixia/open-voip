@@ -100,6 +100,14 @@ func (s *Service) emitCommandFailed(ctx context.Context, callID, code, message, 
 	s.emitCall(ctx, callID, "command.failed", "", payload)
 }
 
+func (s *Service) emitAcdOfferFailed(ctx context.Context, callID, agentID string, queueID *string, reason string) {
+	payload := map[string]any{"call_id": callID, "agent_id": agentID, "reason": reason}
+	if queueID != nil {
+		payload["queue_id"] = *queueID
+	}
+	s.emitCall(ctx, callID, "acd.offer_failed", agentID, payload)
+}
+
 func (s *Service) emitOutboundProgress(ctx context.Context, callID, agentID, phase, message string) {
 	payload := map[string]any{"call_id": callID, "phase": phase}
 	if message != "" {

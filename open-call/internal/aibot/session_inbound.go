@@ -26,7 +26,7 @@ const inboundAIDownlinkGain = 1.35
 //  Realtime TTS 下行 → 重采样 8k → pacer → PCMU → Switch → 主叫。
 //
 // 须在 Switch 已振铃到本 agent 后调用；通过轮询 GetCall 感知挂断，不阻塞在 Realtime 读循环里。
-func RunInboundAI(ctx context.Context, sig *Signaling, cfg config.AibotConfig, callID, mediaAgentID string, usage *UsageRecorder, log *slog.Logger) error {
+func RunInboundAI(ctx context.Context, sig *Signaling, cfg config.AibotConfig, callID, mediaAgentID string, prompts QueuePromptStore, usage *UsageRecorder, log *slog.Logger) error {
 	// 与人工坐席相同：先应答再建 WebRTC，避免主叫长时间听静音。
 	if err := sig.api.Answer(ctx, callID, mediaAgentID); err != nil {
 		return err
@@ -51,7 +51,8 @@ func RunInboundAI(ctx context.Context, sig *Signaling, cfg config.AibotConfig, c
 	}
 	// 队列入呼走 SFU 混音，不可使用 Direct Bridge（Switch 对 queue_id 通话拒绝桥接）。
 
-	rs, err := realtime.Connect(ctx, cfg.OpenAI, cfg.SystemPrompt)
+	systemPrompt := resolveSystemPrompt(ctx, cfg, prompts, view.QueueID)
+	rs, err := realtime.Connect(ctx, cfg.OpenAI, systemPrompt)
 	if err != nil {
 		return err
 	}

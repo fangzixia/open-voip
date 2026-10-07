@@ -82,17 +82,6 @@ export function isStaleCallMediaError(err, { callId, failedCallId, joinEpoch, cu
   return false;
 }
 
-/** @deprecated 使用 isStaleCallMediaError */
-export function isStaleOutboundMediaError(err, opts = {}) {
-  return isStaleCallMediaError(err, {
-    callId: opts.callId,
-    failedCallId: opts.failedCallId,
-    joinEpoch: opts.dialEpoch ?? opts.joinEpoch,
-    currentJoinEpoch: opts.currentDialEpoch ?? opts.currentJoinEpoch,
-    callEnded: opts.callEnded,
-  });
-}
-
 /** @param {{ result?: string, elapsed?: number }} opts */
 export function shouldPromptWrapUp(opts) {
   const { result, elapsed = 0 } = opts;

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -375,11 +374,4 @@ func uuidPointer(value string) *string {
 		return nil
 	}
 	return &value
-}
-
-func wrapDB(message string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", message, err)
 }

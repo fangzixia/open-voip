@@ -4,15 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
 	"open-switch/internal/errs"
 	"open-switch/internal/ports/dto"
 )
-
-const maxPromptOutboundDuration = 300 * time.Second
 
 func normalizePromptAsset(ref string) string {
 	ref = strings.TrimSpace(ref)
@@ -34,27 +31,6 @@ func promptOutboundMetadata(agentID, asset string) string {
 		"initiator_agent_id": agentID,
 	})
 	return string(raw)
-}
-
-func promptOutboundHangupDelay(dur time.Duration) time.Duration {
-	// 从放音开始计算的总等待（素材时长 + 尾帧余量 + SIP 起播 lead-in）。
-	// Worker 的 PlayWAVToPeer 已按实时时钟播完，挂断侧不得再叠加本函数的 dur。
-	delay := dur + 600*time.Millisecond + 10*20*time.Millisecond
-	if delay > maxPromptOutboundDuration {
-		return maxPromptOutboundDuration
-	}
-	if delay < time.Second {
-		return time.Second
-	}
-	return delay
-}
-
-func (s *Service) stopPromptHangupTimer(rt *runtimeCall) {
-	if rt == nil || rt.promptHangupTimer == nil {
-		return
-	}
-	rt.promptHangupTimer.Stop()
-	rt.promptHangupTimer = nil
 }
 
 // VoiceNotification 坐席触发单通 PSTN 语音通知。

@@ -23,19 +23,6 @@ func (c sipAudioCodec) sampleRate() int {
 }
 }
 
-func (c sipAudioCodec) frameSamples20ms() int {
-	switch c {
-	case sipCodecG722:
-		return 320
-	case sipCodecOpus:
-		return 960
-	default:
-		return 160
-}
-}
-
-func (c sipAudioCodec) isG711() bool { return c == sipCodecPCMU || c == sipCodecPCMA }
-
 func codecFromPT(pt uint8) sipAudioCodec {
 	switch pt {
 	case 8:

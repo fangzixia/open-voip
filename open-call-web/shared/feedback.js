@@ -8,15 +8,6 @@ export function setForegroundFeedback(controller) {
   foreground = controller || null;
 }
 
-/** @deprecated 保留测试兼容；请改用 setForegroundFeedback */
-export function installFeedbackEpochReader(reader) {
-  if (typeof reader !== "function") {
-    foreground = null;
-    return;
-  }
-  foreground = { get epoch() { return reader(); } };
-}
-
 export function currentFeedbackEpoch() {
   return foreground?.epoch ?? 0;
 }

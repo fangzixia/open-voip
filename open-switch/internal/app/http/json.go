@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"open-switch/internal/datetime"
 	"open-switch/internal/httpapi"
-	"strconv"
 
 	"open-switch/internal/errs"
 )
@@ -26,10 +25,4 @@ func decodeJSON(r *http.Request, dst any) error {
 		return errs.InvalidRequest("JSON 无法解析")
 	}
 	return nil
-}
-
-func pageParams(r *http.Request) (page, size int) {
-	page, _ = strconv.Atoi(r.URL.Query().Get("page"))
-	size, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
-	return page, size
 }

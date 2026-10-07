@@ -78,9 +78,6 @@ func (s *Service) hangupPersistOnly(ctx context.Context, callID string, rec port
 			EndedAt:     rec.EndedAt,
 		})
 	}
-	if s.deps.IVRSessions != nil {
-		_ = s.deps.IVRSessions.DeleteIVRSession(ctx, callID)
-	}
 	if s.deps.Media != nil {
 		_ = s.deps.Media.CloseRoom(ctx, callID)
 	}

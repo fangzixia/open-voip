@@ -199,12 +199,6 @@ export class GuestApp extends LitElement {
     } else if (msg.type === "video.downgraded") {
       this.wantVideo = false;
       await this.#rejoin(false);
-    } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.join?.call_id) {
-      this.feedback.liveNotice("正在重新连接通话…");
-      void getCall(this.join.call_id).then((view) => {
-        if (view?.version != null) setCallVersion(view.version);
-        return this.#rejoin(this.wantVideo);
-      });
     } else if (msg.type === "ivr.started" || msg.type === "routing.entered_ivr" || msg.type === "ivr.prompt") {
       this.permissionHint = msg.payload?.prompt || "IVR 放音中，请按键";
       if (!this.#pc) await this.#enterMedia(false);

@@ -78,6 +78,10 @@ func (r *sipRTP) close() {
 		_ = r.conn.Close()
 		r.conn = nil
 	}
+	if r.g722Dec != nil {
+		r.g722Dec.close()
+		r.g722Dec = nil
+	}
 	if ua != nil {
 		ua.releaseRTPPort(port)
 	}
@@ -112,13 +116,6 @@ func (r *sipRTP) currentPT() uint8 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.remotePT
-}
-
-func (r *sipRTP) setRemotePT(pt uint8) {
-	if r == nil {
-		return
-	}
-	r.setRemoteCodec(codecFromPT(pt), pt)
 }
 
 func (r *sipRTP) setRemoteCodec(codec sipAudioCodec, pt uint8) {

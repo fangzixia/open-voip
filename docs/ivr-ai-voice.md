@@ -24,7 +24,7 @@
 
 ## 队列提示词
 
-`PUT /api/v1/aibot/queues/{queueId}/profile` 保存 `system_prompt`（可与全局 `aibot.system_prompt` 配合；Worker 当前使用配置内全局 prompt）。
+`PUT /api/v1/aibot/queues/{queueId}/profile` 保存队列级 `system_prompt`；AI 呼入时若该队列有非空提示词则优先使用，否则回退到 `aibot.system_prompt`。
 
 ## 事件
 

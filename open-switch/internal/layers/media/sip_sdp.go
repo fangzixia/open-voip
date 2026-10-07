@@ -139,13 +139,6 @@ func (m sdpMedia) hasPT(pt int) bool {
 	return false
 }
 
-func (m sdpMedia) hasG711() bool {
-	if len(m.Types) == 0 {
-		return true
-	}
-	return m.hasPT(0) || m.hasPT(8)
-}
-
 func (m sdpMedia) hasAudioCodec() bool {
 	if len(m.Types) == 0 {
 		return true

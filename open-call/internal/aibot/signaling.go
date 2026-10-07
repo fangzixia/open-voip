@@ -3,7 +3,6 @@ package aibot
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/pion/webrtc/v4"
 
@@ -141,18 +140,4 @@ func findPSTNLeg(view ports.CallView) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func findCustomerLeg(view ports.CallView) (string, bool) {
-	for _, leg := range view.Legs {
-		if leg.Role == dto.LegRoleCustomer {
-			return leg.ID, true
-		}
-	}
-	return "", false
-}
-
-func normalizeAssetID(ref string) string {
-	ref = strings.TrimSpace(ref)
-	return strings.TrimSuffix(ref, ".wav")
 }

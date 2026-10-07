@@ -1099,22 +1099,6 @@ func (s *Service) getPeer(callID, legID string) *peer {
 	return r.peers[legID]
 }
 
-func (s *Service) playTone(callID, legID string, dur time.Duration) {
-	p := s.getPeer(callID, legID)
-	if p == nil || p.audioSamp == nil {
-		return
-	}
-	frames := int(dur / (20 * time.Millisecond))
-	payload := mulawToneFrame()
-	for i := 0; i < frames; i++ {
-		if cur := s.getPeer(callID, legID); cur == nil || !cur.held {
-			return
-		}
-		_ = p.audioSamp.WriteSample(media.Sample{Data: payload, Duration: 20 * time.Millisecond})
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
 func (s *Service) playToneToRoom(callID, targetLegID string, dur time.Duration, seq uint64, primeSIP bool) {
 	deadline := time.Now().Add(dur)
 	payload := mulawToneFrame()
@@ -1225,16 +1209,6 @@ func (rec *recorder) writeRTP(legID string, kind webrtc.RTPCodecType, mime strin
 		n, _ := rec.file.Write(pkt.Payload)
 		rec.bytes += int64(n)
 	}
-}
-
-func (rec *recorder) write(b []byte) {
-	if rec == nil || rec.file == nil {
-		return
-	}
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	n, _ := rec.file.Write(b)
-	rec.bytes += int64(n)
 }
 
 func (rec *recorder) close() error {

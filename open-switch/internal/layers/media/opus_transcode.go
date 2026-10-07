@@ -51,17 +51,6 @@ func opusToPCMU(opusFrame []byte) []byte {
 	return out
 }
 
-func bytesLEToMonoInt16(b []byte) []int16 {
-	if len(b) < 2 {
-		return nil
-	}
-	out := make([]int16, len(b)/2)
-	for i := range out {
-		out[i] = int16(int(b[2*i]) | int(b[2*i+1])<<8)
-	}
-	return out
-}
-
 func pcmuPayloadToPCM(payload []byte) []int16 {
 	out := make([]int16, len(payload))
 	for i, b := range payload {

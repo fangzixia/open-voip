@@ -45,9 +45,8 @@ type Deps struct {
 	CallEvents      ports.CallEventPublisher
 	Recordings      ports.RecordingStorePort
 	Commands        ports.CommandStore
-	Bridges         ports.BridgeSessionPort
-	IVRSessions     ports.IVRSessionPort
-	Routing         ports.RoutingSessionPort
+	Bridges ports.BridgeSessionPort
+	Routing ports.RoutingSessionPort
 }
 
 type runtimeCall struct {
@@ -80,9 +79,8 @@ type runtimeCall struct {
 	endCode        string
 	cdrResult      string
 	pstnDialState     string
-	promptOutbound    bool
-	promptAsset       string
-	promptHangupTimer *time.Timer
+	promptOutbound bool
+	promptAsset    string
 }
 
 // Service 实现 CallControlPort 与 SignalingPort。
@@ -483,8 +481,6 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 		return nil
 	}
 
-	s.stopPromptHangupTimer(rt)
-
 	if rt.sipOfferCancel != nil {
 		rt.sipOfferCancel()
 		rt.sipOfferCancel = nil
@@ -571,9 +567,6 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 				s.emitCall(ctx, callID, "bridge.ended", "", map[string]any{"call_id": callID, "bridge_id": bridgeID})
 			}
 		}
-	}
-	if s.deps.IVRSessions != nil {
-		_ = s.deps.IVRSessions.DeleteIVRSession(ctx, callID)
 	}
 	_ = s.deps.Media.CloseRoom(ctx, callID)
 	endedPayload := map[string]any{

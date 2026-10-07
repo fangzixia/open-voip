@@ -104,21 +104,6 @@ func (c recoveryIVRCfg) QueueStatus(_ context.Context, queueID string) (ports.Qu
 	return ports.QueueStatusView{QueueID: queueID}, nil
 }
 
-type memIVRSessions struct {
-	sess ports.IVRSessionView
-}
-
-func (m memIVRSessions) UpsertIVRSession(context.Context, string, string, int, string, string, *time.Time) error {
-	return nil
-}
-func (m memIVRSessions) GetIVRSession(_ context.Context, callID string) (ports.IVRSessionView, error) {
-	if m.sess.CallID == callID {
-		return m.sess, nil
-	}
-	return ports.IVRSessionView{}, errs.NotFound("IVR 会话不存在")
-}
-func (m memIVRSessions) DeleteIVRSession(context.Context, string) error { return nil }
-
 type memRouting struct {
 	ports.RoutingSessionView
 }
@@ -158,11 +143,9 @@ func TestRecoverQueuedCallHangups(t *testing.T) {
 }
 
 func TestRecoverIVRCallHangups(t *testing.T) {
-	flow := "f1"
 	cfgVer := int64(1)
 	payload := `{"start":"menu","nodes":{"menu":{"type":"menu","timeout_sec":30,"choices":{"1":"end"},"default":"end"},"end":{"type":"hangup"}}}`
 	persist := newFakePersist()
-	deadline := time.Now().UTC().Add(20 * time.Second)
 	persist.calls["ivr-call"] = ports.CallRecord{
 		ID: "ivr-call", State: stateIVR, Direction: "inbound",
 		ConfigVersion: &cfgVer, Caller: "138", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
@@ -171,10 +154,6 @@ func TestRecoverIVRCallHangups(t *testing.T) {
 	media := &fakeMedia{}
 	svc := NewService(Deps{
 		Media: media, Config: recoveryIVRCfg{payload: payload}, Calls: persist,
-		IVRSessions: memIVRSessions{sess: ports.IVRSessionView{
-			CallID: "ivr-call", FlowID: flow, FlowVersion: 1,
-			NodeID: "menu", StateJSON: `{}`, DeadlineAt: &deadline,
-		}},
 		BusinessActions: &fakeBusinessActions{},
 	})
 	if err := svc.Recover(context.Background()); err != nil {

@@ -15,26 +15,27 @@ import (
 
 // Worker 虚拟坐席：AI 呼入与语音通知媒体。
 type Worker struct {
-	cfg     config.AibotConfig
-	sig     *Signaling
-	usage   *UsageRecorder
-	log     *slog.Logger
-	agentID string
+	cfg          config.AibotConfig
+	sig          *Signaling
+	usage        *UsageRecorder
+	log          *slog.Logger
+	agentID      string
+	queuePrompts QueuePromptStore
 
-	mu          sync.Mutex
-	active      map[string]context.CancelFunc
-	queuePrompt map[string]string // reserved
+	mu     sync.Mutex
+	active map[string]context.CancelFunc
 }
 
 // NewWorker 构造 Worker。
-func NewWorker(cfg config.AibotConfig, sw *switchapi.Client, usage *UsageRecorder, log *slog.Logger) *Worker {
+func NewWorker(cfg config.AibotConfig, sw *switchapi.Client, usage *UsageRecorder, queuePrompts QueuePromptStore, log *slog.Logger) *Worker {
 	return &Worker{
-		cfg:     cfg,
-		sig:     NewSignaling(sw),
-		usage:   usage,
-		log:     log,
-		agentID: cfg.AgentID,
-		active:  make(map[string]context.CancelFunc),
+		cfg:          cfg,
+		sig:          NewSignaling(sw),
+		usage:        usage,
+		log:          log,
+		agentID:      cfg.AgentID,
+		queuePrompts: queuePrompts,
+		active:       make(map[string]context.CancelFunc),
 	}
 }
 
@@ -159,7 +160,7 @@ func (w *Worker) startInbound(parent context.Context, callID string) {
 	go func() {
 		defer w.clearCall(callID)
 		cfg := w.cfg
-		if err := RunInboundAI(sctx, w.sig, cfg, callID, w.agentID, w.usage, w.log); err != nil && w.log != nil {
+		if err := RunInboundAI(sctx, w.sig, cfg, callID, w.agentID, w.queuePrompts, w.usage, w.log); err != nil && w.log != nil {
 			w.log.Warn("AI 呼入会话结束", "call_id", callID, "err", err)
 		}
 	}()

@@ -153,7 +153,6 @@ func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports
 	if err := s.transition(ctx, callID, stateIVR); err != nil {
 		return err
 	}
-	s.syncIVRSession(ctx, callID)
 	_ = s.publishCall(ctx, callID, "routing.entered_ivr", "", map[string]any{"call_id": callID, "snapshot_id": snap.SnapshotID, "flow_id": snap.FlowID})
 	// 呼入 SIP 在 200 OK 之前播放的提示音话机不会播出，首个节点等应答后再执行。
 	deferred := s.deps.Media.DeferUntilAnswered(callID, func() {
@@ -437,29 +436,6 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		}
 		s.gotoIVR(ctx, callID, next)
 	}
-	s.syncIVRSession(ctx, callID)
-}
-
-func (s *Service) syncIVRSession(ctx context.Context, callID string) {
-	if s.deps.IVRSessions == nil {
-		return
-	}
-	s.mu.Lock()
-	rt := s.calls[callID]
-	s.mu.Unlock()
-	if rt == nil || rt.ivr == nil {
-		return
-	}
-	stateJSON, _ := json.Marshal(map[string]any{
-		"invalid_attempts": rt.ivr.invalidAttempts,
-		"action_id":        rt.ivr.actionID,
-	})
-	var deadline *time.Time
-	if rt.ivr.timeout > 0 {
-		d := rt.ivr.entered.Add(rt.ivr.timeout)
-		deadline = &d
-	}
-	_ = s.deps.IVRSessions.UpsertIVRSession(ctx, callID, rt.ivr.flowID, rt.ivr.flowVersion, rt.ivr.node, string(stateJSON), deadline)
 }
 
 // enterQueue 清理 IVR 状态，播放等候音并开始派单。
@@ -476,9 +452,6 @@ func (s *Service) enterQueue(ctx context.Context, callID string) error {
 	s.mu.Unlock()
 	if queueID != "" {
 		_ = s.publishCall(ctx, callID, "queue.entered", "", map[string]any{"call_id": callID, "queue_id": queueID})
-	}
-	if s.deps.IVRSessions != nil {
-		_ = s.deps.IVRSessions.DeleteIVRSession(ctx, callID)
 	}
 	s.mu.Lock()
 	rt = s.calls[callID]

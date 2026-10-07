@@ -344,7 +344,7 @@ PATCH 合并：字符串/数值非空才覆盖；`skill_ids`/`agent_ids` 非 nul
 | `call.hold` / `call.unhold` | — | 保持 |
 | `call.ended` | — | 结束 |
 | `call.transferring` / `call.consulting` / `call.transferred` | — | 转接 |
-| `call.voicemail` / `call.supervisor_listen` / `call.media_reconnect_required` / `call.device_failed` | — | 其它 |
+| `call.voicemail` / `call.supervisor_listen` / `call.device_failed` | — | 其它 |
 
 #### 排队 / IVR
 

@@ -386,18 +386,6 @@ export class AgentApp extends LitElement {
         }
         this.#startTimer();
       });
-    } else if (msg.type === "call.media_reconnect_required" && msg.payload?.call_id === this.call?.id) {
-      this.feedback.liveNotice("交换服务已恢复，正在重新连接媒体…");
-      void this.#syncCalls().then(async () => {
-        const joinEpoch = this.#joinEpoch;
-        try {
-          await this.media.rejoin(this.call?.session_type !== "audio");
-        } catch (err) {
-          if (!this.shouldSuppressJoinError(err, this.call?.id, joinEpoch)) {
-            this.feedback.fail(err instanceof Error ? err.message : String(err));
-          }
-        }
-      });
     }
   }
 

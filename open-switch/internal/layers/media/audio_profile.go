@@ -42,17 +42,6 @@ func logAudioProfile(callID, profile string) {
 		"prefer_wideband", preferWB, "prefer_opus", preferOpus)
 }
 
-func (s *Service) applyAudioProfileToRoom(callID string) {
-	s.mu.Lock()
-	profile := ""
-	if s.callAudioProfile != nil {
-		profile = s.callAudioProfile[callID]
-	}
-	r := s.rooms[callID]
-	s.mu.Unlock()
-	applyProfileToRoom(r, profile)
-}
-
 func applyProfileToRoom(r *room, profile string) {
 	if r == nil {
 		return

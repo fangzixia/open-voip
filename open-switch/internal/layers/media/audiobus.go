@@ -8,7 +8,6 @@ type audioBus struct {
 	rate    int
 	samples []float32
 	legIdx  map[string]int
-	started int64
 }
 
 const busRate = 48000
@@ -47,25 +46,4 @@ func (b *audioBus) mixPCM16At(idx int, pcm []int16, fromRate int) {
 		}
 		b.samples[srcIdx] += float32(s) / 32768
 	}
-}
-
-func (b *audioBus) renderPCM16(fromIdx, count int, toRate int) []int16 {
-	if b == nil || count <= 0 || toRate <= 0 {
-		return nil
-	}
-	out := make([]int16, count*toRate/busRate)
-	for i := range out {
-		src := fromIdx + i*busRate/toRate
-		if src >= len(b.samples) {
-			break
-		}
-		v := b.samples[src] * 32767
-		if v > 32767 {
-			v = 32767
-		} else if v < -32768 {
-			v = -32768
-		}
-		out[i] = int16(v)
-	}
-	return out
 }

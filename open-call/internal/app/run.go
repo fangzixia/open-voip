@@ -126,7 +126,7 @@ func Run(configPath string) error {
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
 	usageRec := aibot.NewUsageRecorder(db, hookSvc, log)
-	aiWorker := aibot.NewWorker(cfg.Aibot, switchClient, usageRec, log)
+	aiWorker := aibot.NewWorker(cfg.Aibot, switchClient, usageRec, aibot.QueuePromptStore{DB: db}, log)
 	wsHub.RegisterCallEventHook(aiWorker.OnCallEvent)
 	if cfg.Aibot.Enabled {
 		go func() {
