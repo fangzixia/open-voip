@@ -47,17 +47,12 @@ func applyProfileToRoom(r *room, profile string) {
 		return
 	}
 	r.mu.Lock()
-	r.audioProfile = profile
-	r.preferWideband = profile == ports.AudioProfileWideband || profile == ports.AudioProfileHDWebRTC ||
-		profile == "wideband" || profile == "hd_webrtc"
-	if r.preferWideband && r.bus == nil {
-		r.bus = newAudioBus()
+	if profile == "" || profile == ports.AudioProfileNarrowband || profile == "narrowband" {
+		r.audioProfile = ports.AudioProfileNarrowband
+	} else {
+		r.audioProfile = profile
 	}
-	if profile == ports.AudioProfileHDWebRTC || profile == "hd_webrtc" {
-		if r.bus == nil {
-			r.bus = newAudioBus()
-		}
-	}
+	r.preferWideband = false
 	r.mu.Unlock()
 }
 

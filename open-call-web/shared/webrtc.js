@@ -6,7 +6,7 @@ import { getRuntimeConfig } from "./runtime-config.js";
 import { fetchTurn, postAnswer, postIce, postMute, postOffer } from "./api.js";
 import { setCallContext } from "./call-context.js";
 import { reportEvent } from "./observability.js";
-import { startWebRTCStats, stopWebRTCStats } from "./webrtc-stats.js";
+import { extractAudioTrackSettings, startWebRTCStats, stopWebRTCStats } from "./webrtc-stats.js";
 
 /** @returns {RTCConfiguration} */
 export function buildRtcConfiguration(iceServersFromApi) {
@@ -134,6 +134,11 @@ export async function startMediaSession({ callId, legId, video, audioDeviceId, v
         });
     }
     reportEvent("webrtc.permission", { phase: recvOnly ? "not_required" : "granted", kind: video ? "audio_video" : "audio" });
+    if (!recvOnly && localStream) {
+      extractAudioTrackSettings(localStream).then((mic_settings) => {
+        reportEvent("webrtc.mic_settings", { mic_settings });
+      });
+    }
   } catch (error) {
     reportEvent("webrtc.permission", { phase: "denied", error_name: error?.name || "Error" });
     throw error;

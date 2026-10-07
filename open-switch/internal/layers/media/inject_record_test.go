@@ -8,8 +8,9 @@ import (
 func TestRecordPromptToMixAddsAudio(t *testing.T) {
 	started := time.Now()
 	rec := &recorder{
-		started: started,
-		pcm:     newPCMMix(8000, started),
+		started:      started,
+		pcm:          newPCMMix(8000, started),
+		recordEngine: "tap",
 	}
 	frame := mulawToneFrame()
 	recordPromptToMix(rec, frame)
@@ -34,7 +35,7 @@ func TestRecordPromptToMixAddsAudio(t *testing.T) {
 func TestPlayToneToRoomMixesIntoRecorder(t *testing.T) {
 	callID := "rec-tone"
 	started := time.Now()
-	rec := &recorder{started: started, pcm: newPCMMix(8000, started)}
+	rec := &recorder{started: started, pcm: newPCMMix(8000, started), recordEngine: "tap"}
 	r := &room{
 		rec:    rec,
 		peers:  map[string]*peer{},

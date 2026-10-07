@@ -17,12 +17,16 @@ func TestRtpPayloadToPCMUG711(t *testing.T) {
 	}
 }
 
-func TestRoomMixerExcludesSelf(t *testing.T) {
-	m := newRoomMixer()
-	m.ingest("a", pcmToPCMU([]int16{8000, 8000}))
-	m.ingest("b", pcmToPCMU([]int16{-4000, -4000}))
-	mixA := m.mixExcept("a")
-	if len(mixA) < 2 || mixA[0] >= 0 {
+func TestScheduledMixerExcludesSelf(t *testing.T) {
+	m := newScheduledRoomMixer(nil)
+	pcmA := make([]int16, mixFrameSamples)
+	pcmB := make([]int16, mixFrameSamples)
+	pcmA[0], pcmB[0] = 8000, -4000
+	m.ingest("a", 1, 0, 1, 8000, pcmA)
+	m.ingest("b", 1, 0, 2, 8000, pcmB)
+	frames := m.advanceTick()
+	mixA := mixPCMFrames(frames, "a")
+	if len(mixA) < 1 || mixA[0] >= 0 {
 		t.Fatalf("a should only hear b, got %v", mixA)
 	}
 }

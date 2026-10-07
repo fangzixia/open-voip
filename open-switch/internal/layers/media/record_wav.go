@@ -3,11 +3,13 @@ package media
 import (
 	"encoding/binary"
 	"os"
+	"sync"
 	"time"
 )
 
 // pcmMix 按墙钟时间轴将多路音频混为 16-bit PCM，流式写入 WAV。
 type pcmMix struct {
+	mu      sync.Mutex
 	started time.Time // 混音时间轴起点
 	rate    int         // 目标采样率 Hz
 	samples []int16     // 未刷盘的尾部缓冲
@@ -91,6 +93,72 @@ func (m *pcmMix) anchorAt(t time.Time) {
 	}
 }
 
+// addLinearAtSampleIdx 在录音采样下标处饱和相加（多方主混音）。
+func (m *pcmMix) addLinearAtSampleIdx(idx int, samples []int16, sampleRate int) {
+	if m == nil || len(samples) == 0 || sampleRate <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sampleRate != m.rate {
+		samples = resamplePCM(samples, sampleRate, m.rate)
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if m.file != nil {
+		m.flush(idx - m.written - m.rate)
+		idx -= m.written
+	}
+	need := idx + len(samples)
+	if cap(m.samples) < need {
+		n := make([]int16, need, need*2)
+		copy(n, m.samples)
+		m.samples = n
+	} else if len(m.samples) < need {
+		m.samples = m.samples[:need]
+	}
+	for i, s := range samples {
+		v := int32(m.samples[idx+i]) + int32(s)
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		m.samples[idx+i] = int16(v)
+	}
+}
+
+// writeLinearAtSampleIdx 在录音采样下标处写入（单 leg 分轨，同流不叠加）。
+func (m *pcmMix) writeLinearAtSampleIdx(idx int, samples []int16, sampleRate int) {
+	if m == nil || len(samples) == 0 || sampleRate <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sampleRate != m.rate {
+		samples = resamplePCM(samples, sampleRate, m.rate)
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if m.file != nil {
+		m.flush(idx - m.written - m.rate)
+		idx -= m.written
+	}
+	need := idx + len(samples)
+	if cap(m.samples) < need {
+		n := make([]int16, need, need*2)
+		copy(n, m.samples)
+		m.samples = n
+	} else if len(m.samples) < need {
+		m.samples = m.samples[:need]
+	}
+	for i, s := range samples {
+		m.samples[idx+i] = s
+	}
+}
+
 // addLinearPCM 将线性 PCM 混音到墙钟时间轴（用于 G.711 解码后或 Opus 解码后的高质量录音）。
 //
 // 用到达时间 at 映射到样本下标 idx，多路音频在同一时间窗口做饱和相加。
@@ -162,6 +230,21 @@ func (m *pcmMix) add(payloadType uint8, payload []byte) {
 			v = -32768
 		}
 		m.samples[idx+i] = int16(v)
+	}
+}
+
+// appendSequential 按媒体顺序追加样本（FS 式 tap 写盘，不用 RTP 时间轴下标）。
+func (m *pcmMix) appendSequential(samples []int16) {
+	if m == nil || len(samples) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.samples = append(m.samples, samples...)
+	if m.file != nil {
+		for len(m.samples) > m.rate {
+			m.flush(len(m.samples) - m.rate)
+		}
 	}
 }
 

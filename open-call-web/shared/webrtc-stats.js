@@ -8,6 +8,59 @@ const values = (report) => {
   return out;
 };
 
+/** 按 inbound/outbound 与 SSRC 提取 RTP 行，便于定位方向。 */
+export function extractWebRTCStatsByDirection(report) {
+  const rows = values(report);
+  const inbound = [];
+  const outbound = [];
+  for (const row of rows) {
+    if (row.type === "inbound-rtp") {
+      inbound.push({
+        direction: "inbound",
+        ssrc: row.ssrc,
+        kind: row.kind,
+        mime_type: row.mimeType,
+        packets_received: row.packetsReceived,
+        packets_lost: row.packetsLost,
+        jitter: row.jitter,
+        concealed_samples: row.concealedSamples,
+        jitter_buffer_delay: row.jitterBufferDelay,
+        jitter_buffer_emitted_count: row.jitterBufferEmittedCount,
+      });
+    } else if (row.type === "outbound-rtp") {
+      outbound.push({
+        direction: "outbound",
+        ssrc: row.ssrc,
+        kind: row.kind,
+        mime_type: row.mimeType,
+        packets_sent: row.packetsSent,
+      });
+    }
+  }
+  return { inbound, outbound };
+}
+
+/** 从 MediaStreamTrack 提取 getSettings()，便于排查 AGC/设备。 */
+export async function extractAudioTrackSettings(stream) {
+  const track = stream?.getAudioTracks?.()?.[0];
+  if (!track?.getSettings) {
+    return {};
+  }
+  try {
+    const s = track.getSettings();
+    return {
+      device_id: s.deviceId || "",
+      sample_rate: s.sampleRate,
+      channel_count: s.channelCount,
+      echo_cancellation: s.echoCancellation,
+      noise_suppression: s.noiseSuppression,
+      auto_gain_control: s.autoGainControl,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function extractWebRTCStats(report, previous = {}, elapsedMs = 10000) {
   const rows = values(report);
   const selectedPair = rows.find((row) => row.type === "candidate-pair" && row.selected)
@@ -28,8 +81,14 @@ export function extractWebRTCStats(report, previous = {}, elapsedMs = 10000) {
   const byteDelta = Math.max(0,
     totals.sent_bytes + totals.received_bytes
       - Number(previous.sent_bytes || 0) - Number(previous.received_bytes || 0));
+  const byDirection = extractWebRTCStatsByDirection(report);
+  const browser_caps = typeof RTCRtpReceiver !== "undefined"
+    ? { webrtc: true, opus: typeof RTCRtpSender !== "undefined" }
+    : { webrtc: false };
   return {
     ...totals,
+    ...byDirection,
+    browser_caps,
     bitrate_bps: elapsedMs > 0 ? Math.round((byteDelta * 8 * 1000) / elapsedMs) : 0,
     rtt_ms: Number.isFinite(selectedPair?.currentRoundTripTime) ? selectedPair.currentRoundTripTime * 1000 : 0,
     local_candidate_type: localCandidate?.candidateType || "",

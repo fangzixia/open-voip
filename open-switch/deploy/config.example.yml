@@ -71,3 +71,5 @@ sip:
 media:
   queue_answer_grace_ms: 500
   queue_answer_fade_ms: 150
+  # 采样记录 RTP Δtimestamp 与载荷样本数不一致（排查非 20ms 包）
+  log_rtp_ptime_mismatch: false

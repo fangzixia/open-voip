@@ -3,7 +3,6 @@ package media
 import (
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/pion/rtp"
 )
@@ -66,14 +65,40 @@ func (rec *recorder) writeHQAudio(legID string, mime string, pkt *rtp.Packet) {
 	if rec.pcm == nil || pkt == nil {
 		return
 	}
-	samples, sr := decodeRTPAudio(pkt.PayloadType, mime, pkt.Payload)
+	samples, sr := decodeRTPAudioForLeg(legID, pkt.PayloadType, mime, pkt.Payload)
 	if len(samples) == 0 || sr <= 0 {
 		return
 	}
-	at := time.Now()
-	rec.pcm.addLinearPCM(samples, sr, at)
+	if rec.timelines == nil {
+		rec.timelines = newRecordTimelineStore()
+	}
+	idx64 := rec.timelines.sampleIndex(legID, pkt.SSRC, pkt.Timestamp, len(samples), sr)
+	if idx64 < 0 {
+		return
+	}
+	// 8k/16k/48k 源 PCM 重采样到录音率后按 RTP 下标落盘。
+	scaleNum := rec.pcm.rate
+	scaleDen := sr
+	idx := int(idx64 * int64(scaleNum) / int64(scaleDen))
+	if rec.pcmAsync != nil {
+		rec.pcmAsync.enqueue(func() {
+			rec.mu.Lock()
+			defer rec.mu.Unlock()
+			rec.appendHQAudioAt(legID, idx, samples, sr)
+		})
+		return
+	}
+	rec.appendHQAudioAt(legID, idx, samples, sr)
+}
+
+// appendHQAudioAt 在已持有 rec.mu 或单线程异步 worker 内写入混音与分轨。
+func (rec *recorder) appendHQAudioAt(legID string, idx int, samples []int16, sr int) {
+	if rec.pcm == nil {
+		return
+	}
+	rec.pcm.addLinearAtSampleIdx(idx, samples, sr)
 	rec.bytes = rec.pcm.byteSize()
 	if leg := rec.ensureLegPCM(legID, rec.pcm.rate); leg != nil {
-		leg.addLinearPCM(samples, sr, at)
+		leg.writeLinearAtSampleIdx(idx, samples, sr)
 	}
 }

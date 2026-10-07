@@ -12,7 +12,7 @@ import (
 // forward 处理某一 leg 的入站 RTP。
 //
 // 若房间开启 mixAudio（典型：SIP 主叫 + WebRTC 坐席/AI）：
-//   各 leg 解码为 8k PCMU 帧 → roomMixer 混音 → 对其它 leg 下发「除自己外的混音」，避免回声。
+//   各 leg PCM 进入 RTP 时间轴缓冲，20 ms 调度混音后下发「除自己外的混音」，避免回声。
 // 否则：原样转发 RTP 包。录音侧始终 writeRTP，由 recorder 解码为线性 PCM 混音。
 func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 	buf := make([]byte, 1500)
@@ -28,11 +28,6 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 		}
 		r.mu.RLock()
 		unmarshaled := pkt.Unmarshal(buf[:n]) == nil
-		if unmarshaled && r.rec != nil {
-			cp := *pkt
-			cp.Payload = append([]byte{}, pkt.Payload...)
-			r.rec.writeRTP(fromLeg, remote.Kind(), remote.Codec().MimeType, &cp)
-		}
 		from := r.peers[fromLeg]
 		muted := false
 		held := false
@@ -49,35 +44,48 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 		}
 		if unmarshaled && !muted && !held && remote.Kind() == webrtc.RTPCodecTypeAudio && r.mixer != nil && r.mixAudio {
 			if pkt.PayloadType != 101 { // 101=telephone-event，不参与语音混音
-				pcmu := rtpPayloadToPCMU(pkt.PayloadType, append([]byte(nil), pkt.Payload...))
-				if len(pcmu) > 0 {
-					r.mixer.ingest(fromLeg, pcmu)
-					for id, p := range r.peers {
-						if id == fromLeg || p.held || !r.mediaForwardAllowed(fromLeg, id) {
-							continue
+				pcmu := rtpPayloadToPCMUForLeg(fromLeg, pkt.PayloadType, append([]byte(nil), pkt.Payload...))
+				if len(pcmu) == 0 {
+					r.mu.RUnlock()
+					continue
+				}
+				pcm := pcmuPayloadToPCM(pcmu)
+				clock := 8000
+				if len(pcm) > 0 {
+					if r.rec != nil && r.rec.tapRecording() {
+						role := dto.LegRole("")
+						if from != nil {
+							role = from.role
 						}
-						mixed := pcmToPCMU(r.mixer.mixExcept(id))
-						if p.audioOut != nil {
-							outPkt := r.mixer.nextRTP(id, mixed)
-							if raw, err := outPkt.Marshal(); err == nil {
-								_, _ = p.audioOut.Write(raw)
-							}
+						if role == "" {
+							role = r.legRoles[fromLeg]
 						}
+						r.rec.TapUplink(fromLeg, role, pcm, clock)
 					}
-					for rt := range r.sipRTP {
-						if rt.blocked() || !r.mediaForwardAllowed(fromLeg, rt.legID) {
-							continue
-						}
-						mixed := pcmToPCMU(r.mixer.mixExcept(rt.legID))
-						outPkt := r.mixer.nextRTP(rt.legID, mixed)
-						if raw, err := outPkt.Marshal(); err == nil {
-							rt.writePCMU(raw)
-						}
-					}
+					r.mixer.ingest(fromLeg, pkt.SequenceNumber, pkt.Timestamp, pkt.SSRC, clock, pcm)
 				}
 			}
 			r.mu.RUnlock()
 			continue
+		}
+		var bridgePCM []int16
+		bridgeTap := unmarshaled && !muted && !held && remote.Kind() == webrtc.RTPCodecTypeAudio &&
+			!r.mixAudio && r.rec != nil && r.rec.tapRecording() && pkt.PayloadType != 101
+		if bridgeTap {
+			pcmu := rtpPayloadToPCMUForLeg(fromLeg, pkt.PayloadType, append([]byte(nil), pkt.Payload...))
+			if len(pcmu) > 0 {
+				bridgePCM = pcmuPayloadToPCM(pcmu)
+				role := dto.LegRole("")
+				if from != nil {
+					role = from.role
+				}
+				if role == "" {
+					role = r.legRoles[fromLeg]
+				}
+				r.rec.TapUplink(fromLeg, role, bridgePCM, 8000)
+			} else {
+				bridgeTap = false
+			}
 		}
 		for id, p := range r.peers {
 			if id == fromLeg || muted || held || p.held || !r.mediaForwardAllowed(fromLeg, id) {
@@ -90,6 +98,13 @@ func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
 				out = p.videoOut
 			}
 			if out != nil {
+				if bridgeTap && len(bridgePCM) > 0 {
+					destRole := p.role
+					if destRole == "" {
+						destRole = r.legRoles[id]
+					}
+					r.rec.TapMainMixed(destRole, bridgePCM, 8000)
+				}
 				_, _ = out.Write(buf[:n])
 			}
 		}

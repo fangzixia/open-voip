@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4"
 
 	"open-switch/internal/ports/dto"
 )
@@ -239,12 +238,18 @@ func (r *sipRTP) writePCMU(b []byte) {
 	r.mu.Lock()
 	toPT := r.remotePT
 	r.mu.Unlock()
-	fromPT := pkt.PayloadType
-	if fromPT != 0 && fromPT != 8 {
-		fromPT = 0
+	if r.ua != nil && r.ua.media != nil {
+		pl, pt := r.ua.media.encodePCMUForSIPLeg(r, pkt.Payload)
+		pkt.Payload = pl
+		pkt.PayloadType = pt
+	} else {
+		fromPT := pkt.PayloadType
+		if fromPT != 0 && fromPT != 8 {
+			fromPT = 0
+		}
+		pkt.Payload = transcodeG711(fromPT, toPT, pkt.Payload)
+		pkt.PayloadType = toPT
 	}
-	pkt.Payload = transcodeG711(fromPT, toPT, pkt.Payload)
-	pkt.PayloadType = toPT
 	pkt.Extension = false
 	pkt.Extensions = nil
 	pkt.Padding = false
@@ -400,21 +405,14 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 			continue
 		}
 		r.mu.RLock()
-		if r.bus != nil {
-			r.bus.ingestLeg(rtpSess.legID, pcmuPayloadToPCM(pcmu), 8000)
-		}
+		rec := r.rec
 		if r.mixer != nil && r.mixAudio {
-			r.mixer.ingest(rtpSess.legID, pcmu)
-			for legID, p := range r.peers {
-				if p.held || !r.mediaForwardAllowed(rtpSess.legID, legID) {
-					continue
-				}
-				mixed := pcmToPCMU(r.mixer.mixExcept(legID))
-				outPkt := r.mixer.nextRTP(legID, mixed)
-				if b, err := outPkt.Marshal(); err == nil && p.audioOut != nil {
-					_, _ = p.audioOut.Write(b)
-				}
+			pcm := pcmuPayloadToPCM(pcmu)
+			if rec != nil && rec.tapRecording() {
+				role := r.legRoles[rtpSess.legID]
+				rec.TapUplink(rtpSess.legID, role, pcm, 8000)
 			}
+			r.mixer.ingest(rtpSess.legID, pkt.SequenceNumber, pkt.Timestamp, pkt.SSRC, 8000, pcm)
 		} else {
 			for legID, p := range r.peers {
 				if p.audioOut != nil && !p.held && r.mediaForwardAllowed(rtpSess.legID, legID) {
@@ -427,13 +425,7 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 				dst.writePCMU(raw)
 			}
 		}
-		rec := r.rec
 		r.mu.RUnlock()
-		if rec != nil {
-			cp := *pkt
-			cp.Payload = append([]byte{}, pkt.Payload...)
-			rec.writeRTP(rtpSess.legID, webrtc.RTPCodecTypeAudio, "audio/PCMU", &cp)
-		}
 	}
 }
 

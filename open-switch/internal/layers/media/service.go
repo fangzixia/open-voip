@@ -53,15 +53,13 @@ type room struct {
 	enableVideo bool
 	sipAudio    bool
 	mixAudio    bool
-	mixer       *roomMixer
+	mixer       *scheduledRoomMixer
 	sipRTP      map[*sipRTP]struct{}
 	peers       map[string]*peer
 	dtmf        map[string]ports.DTMFHandler
 	rec             *recorder
 	audioProfile    string
 	preferWideband  bool
-	bus             *audioBus
-
 	dtmfMu      sync.Mutex
 	dtmfPending []func()
 	dtmfRunning bool
@@ -136,6 +134,9 @@ type recorder struct {
 	started                time.Time
 	gateInboundUntilPrompt bool // IVR 阶段是否屏蔽对端上行写入录音
 	pcmAnchored            bool
+	timelines              *recordTimelineStore
+	pcmAsync               *pcmMixAsync
+	recordEngine           string // tap | legacy
 }
 
 // Options 媒体层启动选项。
@@ -170,7 +171,9 @@ type Service struct {
 	answers           answerGate
 	queueAnswerGrace  time.Duration
 	queueAnswerFade   time.Duration
+	rtpPtimeDiag      *rtpPtimeDiag
 	onPromptFinished PromptFinishedHandler // 非循环放音结束通知 L3
+	backend          MediaBackend
 }
 
 // PromptFinishedHandler 非循环 IVR 放音结束时通知 L3 推进节点。
@@ -287,6 +290,8 @@ func NewService(opt Options) (*Service, error) {
 	s.sip = newSIPUA(opt.SIP, s)
 	s.queueAnswerGrace = opt.Media.QueueAnswerGraceDuration()
 	s.queueAnswerFade = opt.Media.QueueAnswerFadeDuration()
+	s.rtpPtimeDiag = newRTPPtimeDiag(opt.Media.LogRTPPtimeMismatch)
+	s.backend = newInProcessBackend(s)
 	return s, nil
 }
 
@@ -328,7 +333,9 @@ func (s *Service) CreateRoom(ctx context.Context, callID string, opts dto.RoomOp
 		legRoles:    map[string]dto.LegRole{},
 	}
 	if mix {
-		s.rooms[callID].mixer = newRoomMixer()
+		mixSched := newScheduledRoomMixer(s.rtpPtimeDiag)
+		s.rooms[callID].mixer = mixSched
+		go s.runRoomMixLoop(callID, s.rooms[callID], mixSched)
 	}
 	profile := ""
 	if s.callAudioProfile != nil {
@@ -376,6 +383,9 @@ func (s *Service) CloseRoom(ctx context.Context, callID string) error {
 		return nil
 	}
 	r.mu.Lock()
+	if r.mixer != nil {
+		r.mixer.stop()
+	}
 	peers := r.peers
 	r.peers = map[string]*peer{}
 	r.mu.Unlock()
@@ -438,16 +448,9 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 		return dto.LocalOffer{}, err
 	}
 
-	hdWebRTC := false
-	r.mu.RLock()
-	hdWebRTC = r.audioProfile == ports.AudioProfileHDWebRTC || r.audioProfile == "hd_webrtc"
-	r.mu.RUnlock()
-	audioCap := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}
-	if hdWebRTC && !sipAudio && !mixAudio {
-		audioCap.Channels = 1
-	}
-	if (sipAudio || mixAudio) && !hdWebRTC {
-		audioCap = webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}
+	audioCap := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}
+	if !sipAudio && !mixAudio {
+		audioCap = webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}
 	}
 	audioOut, err := webrtc.NewTrackLocalStaticRTP(audioCap, "audio", "sfu-audio-"+legID)
 	if err != nil {
@@ -912,16 +915,10 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 		rec.path = videoRec.outputPath
 		rec.audioPath = ""
 	} else if sipAudio {
-		recRate := hqRecordingRate
-		if r != nil {
-			r.mu.RLock()
-			switch r.audioProfile {
-			case ports.AudioProfileHDWebRTC:
-				recRate = 48000
-			}
-			r.mu.RUnlock()
-		}
+		recRate := tapRecordingRate
+		rec.recordEngine = "tap"
 		rec.pcm = newPCMMix(recRate, rec.started)
+		rec.pcmAsync = newPCMMixAsync(rec.pcm)
 		rec.sampleRateHz = recRate
 		rec.legPCM = map[string]*pcmMix{}
 		rec.legPaths = map[string]string{}
@@ -944,6 +941,9 @@ func (s *Service) StartRecording(ctx context.Context, callID string, policy dto.
 	recAttrs := []any{"recording_id", id, "mode", policy.Mode}
 	if rec.pcm != nil {
 		recAttrs = append(recAttrs, "record_sample_rate_hz", rec.pcm.rate)
+	}
+	if rec.recordEngine != "" {
+		recAttrs = append(recAttrs, "record_engine", rec.recordEngine, "main_leg_role", string(dto.LegRoleCustomer))
 	}
 	observability.Event(observability.WithFields(ctx, observability.Fields{CallID: callID}), "media", "recording.opened", "start", "ok", "", rec.started, recAttrs...)
 	return id, nil
@@ -996,7 +996,10 @@ func samplePeerQuality(ctx context.Context, pc *webrtc.PeerConnection) {
 			slog.WarnContext(ctx, "WebRTC stats 编码失败", append(observability.Attrs(ctx), "error", err)...)
 			continue
 		}
-		observability.Event(ctx, "webrtc", "quality.sample", "sample", "ok", "", time.Time{}, "interval_sec", 10, "stats", string(raw))
+		sum, rttMs := summarizeWebRTCStats(raw)
+		sumJSON, _ := json.Marshal(sum)
+		observability.Event(ctx, "webrtc", "quality.sample", "sample", "ok", "", time.Time{},
+			"interval_sec", 10, "rtt_ms", rttMs, "stats_summary", string(sumJSON))
 	}
 }
 
@@ -1066,11 +1069,7 @@ func (s *Service) BridgeLegs(ctx context.Context, callID, legA, legB string) err
 		}
 	}
 	r.mu.RUnlock()
-	r.mu.Lock()
-	if r.direct {
-		r.bridgeA, r.bridgeB = legA, legB
-	}
-	r.mu.Unlock()
+	s.enterBridgeMode(r, legA, legB)
 	_ = ctx
 	return nil
 }
@@ -1159,6 +1158,10 @@ func recordPromptToMix(rec *recorder, payload []byte) {
 	if rec == nil || len(payload) == 0 {
 		return
 	}
+	if rec.tapRecording() {
+		rec.TapPromptPCM(pcmuPayloadToPCM(payload))
+		return
+	}
 	pl := append([]byte(nil), payload...)
 	rec.writeRTP("prompt", webrtc.RTPCodecTypeAudio, "audio/PCMU", &rtp.Packet{
 		Header:  rtp.Header{PayloadType: 0},
@@ -1194,7 +1197,7 @@ func (rec *recorder) writeRTP(legID string, kind webrtc.RTPCodecType, mime strin
 		rec.bytes += int64(len(pkt.Payload))
 		return
 	}
-	if kind == webrtc.RTPCodecTypeAudio && rec.pcm != nil {
+	if kind == webrtc.RTPCodecTypeAudio && rec.pcm != nil && !rec.tapRecording() {
 		if pkt.PayloadType == 0 || pkt.PayloadType == 8 || pkt.PayloadType == opusPayloadType || mime == "audio/opus" {
 			rec.writeHQAudio(legID, mime, pkt)
 			return
@@ -1225,6 +1228,13 @@ func (rec *recorder) close() error {
 	if rec.ogg != nil {
 		err = rec.ogg.Close()
 		rec.ogg = nil
+	}
+	if rec.pcmAsync != nil {
+		async := rec.pcmAsync
+		rec.pcmAsync = nil
+		rec.mu.Unlock()
+		async.close()
+		rec.mu.Lock()
 	}
 	if rec.pcm != nil {
 		if n, werr := rec.pcm.writeWAV(rec.path); werr == nil {

@@ -43,6 +43,8 @@ type MediaConfig struct {
 	QueueAnswerGraceMS int `yaml:"queue_answer_grace_ms"`
 	// QueueAnswerFadeMS 停止等待音前的淡出毫秒数。
 	QueueAnswerFadeMS int `yaml:"queue_answer_fade_ms"`
+	// LogRTPPtimeMismatch 为 true 时采样记录 RTP 时间戳增量与载荷样本数不一致（media.rtp.ptime_mismatch）。
+	LogRTPPtimeMismatch bool `yaml:"log_rtp_ptime_mismatch"`
 }
 
 // QueueAnswerGraceDuration 返回排队接听 grace 时长。

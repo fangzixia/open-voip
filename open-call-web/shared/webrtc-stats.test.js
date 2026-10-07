@@ -11,16 +11,18 @@ test("extracts aggregate media quality and selected candidate types", () => {
     ["local", { id: "local", type: "local-candidate", candidateType: "relay" }],
     ["remote", { id: "remote", type: "remote-candidate", candidateType: "srflx" }],
   ]);
-  assert.deepEqual(extractWebRTCStats(report, { sent_bytes: 1000, received_bytes: 1000 }, 10000), {
-    sent_bytes: 5000,
-    received_bytes: 3000,
-    packets: 70,
-    packets_lost: 2,
-    jitter_ms: 12,
-    fps: 30,
-    bitrate_bps: 4800,
-    rtt_ms: 80,
-    local_candidate_type: "relay",
-    remote_candidate_type: "srflx",
-  });
+  const stats = extractWebRTCStats(report, { sent_bytes: 1000, received_bytes: 1000 }, 10000);
+  assert.equal(stats.sent_bytes, 5000);
+  assert.equal(stats.received_bytes, 3000);
+  assert.equal(stats.packets, 70);
+  assert.equal(stats.packets_lost, 2);
+  assert.equal(stats.jitter_ms, 12);
+  assert.equal(stats.fps, 30);
+  assert.equal(stats.bitrate_bps, 4800);
+  assert.equal(stats.rtt_ms, 80);
+  assert.equal(stats.local_candidate_type, "relay");
+  assert.equal(stats.remote_candidate_type, "srflx");
+  assert.ok(Array.isArray(stats.inbound));
+  assert.ok(Array.isArray(stats.outbound));
+  assert.equal(typeof stats.browser_caps, "object");
 });

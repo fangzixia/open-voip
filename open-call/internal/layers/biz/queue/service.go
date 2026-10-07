@@ -338,14 +338,20 @@ func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error
 
 func validateAudioProfile(profile string) error {
 	p := strings.TrimSpace(profile)
-	if p == "" || p == "narrowband" || p == "wideband" || p == "hd_webrtc" {
+	if p == "" || p == "narrowband" {
 		return nil
 	}
-	return errs.InvalidRequest("audio_profile 须为 narrowband、wideband 或 hd_webrtc")
+	if p == "wideband" || p == "hd_webrtc" {
+		return errs.InvalidRequest("audio_profile 仅支持 narrowband（窄带 PSTN）")
+	}
+	return errs.InvalidRequest("audio_profile 须为 narrowband")
 }
 
 func validateQueueValues(recording, overflow, after, hours string) error {
-	if recording != "off" && recording != "audio" && recording != "video_composite" {
+	if recording != "off" && recording != "audio" {
+		if recording == "video_composite" {
+			return errs.InvalidRequest("recording_policy 不支持 video_composite，请使用 audio")
+		}
 		return errs.InvalidRequest("recording_policy 无效")
 	}
 	if overflow != "" && overflow != "hangup" && overflow != "voicemail" && overflow != "queue" {
