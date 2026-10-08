@@ -50,12 +50,30 @@ func (d SwitchRouterDeps) handleQueueConfigPatch(w http.ResponseWriter, r *http.
 		writeErr(w, err)
 		return
 	}
-	var patch ports.QueueConfig
+	var patch struct {
+		ports.QueueConfig
+		AudioProfile      *string `json:"audio_profile"`
+		PostCallIVRFlowID *string `json:"post_call_ivr_flow_id"`
+		OverflowQueueID   *string `json:"overflow_queue_id"`
+		IVRFlowID         *string `json:"ivr_flow_id"`
+	}
 	if err := decodeJSON(r, &patch); err != nil {
 		writeErr(w, err)
 		return
 	}
-	merged := mergeQueueConfig(current, patch)
+	merged := mergeQueueConfig(current, patch.QueueConfig)
+	if patch.AudioProfile != nil {
+		merged.AudioProfile = *patch.AudioProfile
+	}
+	if patch.PostCallIVRFlowID != nil {
+		merged.PostCallIVRFlowID = *patch.PostCallIVRFlowID
+	}
+	if patch.OverflowQueueID != nil {
+		merged.OverflowQueueID = *patch.OverflowQueueID
+	}
+	if patch.IVRFlowID != nil {
+		merged.IVRFlowID = *patch.IVRFlowID
+	}
 	out, err := d.Admin.UpdateQueueConfig(r.Context(), id, merged)
 	if err != nil {
 		writeErr(w, err)
@@ -68,7 +86,7 @@ func mergeQueueConfig(base, patch ports.QueueConfig) ports.QueueConfig {
 	if patch.Name != "" {
 		base.Name = patch.Name
 	}
-	if patch.MaxWaitSec > 0 {
+	if patch.MaxWaitSec != 0 {
 		base.MaxWaitSec = patch.MaxWaitSec
 	}
 	if patch.DispatchStrategy != "" {

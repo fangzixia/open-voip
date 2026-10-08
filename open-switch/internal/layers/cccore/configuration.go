@@ -21,9 +21,9 @@ import (
 
 // Options 非业务类的技术默认值（录音模式等）。
 type Options struct {
-	RecordingMode        string
-	AudioNotifyMessage   string
-	VideoNotifyMessage   string
+	RecordingMode      string
+	AudioNotifyMessage string
+	VideoNotifyMessage string
 }
 
 // Service 是单个 Switch 数据库上的呼叫中心权威运行时。
@@ -111,7 +111,11 @@ func normalizeBundle(bundle *ports.ConfigBundle) {
 	for i := range bundle.Queues {
 		q := &bundle.Queues[i]
 		q.Name = strings.TrimSpace(q.Name)
-		if q.MaxWaitSec <= 0 {
+		q.AudioProfile = strings.TrimSpace(q.AudioProfile)
+		if q.AudioProfile == "" {
+			q.AudioProfile = ports.AudioProfileNarrowband
+		}
+		if q.MaxWaitSec == 0 {
 			q.MaxWaitSec = 300
 		}
 		if q.DispatchStrategy == "" {
@@ -158,6 +162,12 @@ func validateBundle(bundle ports.ConfigBundle) error {
 			return errs.InvalidRequest("队列 ID 重复")
 		}
 		queues[q.ID] = true
+		if q.MaxWaitSec <= 0 {
+			return errs.InvalidRequest("max_wait_sec 必须大于 0")
+		}
+		if q.AudioProfile != ports.AudioProfileNarrowband && q.AudioProfile != ports.AudioProfileWideband && q.AudioProfile != ports.AudioProfileHDWebRTC {
+			return errs.InvalidRequest("audio_profile 须为 narrowband、wideband 或 hd_webrtc")
+		}
 		if q.DispatchStrategy != "longest_idle" && q.DispatchStrategy != "round_robin" {
 			return errs.InvalidRequest("队列分配策略无效")
 		}
@@ -264,7 +274,7 @@ func validateBundle(bundle ports.ConfigBundle) error {
 			return errs.InvalidRequest("队列引用不存在的 IVR")
 		}
 		if q.PostCallIVRFlowID != "" && !ivrs[q.PostCallIVRFlowID] {
-			return errs.InvalidRequest("队列引用不存在的满意度 IVR")
+			return errs.InvalidRequest("队列引用不存在的后续 IVR")
 		}
 		for _, id := range q.SkillIDs {
 			if !skills[id] {

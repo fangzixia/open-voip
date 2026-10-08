@@ -19,7 +19,7 @@ func (s *Service) enterBridgeMode(r *room, legA, legB string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.mixer != nil {
+	if r.mixer != nil && len(r.playbacks) == 0 {
 		r.mixer.stop()
 		r.mixer = nil
 	}

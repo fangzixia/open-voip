@@ -1,5 +1,5 @@
 // 通话控制、桥接、媒体信令与会话内动作。
-import { callMutate, setCallVersion } from "../call-mutation.js";
+import { callMutate, setCallVersion, newIdempotencySuffix } from "../call-mutation.js";
 import { apiFetch } from "./client.js";
 
 export async function getCall(callId) {
@@ -113,11 +113,19 @@ export function outboundCall(destination) {
   });
 }
 
-export function voiceNotificationCall(destination, promptAssetId) {
+export function voiceNotificationCall(destination, promptAssetId, requestKey = newIdempotencySuffix()) {
   return apiFetch("/api/v1/calls/voice-notifications", {
     method: "POST",
+    headers: { "Idempotency-Key": requestKey },
     body: JSON.stringify({ destination, prompt_asset_id: promptAssetId }),
   });
+}
+
+export function getVoiceNotification(taskId) {
+  return apiFetch(`/api/v1/calls/voice-notifications/${encodeURIComponent(taskId)}`);
+}
+export function cancelVoiceNotification(taskId) {
+  return apiFetch(`/api/v1/calls/voice-notifications/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }
 
 export function holdCall(callId, on) {

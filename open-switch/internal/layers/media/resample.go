@@ -1,6 +1,6 @@
 package media
 
-// 录音与混音路径上的 PCM 重采样（与 open-call/aibot/realtime 算法对齐）。
+// Switch 统一负责录音、混音和应用音频的 PCM 重采样。
 // Opus 解码为 48k 后需降到录音率或 8k 混音轨时使用，避免简单抽点混叠。
 
 // downsamplePCMTo8k 将 16-bit PCM 转为 8 kHz；16 kHz 采用相邻样本均值以降低混叠。

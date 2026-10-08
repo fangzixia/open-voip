@@ -4,6 +4,8 @@
 
 open-call 在 BFF 校验终端权限后调用 Switch；配置发布到 `/switch/v1/configuration/...`；Switch 通过其配置的 **HTTP callback**（`events_callback_url`）推送事件到 CC 并投影话单/录音。CC↔Switch **无鉴权**（内网部署）；见 [runbook](../docs/switch-standalone-runbook.md)。
 
+满意度流程选择、评分解释与统计属于 open-call：业务草稿的 `csat` 节点发布为 Switch 的通用 `collect_input`，业务接口 `/api/v1/calls/{id}/survey` 调用 Switch `/calls/{id}/ivr`。队列技术配置由 Switch 统一校验；正在处理通话的坐席再次外呼会收到忙碌冲突，替换通话需显式挂断。接口替换和旧流程迁移见[对接说明](../docs/open-switch对接说明.md)。
+
 - 对接说明：[../docs/open-switch对接说明.md](../docs/open-switch对接说明.md)
 - 浏览器 API 契约：[../docs/api/openapi.yaml](../docs/api/openapi.yaml)
 - 配置示例：[deploy/config.example.yml](deploy/config.example.yml)
@@ -32,3 +34,5 @@ go run ./cmd/open-call -config deploy/config.example.yml
 ```bash
 go test ./...
 ```
+
+应用音频、机器人坐席和语音通知的边界与升级步骤见 [应用音频与业务边界](../docs/应用音频与业务边界.md)。

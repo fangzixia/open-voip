@@ -138,8 +138,8 @@ func (s *Service) CreateStubCall(ctx context.Context, req dto.StubCallRequest) (
 }
 
 func (s *Service) AddDirectLeg(ctx context.Context, callID string, req dto.DirectLegRequest) (ports.CallView, error) {
-	if req.Role != dto.LegRoleCustomer && req.Role != dto.LegRoleAgent && req.Role != dto.LegRoleSupervisor {
-		return ports.CallView{}, errs.InvalidRequest("role 只支持 customer、agent、supervisor")
+	if req.Role != dto.LegRoleCustomer && req.Role != dto.LegRoleAgent && req.Role != dto.LegRoleSupervisor && req.Role != dto.LegRoleApplication {
+		return ports.CallView{}, errs.InvalidRequest("role 只支持 customer、agent、supervisor、application")
 	}
 	ctx, unlock := s.command(ctx, callID)
 	defer unlock()
@@ -182,6 +182,21 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 	if rt == nil || rt.rec.State == stateEnded || rt.rec.QueueID != nil {
 		return ports.DirectSIPResult{}, errs.Conflict("通话不可拨号", "")
 	}
+	requestHash := sipDialRequestHash(req)
+	legID := uuid.New().String()
+	if key := scope.Idempotency(ctx); key != "" {
+		legID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(callID+"|dial|"+key)).String()
+		if rt.directDialHashes != nil {
+			if old, ok := rt.directDialHashes[key]; ok && old != requestHash {
+				return ports.DirectSIPResult{}, errs.Conflict("幂等键已用于其他拨号请求", "")
+			}
+		}
+		for _, l := range rt.legs {
+			if l.ID == legID {
+				return ports.DirectSIPResult{View: toView(rt), LegID: legID}, nil
+			}
+		}
+	}
 	if len(rt.legs) >= 2 {
 		return ports.DirectSIPResult{}, errs.Conflict("直接控制通话最多支持两个媒体腿", "")
 	}
@@ -191,11 +206,28 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 	if err := s.deps.Media.PreflightOriginateSIP(ctx, req.Destination, req.TrunkID); err != nil {
 		return ports.DirectSIPResult{}, err
 	}
+	cmdID := ""
+	if s.deps.Commands != nil {
+		cmd, reused, err := s.deps.Commands.Accept(ctx, callID, scope.Idempotency(ctx), sipDialRequestHash(req), "sip.dial", map[string]any{
+			"call_id": callID, "leg_id": legID, "destination": req.Destination, "trunk_id": req.TrunkID,
+		})
+		if err != nil {
+			return ports.DirectSIPResult{}, err
+		}
+		cmdID = cmd.ID
+		if reused {
+			return ports.DirectSIPResult{}, errs.Conflict("拨号命令已被领取或此前失败，请查询原通话状态", "")
+		}
+
+		if err := s.deps.Commands.MarkRunning(ctx, cmdID); err != nil {
+			return ports.DirectSIPResult{}, err
+		}
+	}
 	s.deps.Media.PrepareSIP(callID)
 	if err := s.deps.Media.CreateRoom(ctx, callID, dto.RoomOptions{SessionType: dto.SessionTypeAudio}); err != nil {
 		return ports.DirectSIPResult{}, err
 	}
-	leg := ports.CallLegRecord{ID: uuid.New().String(), CallID: callID, Role: dto.LegRolePSTN, CreatedAt: time.Now().UTC()}
+	leg := ports.CallLegRecord{ID: legID, CallID: callID, Role: dto.LegRolePSTN, CreatedAt: time.Now().UTC()}
 	if err := s.deps.Calls.InsertLeg(ctx, leg); err != nil {
 		return ports.DirectSIPResult{}, err
 	}
@@ -203,25 +235,22 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 	rt.legs = append(rt.legs, leg)
 	view := toView(rt)
 	s.mu.Unlock()
-	cmdID := ""
-	if s.deps.Commands != nil {
-		cmd, reused, err := s.deps.Commands.Accept(ctx, callID, scope.Idempotency(ctx), sipDialRequestHash(req), "sip.dial", map[string]any{
-			"call_id": callID, "leg_id": leg.ID, "destination": req.Destination, "trunk_id": req.TrunkID,
-		})
-		if err != nil {
-			return ports.DirectSIPResult{}, err
+	if key := scope.Idempotency(ctx); key != "" {
+		if rt.directDialHashes == nil {
+			rt.directDialHashes = map[string]string{}
 		}
-		cmdID = cmd.ID
-		if reused {
-			legID, _ := cmd.Result["leg_id"].(string)
-			if legID == "" {
-				legID = leg.ID
-			}
-			return ports.DirectSIPResult{View: view, CommandID: cmdID, LegID: legID}, nil
-		}
-		_ = s.deps.Commands.MarkRunning(ctx, cmdID)
+		rt.directDialHashes[key] = requestHash
 	}
 	s.emitCall(ctx, callID, "leg.dialing", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "destination": req.Destination, "command_id": cmdID})
+	if len(rt.legs) == 1 {
+		s.mu.Lock()
+		rt.rec.Direction = "outbound"
+		rt.callee = req.Destination
+		s.mu.Unlock()
+		if err := s.transition(ctx, callID, stateRinging); err != nil {
+			return ports.DirectSIPResult{}, err
+		}
+	}
 	go func(commandID string) {
 		dialCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -240,6 +269,9 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 			return
 		}
 		if err != nil {
+			if len(current.legs) == 1 {
+				_ = s.hangupWithFailure(lockedCtx, callID, dto.HangupReasonError, err)
+			}
 			msg, code := failureFromErr(err)
 			s.emitCall(lockedCtx, callID, "leg.failed", "", map[string]any{
 				"call_id": callID, "leg_id": leg.ID, "error": err.Error(),
@@ -249,6 +281,17 @@ func (s *Service) DialDirectSIP(ctx context.Context, callID string, req dto.Dire
 				_ = s.deps.Commands.Complete(lockedCtx, commandID, "failed", "dial_failed", map[string]any{"leg_id": leg.ID, "error": err.Error()})
 			}
 			return
+		}
+		if len(current.legs) == 1 {
+			s.mu.Lock()
+			current.answeredAt = new(time.Now().UTC())
+			current.callee = req.Destination
+			s.mu.Unlock()
+			if err := s.transition(lockedCtx, callID, stateActive); err != nil {
+				_ = s.hangupWithFailure(lockedCtx, callID, dto.HangupReasonError, err)
+				return
+			}
+			_ = s.cdrUpsert(lockedCtx, callID, "answered")
 		}
 		s.emitCall(lockedCtx, callID, "leg.connected", "", map[string]any{"call_id": callID, "leg_id": leg.ID, "type": "sip"})
 		s.emitCall(lockedCtx, callID, "leg.answered", "", map[string]any{"call_id": callID, "leg_id": leg.ID})

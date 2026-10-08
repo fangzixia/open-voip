@@ -26,7 +26,8 @@ type CallView struct {
 	// SessionType 媒介类型。
 	SessionType dto.SessionType `json:"session_type"`
 	// QueueID 队列，可空。
-	QueueID string `json:"queue_id,omitempty"`
+	QueueID           string `json:"queue_id,omitempty"`
+	PostCallIVRFlowID string `json:"post_call_ivr_flow_id,omitempty"`
 	// AgentID 当前振铃或接听坐席，可空。
 	AgentID string `json:"agent_id,omitempty"`
 	// Held 是否保持。
@@ -43,10 +44,6 @@ type CallView struct {
 	ErrorCode string `json:"error_code,omitempty"`
 	// PstnDialState 外呼 PSTN 腿阶段：pending / dialing / connected / failed。
 	PstnDialState string `json:"pstn_dial_state,omitempty"`
-	// OutboundMode 外呼子模式，如 prompt_outbound（语音通知）。
-	OutboundMode string `json:"outbound_mode,omitempty"`
-	// PromptAssetID 语音通知素材（prompt_outbound），由 Worker 播放。
-	PromptAssetID string `json:"prompt_asset_id,omitempty"`
 }
 
 // LegView 通话腿视图。

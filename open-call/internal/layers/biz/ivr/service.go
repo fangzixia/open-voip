@@ -16,23 +16,25 @@ import (
 )
 
 type Node struct {
-	Type        string            `json:"type"`
-	Action      string            `json:"action,omitempty"`
-	Prompt      string            `json:"prompt,omitempty"`
-	File        string            `json:"file,omitempty"`
-	TimeoutSec  int               `json:"timeout_sec,omitempty"`
-	MaxRetries  *int              `json:"max_retries,omitempty"`
-	Choices     map[string]string `json:"choices,omitempty"`
-	Default     string            `json:"default,omitempty"`
-	Invalid     string            `json:"invalid,omitempty"`
-	QueueID     string            `json:"queue_id,omitempty"`
-	SessionType string            `json:"session_type,omitempty"`
-	Next        string            `json:"next,omitempty"`
-	Open        string            `json:"open,omitempty"`
-	Closed      string            `json:"closed,omitempty"`
-	Schedule    string            `json:"schedule,omitempty"`
-	Busy        string            `json:"busy,omitempty"`
-	WaitingGt   int               `json:"waiting_gt,omitempty"`
+	Type           string            `json:"type"`
+	Action         string            `json:"action,omitempty"`
+	Prompt         string            `json:"prompt,omitempty"`
+	File           string            `json:"file,omitempty"`
+	TimeoutSec     int               `json:"timeout_sec,omitempty"`
+	MaxRetries     *int              `json:"max_retries,omitempty"`
+	Choices        map[string]string `json:"choices,omitempty"`
+	Default        string            `json:"default,omitempty"`
+	Invalid        string            `json:"invalid,omitempty"`
+	QueueID        string            `json:"queue_id,omitempty"`
+	SessionType    string            `json:"session_type,omitempty"`
+	Next           string            `json:"next,omitempty"`
+	Open           string            `json:"open,omitempty"`
+	Closed         string            `json:"closed,omitempty"`
+	Schedule       string            `json:"schedule,omitempty"`
+	Busy           string            `json:"busy,omitempty"`
+	WaitingGt      int               `json:"waiting_gt,omitempty"`
+	AcceptedDigits string            `json:"accepted_digits,omitempty"`
+	ResultKey      string            `json:"result_key,omitempty"`
 }
 type Doc struct {
 	Start  string              `json:"start"`
@@ -155,14 +157,10 @@ func (s *Service) Publish(ctx context.Context, id string) (SnapshotDTO, error) {
 		}
 		return SnapshotDTO{}, err
 	}
-	var doc Doc
-	if json.Unmarshal([]byte(row.DraftJSON), &doc) != nil {
-		return SnapshotDTO{}, errs.InvalidRequest("草稿 JSON 无效")
-	}
-	if err := s.validateDoc(ctx, doc); err != nil {
+	payload, err := CompilePayload(row.DraftJSON)
+	if err != nil {
 		return SnapshotDTO{}, err
 	}
-	payload := strings.TrimSpace(row.DraftJSON)
 	if err := s.sw.ValidateIVRFlowPayload(ctx, payload); err != nil {
 		return SnapshotDTO{}, err
 	}
@@ -289,143 +287,4 @@ func (s *Service) LatestPublished(ctx context.Context, flowID string) (models.IV
 		return models.IVRPublishedSnapshot{}, errs.NotFound("IVR 尚未发布")
 	}
 	return latest, err
-}
-
-func (s *Service) validateDoc(ctx context.Context, d Doc) error {
-	if d.Start == "" || len(d.Nodes) == 0 {
-		return errs.InvalidRequest("IVR 必须包含 start 与 nodes")
-	}
-	if _, ok := d.Nodes[d.Start]; !ok {
-		return errs.InvalidRequest("start 节点不存在")
-	}
-	for id, pos := range d.Layout {
-		if _, ok := d.Nodes[id]; !ok || pos.X < 0 || pos.X > 4000 || pos.Y < 0 || pos.Y > 4000 {
-			return errs.InvalidRequest("IVR 画布位置无效")
-		}
-	}
-	for id, n := range d.Nodes {
-		if n.TimeoutSec < 0 || n.TimeoutSec > 120 {
-			return errs.InvalidRequest("节点 " + id + " 超时时间必须在 0–120 秒")
-		}
-		if n.MaxRetries != nil && (*n.MaxRetries < 0 || *n.MaxRetries > 5) {
-			return errs.InvalidRequest("节点 " + id + " 无效按键重试不能超过 5 次")
-		}
-		switch n.Type {
-		case "play", "menu", "route_queue", "time_condition", "queue_condition", "voicemail", "csat", "hangup", "business_action", "tts", "asr":
-		default:
-			return errs.InvalidRequest("节点 " + id + " 类型无效")
-		}
-		refs := []string{}
-		switch n.Type {
-		case "play":
-			refs = []string{n.Next}
-		case "business_action":
-			if n.Action == "" || n.TimeoutSec < 1 || n.Default == "" || len(n.Choices) == 0 {
-				return errs.InvalidRequest("业务动作必须有 action、超时、default 与结果分支")
-			}
-			refs = append(refs, n.Default)
-			for _, target := range n.Choices {
-				refs = append(refs, target)
-			}
-		case "menu":
-			if len(n.Choices) == 0 {
-				return errs.InvalidRequest("menu 必须包含 choices")
-			}
-			for digit, v := range n.Choices {
-				if len(digit) != 1 || !strings.Contains("0123456789*#", digit) {
-					return errs.InvalidRequest("节点 " + id + " 包含无效按键")
-				}
-				refs = append(refs, v)
-			}
-			if n.Default == "" {
-				return errs.InvalidRequest("节点 " + id + " 缺少超时去向")
-			}
-			refs = append(refs, n.Default)
-			if n.Invalid != "" {
-				refs = append(refs, n.Invalid)
-			}
-		case "time_condition":
-			if n.Open == "" || n.Closed == "" {
-				return errs.InvalidRequest("时间判断必须配置营业与非营业去向")
-			}
-			refs = []string{n.Open, n.Closed}
-		case "queue_condition":
-			if n.QueueID == "" {
-				return errs.InvalidRequest("排队判断必须指定 queue_id")
-			}
-			if _, err := s.sw.GetQueueConfig(ctx, n.QueueID); err != nil {
-				return errs.InvalidRequest("排队判断队列不存在")
-			}
-			if n.Open == "" {
-				return errs.InvalidRequest("排队判断必须配置空闲去向")
-			}
-			if n.Busy == "" && n.Closed == "" {
-				return errs.InvalidRequest("排队判断必须配置忙碌去向")
-			}
-			refs = append(refs, n.Open, n.Busy, n.Closed)
-		case "voicemail":
-		case "csat":
-			if n.Default != "" {
-				refs = append(refs, n.Default)
-			}
-			if n.Next != "" {
-				refs = append(refs, n.Next)
-			}
-		case "route_queue":
-			if n.QueueID == "" {
-				return errs.InvalidRequest("route_queue 必须指定 queue_id")
-			}
-			if _, err := s.sw.GetQueueConfig(ctx, n.QueueID); err != nil {
-				return errs.InvalidRequest("节点 " + id + " 引用了不存在的队列")
-			}
-			if n.SessionType != "" && n.SessionType != "audio" && n.SessionType != "video" {
-				return errs.InvalidRequest("节点 " + id + " 通话类型无效")
-			}
-		}
-		for _, ref := range refs {
-			if ref == "" {
-				if n.Type == "queue_condition" || n.Type == "csat" {
-					continue
-				}
-				return errs.InvalidRequest("节点 " + id + " 缺少后续节点")
-			}
-			if _, ok := d.Nodes[ref]; !ok {
-				return errs.InvalidRequest("节点 " + id + " 引用了不存在的节点 " + ref)
-			}
-		}
-	}
-	reachable := map[string]bool{}
-	var visit func(string)
-	visit = func(id string) {
-		if id == "" || reachable[id] {
-			return
-		}
-		reachable[id] = true
-		n := d.Nodes[id]
-		switch n.Type {
-		case "play":
-			visit(n.Next)
-		case "menu", "business_action":
-			for _, v := range n.Choices {
-				visit(v)
-			}
-			visit(n.Default)
-			visit(n.Invalid)
-		case "time_condition":
-			visit(n.Open)
-			visit(n.Closed)
-		case "queue_condition":
-			visit(n.Open)
-			visit(n.Busy)
-			visit(n.Closed)
-		case "csat":
-			visit(n.Next)
-			visit(n.Default)
-		}
-	}
-	visit(d.Start)
-	if len(reachable) != len(d.Nodes) {
-		return errs.InvalidRequest("IVR 包含不可达节点")
-	}
-	return nil
 }

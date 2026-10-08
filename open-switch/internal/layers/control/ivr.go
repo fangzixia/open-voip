@@ -40,23 +40,25 @@ type ivrDoc struct {
 }
 
 type ivrNode struct {
-	Type        string            `json:"type"`
-	Action      string            `json:"action"`
-	Prompt      string            `json:"prompt"`
-	File        string            `json:"file"`
-	TimeoutSec  int               `json:"timeout_sec"`
-	MaxRetries  *int              `json:"max_retries"`
-	Choices     map[string]string `json:"choices"`
-	Default     string            `json:"default"`
-	Invalid     string            `json:"invalid"`
-	QueueID     string            `json:"queue_id"`
-	SessionType string            `json:"session_type"`
-	Next        string            `json:"next"`
-	Open        string            `json:"open"`
-	Closed      string            `json:"closed"`
-	Schedule    string            `json:"schedule,omitempty"`
-	WaitingGt   int               `json:"waiting_gt,omitempty"`
-	Busy        string            `json:"busy,omitempty"`
+	Type           string            `json:"type"`
+	Action         string            `json:"action"`
+	Prompt         string            `json:"prompt"`
+	File           string            `json:"file"`
+	TimeoutSec     int               `json:"timeout_sec"`
+	MaxRetries     *int              `json:"max_retries"`
+	Choices        map[string]string `json:"choices"`
+	Default        string            `json:"default"`
+	Invalid        string            `json:"invalid"`
+	QueueID        string            `json:"queue_id"`
+	SessionType    string            `json:"session_type"`
+	Next           string            `json:"next"`
+	Open           string            `json:"open"`
+	Closed         string            `json:"closed"`
+	Schedule       string            `json:"schedule,omitempty"`
+	WaitingGt      int               `json:"waiting_gt,omitempty"`
+	Busy           string            `json:"busy,omitempty"`
+	AcceptedDigits string            `json:"accepted_digits,omitempty"`
+	ResultKey      string            `json:"result_key,omitempty"`
 }
 
 func (s *Service) injectCustomerAudio(ctx context.Context, callID string, src dto.AudioSource) error {
@@ -95,11 +97,30 @@ func (s *Service) attachIVR(ctx context.Context, callID, snapshotID string) erro
 	return s.bootIVR(ctx, callID, q.IVRFlowID)
 }
 
+// parseIVRPayload 拒绝不再支持的快照，避免运行时停留在未知节点。
+func parseIVRPayload(payload string) (ivrDoc, error) {
+	var doc ivrDoc
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil || doc.Start == "" {
+		return doc, errs.InvalidRequest("IVR 快照无效")
+	}
+	if _, ok := doc.Nodes[doc.Start]; !ok {
+		return doc, errs.InvalidRequest("IVR 起始节点不存在")
+	}
+	for _, node := range doc.Nodes {
+		switch node.Type {
+		case "play", "menu", "collect_input", "business_action", "hangup", "route_queue", "time_condition", "queue_condition", "voicemail", "tts", "asr":
+		default:
+			return doc, errs.InvalidRequest("不支持的 IVR 节点类型: " + node.Type)
+		}
+	}
+	return doc, nil
+}
+
 // startIVRPayload 创建 IVR 媒体房间和机器人通话腿，并订阅客户的按键信号。
 func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports.IVRSnapshot) error {
-	var doc ivrDoc
-	if err := json.Unmarshal([]byte(snap.PayloadJSON), &doc); err != nil || doc.Start == "" {
-		return errs.InvalidRequest("IVR 快照无效")
+	doc, err := parseIVRPayload(snap.PayloadJSON)
+	if err != nil {
+		return err
 	}
 	opts := dto.RoomOptions{SessionType: dto.SessionTypeAudio}
 	if err := s.deps.Media.CreateRoom(ctx, callID, opts); err != nil {
@@ -140,7 +161,7 @@ func (s *Service) startIVRPayload(ctx context.Context, callID string, snap ports
 	cust := ""
 	if rt != nil {
 		for _, l := range rt.legs {
-			if l.Role == dto.LegRoleCustomer {
+			if l.Role == dto.LegRoleCustomer || l.Role == dto.LegRolePSTN {
 				cust = l.ID
 			}
 		}
@@ -251,9 +272,6 @@ func (s *Service) tickIVR(ctx context.Context, callID string) {
 	if node.Type == "play" {
 		next = node.Next
 	}
-	if node.Type == "csat" {
-		next = node.Default
-	}
 	if next == "" {
 		_ = s.enterQueue(ctx, callID)
 		return
@@ -268,14 +286,19 @@ func (s *Service) onDTMF(ctx context.Context, callID, digit string) {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	s.mu.Unlock()
-	if rt == nil || rt.ivr == nil {
+	if rt == nil || rt.ivr == nil || rt.rec.State != stateIVR || rt.ivr.awaitingAnswer {
 		return
 	}
 	node := rt.ivr.doc.Nodes[rt.ivr.node]
-	if node.Type == "csat" {
-		if digit >= "1" && digit <= "5" {
-			score, _ := strconv.Atoi(digit)
-			s.recordCsat(ctx, callID, score)
+	if node.Type == "collect_input" {
+		if len(digit) == 1 && strings.Contains(node.AcceptedDigits, digit) {
+			if err := s.publishCall(ctx, callID, "ivr.input_collected", rt.rec.AgentID, map[string]any{
+				"call_id": callID, "agent_id": rt.rec.AgentID, "flow_id": rt.ivr.flowID,
+				"flow_version": rt.ivr.flowVersion, "node_id": rt.ivr.node,
+				"result_key": node.ResultKey, "input": digit,
+			}); err != nil {
+				return
+			}
 			if node.Next != "" {
 				s.gotoIVR(ctx, callID, node.Next)
 			} else {
@@ -347,14 +370,14 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		_ = s.enterQueue(ctx, callID)
 		return
 	}
-	if node.Type == "play" || node.Type == "menu" || (node.Type == "csat" && node.File != "") {
+	if node.Type == "play" || node.Type == "menu" || (node.Type == "collect_input" && node.File != "") {
 		if err := s.injectCustomerAudio(ctx, callID, dto.AudioSource{FilePath: node.File, Loop: node.Type == "menu"}); err != nil {
 			s.emitCommandFailed(ctx, callID, codeIVRPromptFailed, "IVR 放音失败", "ivr_prompt")
 			_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 			return
 		}
 	}
-	if node.Type == "play" || node.Type == "menu" || node.Type == "csat" {
+	if node.Type == "play" || node.Type == "menu" || node.Type == "collect_input" {
 		seconds := node.TimeoutSec
 		if node.Type == "play" && node.File != "" && s.deps.Media != nil {
 			if d, err := s.deps.Media.PromptDuration(ctx, node.File); err == nil && d > 0 {
@@ -363,7 +386,7 @@ func (s *Service) runIVRNode(ctx context.Context, callID string) {
 		}
 		if seconds == 0 {
 			switch node.Type {
-			case "menu", "csat":
+			case "menu", "collect_input":
 				seconds = 8
 			default:
 				seconds = 2
@@ -526,26 +549,6 @@ func (s *Service) queueConditionBusy(ctx context.Context, node ivrNode) bool {
 	return st.AvailableAgents == 0
 }
 
-func (s *Service) recordCsat(ctx context.Context, callID string, score int) {
-	if score < 1 || score > 5 {
-		return
-	}
-	s.mu.Lock()
-	rt := s.calls[callID]
-	agentID := ""
-	flowID := ""
-	if rt != nil {
-		agentID = rt.rec.AgentID
-		if rt.ivr != nil {
-			flowID = rt.ivr.flowID
-		}
-	}
-	s.mu.Unlock()
-	_ = s.publishCall(ctx, callID, "call.csat_scored", agentID, map[string]any{
-		"call_id": callID, "score": score, "agent_id": agentID, "flow_id": flowID,
-	})
-}
-
 // CompleteBusinessAction 仅接受流程中已声明的业务结果，并驱动 IVR 跳转。
 func (s *Service) CompleteBusinessAction(ctx context.Context, callID, actionID, outcome string) error {
 	ctx, unlock := s.command(ctx, callID)
@@ -597,6 +600,7 @@ func (s *Service) routeQueue(ctx context.Context, callID, queueID string) error 
 	}
 	rt.rec.QueueID = new(queueID)
 	rt.queueName = q.Name
+	rt.postCallIVRFlowID = q.PostCallIVRFlowID
 	rt.callee = q.Name
 	rt.waitPrompt = q.WaitPrompt
 	rt.maxWait = time.Duration(q.MaxWaitSec) * time.Second

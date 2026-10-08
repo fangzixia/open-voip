@@ -143,14 +143,6 @@ func (c *Client) Outbound(ctx context.Context, req dto.OutboundRequest) (string,
 	return out.ID, nil
 }
 
-func (c *Client) VoiceNotification(ctx context.Context, req dto.VoiceNotificationRequest) (string, error) {
-	var out ports.CallView
-	if err := c.do(ctx, http.MethodPost, "/switch/v1/calls/voice-notifications", req, &out); err != nil {
-		return "", err
-	}
-	return out.ID, nil
-}
-
 func (c *Client) Hold(ctx context.Context, callID string, on bool) error {
 	body := map[string]any{"on": on}
 	applyMutation(ctx, body)

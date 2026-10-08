@@ -77,6 +77,7 @@ integration:
 | `direction` | string | inbound / outbound 等 |
 | `session_type` | string | 媒介类型 |
 | `queue_id` | string? | 当前队列 |
+| `post_call_ivr_flow_id` | string? | 随通话队列快照固定的后续 IVR 流程标识；业务系统决定用途 |
 | `agent_id` | string? | 振铃或接听坐席 |
 | `caller` / `callee` | string | 主被叫标识 |
 | `held` | bool? | 是否保持 |
@@ -107,6 +108,8 @@ integration:
 > inbound 的 `config_version` / `ivr_flow_id` 由 Switch（DID 等）注入，**不可**由客户端伪造。须先有激活配置，否则 `403`。
 
 挂断顺序（Switch 侧）：释放坐席 → 停录音 → `cdr.updated` → `call.ended`。
+
+坐席在振铃、通话或保持期间发起另一通外呼，返回 `409 AGENT_BUSY`，原通话与坐席状态保持不变。替换当前通话须由业务系统显式发送挂断，成功后再外呼；Switch 不自动结束旧通话。
 
 ### 2.3 转接 / 会议 / 主管
 
@@ -178,6 +181,12 @@ POST /switch/v1/calls/{callId}/business-actions/{actionId}/complete
 
 收到事件 `business_action.requested` 后须在 **deadline** 前调用本接口。相同 outcome 重放成功；不同 outcome → `409`；超时后 → `409`。
 
+### 2.9 将客户接续到指定 IVR
+
+`POST /switch/v1/calls/{callId}/ivr`：`{ "flow_id": "...", "expected_version": 12 }`，支持 `Idempotency-Key`，成功返回 `CallView`。`flow_id` 必填，通话须为 `active` 或 `held`，且具有客户或 PSTN 通话腿。Switch 先确认固定配置版本中的流程存在且可执行，再解除保持、停止原录音、释放服务方媒体腿及坐席占用，保留客户媒体并执行 IVR。Switch 不选择评价流程或解释评分。
+
+open-call 保留浏览器业务入口 `POST /api/v1/calls/{callId}/survey`：鉴权并校验通话归属，使用明确传入的 `flow_id` 或 `CallView.post_call_ivr_flow_id`，然后调用上述通用接口。默认绑定来自该通话的配置快照，不读取后来修改的队列配置。
+
 ---
 
 ## 3. 配置与坐席运行态
@@ -234,12 +243,16 @@ GET  /configuration/active/summary
 | `overflow_action` | `hangup` \| `voicemail` \| `queue` | `hangup` |
 | `overflow_queue_id` | 溢出目标队列（action=`queue` 时） | — |
 | `ivr_flow_id` | 绑定已发布 IVR | — |
+| `post_call_ivr_flow_id` | 后续交互流程标识；评价等业务用途由业务系统定义 | — |
+| `audio_profile` | `narrowband` \| `wideband` \| `hd_webrtc` | `narrowband` |
 | `wait_prompt` / `announce_recording` / `priority_enabled` | 等候与录音告知、优先级 | — |
 | `business_hours_json` / `after_hours_action` | 营业时间与非工作动作 | after=`hangup` |
 | `force_hangup_on_checkout` / `listen_announce` | 签出强挂 / 监听告知 | false |
 | `skill_ids` / `agent_ids` | 技能与坐席成员 | — |
 
-PATCH 合并：字符串/数值非空才覆盖；`skill_ids`/`agent_ids` 非 null 才覆盖；若干 bool **始终覆盖**（漏传会变 `false`）。改成员更推荐 `PUT .../agents|skills`。
+技术能力枚举、等待时长、配置引用及流程图的最终校验统一由 Switch 执行。open-call 负责业务表单、默认值与部分更新合并，透传 Switch 的校验结果。`after_hours_action` 支持 `hangup` / `voicemail` / `queue`，`queue` 使用 `overflow_queue_id`。
+
+PATCH 合并：一般字符串非空、数值非零才覆盖（负等待时长会交给 Switch 拒绝）；`audio_profile`、`ivr_flow_id`、`post_call_ivr_flow_id`、`overflow_queue_id` 区分省略与显式空字符串，省略保留、空字符串清除或恢复默认；`skill_ids`/`agent_ids` 非 null 才覆盖；若干 bool **始终覆盖**（漏传会变 `false`）。open-call 合并用户 PATCH 后发送完整配置及显式清空字段。改成员更推荐 `PUT .../agents|skills`。
 
 #### 技能 `/skills`
 
@@ -279,6 +292,42 @@ PATCH 合并：字符串/数值非空才覆盖；`skill_ids`/`agent_ids` 非 nul
 | DELETE | `/ivr/flows/{flowId}` | 有 DID 引用则拒绝 |
 
 响应 `IVRPublishedView`：`flow_id`, `version`, `payload_json`。每次 Upsert 对该 flow **version+1** 并激活新配置包。
+
+#### 通用按键采集节点
+
+Switch 使用 `collect_input`，接收单个原始 DTMF，不内置满意度、分值范围或报表规则。例如：
+
+```json
+{
+  "start": "input",
+  "nodes": {
+    "input": {
+      "type": "collect_input",
+      "result_key": "reference",
+      "accepted_digits": "0123456789*#",
+      "timeout_sec": 8,
+      "next": "end",
+      "default": "end"
+    },
+    "end": { "type": "hangup" }
+  }
+}
+```
+
+`result_key` 必须非空；`accepted_digits` 仅允许 `0–9`、`*`、`#`；`next` 与 `default` 必须显式配置。`file` 可选，用于播放提示素材。合法输入产生 `ivr.input_collected` 后走 `next`；不允许的按键忽略，节点超时走 `default`，超时不产生采集事件。
+
+open-call 草稿可保留业务节点 `csat`，发布与整包导入时编译为 `collect_input`，使用 `result_key=csat`、`accepted_digits=12345`；评分持久化与统计由 open-call 完成。
+
+#### 本次边界调整的升级
+
+这是接口替换：Switch 移除 `/calls/{callId}/survey`、`csat` 节点及 `call.csat_scored` 事件。浏览器继续使用 open-call 的 `/api/v1/calls/{callId}/survey`。已有评分记录保留，无数据库表结构变更。
+
+1. 升级前导出配置并备份两侧数据库，排空在途通话及旧事件投递，暂停配置修改。
+2. 检查所有评价草稿及导出包中的已发布评价节点，补齐 `next` 和 `default`；结束流程使用显式 `hangup` 节点。
+3. 同时升级 open-call、open-switch 与前端，通过 open-call 导入完整配置包。导入会把所有旧业务评价节点编译为通用节点，并由 Switch 整包校验和激活；多个旧流程应一起转换，避免增量发布时其他旧节点仍阻止整包校验。直接对接 Switch 的业务系统须自行编译。
+4. 确认激活配置中没有 `type=csat`，再恢复话务。验证按 `1–5` 记分、其他键忽略、超时结束、坐席释放，以及新外呼冲突时原通话保持不变。
+
+旧快照不提供运行时兼容分支；没有转换的旧节点会明确报错，需重新编译发布。
 
 ### 3.3 坐席签入
 
@@ -352,6 +401,7 @@ PATCH 合并：字符串/数值非空才覆盖；`skill_ids`/`agent_ids` 非 nul
 |------|------|
 | `routing.entered_ivr` | 进入 IVR |
 | `ivr.prompt` | 提示 |
+| `ivr.input_collected` | 原始输入：`call_id`, `agent_id?`, `flow_id`, `flow_version`, `node_id`, `result_key`, `input` |
 | `queue.entered` / `queue.position_changed` / `queue.overflowed` | 排队 |
 | `acd.agent_reserved` | ACD 预留 |
 
@@ -446,3 +496,14 @@ open-call 的 `oc_queues` / `oc_did_routes` 等为遗留镜像，访客签发与
 - [ ] 已激活含队列/坐席/DID（如需）的配置  
 - [ ] 坐席已 check-in 到目标队列  
 - [ ] callback 返回 `accepted:true` 且 `event_id` 匹配  
+
+
+## 应用音频与原生播放
+
+Switch 提供通用 PCM WebSocket 和按腿原生播放；call 分别实现机器人对话、通知任务。协议、缓冲上限、幂等与迁移见 [应用音频与业务边界](./应用音频与业务边界.md)。
+
+- `GET /switch/v1/calls/{callId}/legs/{legId}/media`：已接通 agent/application 腿的 PCM 会话，支持 duplex/sendonly/recvonly。
+- `POST/GET/DELETE .../legs/{legId}/playbacks[/{playbackId}]`：原生素材播放、状态查询与精确停止。
+- `POST /switch/v1/calls` + `POST .../legs/sip`：不依赖坐席的通用出局；单腿 SIP 接通后 Call 进入 active。
+
+Switch 不再暴露语音通知专用接口或模式。通知通过 call 的 `POST /api/v1/calls/voice-notifications` 提交，HTTP 202 返回持久化业务任务；发起人不占坐席，任务不依赖 AI 配置。此接口返回类型发生变更，需协同升级前后端并排空旧任务。

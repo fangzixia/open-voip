@@ -2,7 +2,7 @@ package models
 
 import "time"
 
-// CallCsat 满意度评分（由 Switch call.csat_scored 事件投影）。
+// CallCsat 业务侧解释通用 IVR 输入后生成的满意度评分。
 type CallCsat struct {
 	ID       string    `gorm:"type:uuid;primaryKey"`
 	CallID   string    `gorm:"type:uuid;uniqueIndex;not null"`

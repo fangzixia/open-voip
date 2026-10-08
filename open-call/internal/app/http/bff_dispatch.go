@@ -41,21 +41,6 @@ func serveSwitchBFF(w http.ResponseWriter, r *http.Request, client *switchapi.Cl
 		}
 		httpapi.Write(w, http.StatusOK, view)
 		return nil
-	case path == "/switch/v1/calls/voice-notifications":
-		var req dto.VoiceNotificationRequest
-		if err := decodeBFFBody(r, &req); err != nil {
-			return err
-		}
-		id, err := client.VoiceNotification(r.Context(), req)
-		if err != nil {
-			return err
-		}
-		view, err := client.GetCall(r.Context(), id)
-		if err != nil {
-			return err
-		}
-		httpapi.Write(w, http.StatusCreated, view)
-		return nil
 	case callID != "" && path == "/switch/v1/calls/"+callID && r.Method == http.MethodGet:
 		view, err := client.GetCall(r.Context(), callID)
 		if err != nil {

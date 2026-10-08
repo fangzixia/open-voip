@@ -2,6 +2,8 @@
 
 软交换服务：WebRTC/SIP 媒体、Call FSM、对内 **Switch API**（`/switch/v1`），以及在 Switch 库内运行的 DID/队列/ACD/坐席话务状态与 IVR。
 
+Switch 提供通用 IVR 接续与原始按键采集，业务系统负责评价等业务语义。`POST /calls/{id}/ivr` 显式指定流程；`collect_input` 发布 `ivr.input_collected`。队列技术能力统一在 Switch 校验。坐席已有振铃、通话或保持中的呼叫时，新外呼返回 `409 AGENT_BUSY`，不会结束已有通话。旧评价接口、节点及事件已移除，升级须按[对接说明](../docs/open-switch对接说明.md)转换并发布全部流程。
+
 - 对接说明（含 open-call 范例）：[../docs/open-switch对接说明.md](../docs/open-switch对接说明.md)
 - 配置示例：[deploy/config.example.yml](deploy/config.example.yml)
 
@@ -26,3 +28,5 @@ go run ./cmd/open-switch -config deploy/config.example.yml
 ```bash
 go test ./...
 ```
+
+应用音频、机器人坐席和语音通知的边界与升级步骤见 [应用音频与业务边界](../docs/应用音频与业务边界.md)。

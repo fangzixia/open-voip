@@ -25,22 +25,18 @@ type Config struct {
 	Integration IntegrationConfig `yaml:"integration"`
 	Security    SecurityConfig    `yaml:"security"`
 	// FFmpegPath FFmpeg 可执行文件；为空时启动时在 PATH 中查找 ffmpeg。
-	FFmpegPath string    `yaml:"ffmpeg_path"`
-	TTS        TTSConfig  `yaml:"tts"`
+	FFmpegPath string      `yaml:"ffmpeg_path"`
+	TTS        TTSConfig   `yaml:"tts"`
 	Aibot      AibotConfig `yaml:"aibot"`
 }
 
-// AibotConfig 虚拟坐席 Worker（AI 呼入与语音通知 WebRTC 媒体）。
+// AibotConfig 机器人坐席的模型与业务配置。
 type AibotConfig struct {
-	Enabled      bool                  `yaml:"enabled"`
-	Username     string                `yaml:"username"`
-	Password     string                `yaml:"password"`
-	AgentID      string                `yaml:"agent_id"`
-	QueueIDs     []string              `yaml:"queue_ids"`
-	SystemPrompt string                `yaml:"system_prompt"`
-	OpenAI       AibotOpenAIConfig     `yaml:"openai_realtime"`
-	// WidebandWebRTC 为 true 时 Bot 与 Switch 优先协商 Opus 宽带（SIP 侧仍为 8 kHz G.711）。
-	WidebandWebRTC bool `yaml:"wideband_webrtc"`
+	Enabled      bool              `yaml:"enabled"`
+	AgentID      string            `yaml:"agent_id"`
+	QueueIDs     []string          `yaml:"queue_ids"`
+	SystemPrompt string            `yaml:"system_prompt"`
+	OpenAI       AibotOpenAIConfig `yaml:"openai_realtime"`
 }
 
 type AibotOpenAIConfig struct {
@@ -246,9 +242,6 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.Aibot.Enabled {
-		if strings.TrimSpace(c.Aibot.Username) == "" || strings.TrimSpace(c.Aibot.Password) == "" {
-			problems = append(problems, "aibot.enabled 时必须配置 username 与 password")
-		}
 		if strings.TrimSpace(c.Aibot.AgentID) == "" {
 			problems = append(problems, "aibot.enabled 时必须配置 agent_id")
 		}

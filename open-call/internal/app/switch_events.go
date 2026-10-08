@@ -13,6 +13,7 @@ import (
 	"open-call/internal/datetime"
 	"open-call/internal/integration/switchapi"
 	"open-call/internal/layers/biz/cdr"
+	"open-call/internal/layers/biz/ivr"
 	"open-call/internal/layers/biz/recmeta"
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
@@ -173,24 +174,26 @@ func projectSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event) er
 			return err
 		}
 		return recmeta.NewService(db).Save(ctx, rec)
-	case "call.csat_scored":
+	case "ivr.input_collected":
 		var payload struct {
-			CallID  string `json:"call_id"`
-			Score   int    `json:"score"`
-			AgentID string `json:"agent_id"`
-			FlowID  string `json:"flow_id"`
+			CallID    string `json:"call_id"`
+			Input     string `json:"input"`
+			ResultKey string `json:"result_key"`
+			AgentID   string `json:"agent_id"`
+			FlowID    string `json:"flow_id"`
 		}
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return err
 		}
-		if payload.CallID == "" || payload.Score < 1 || payload.Score > 5 {
+		score, valid := ivr.SurveyScore(payload.ResultKey, payload.Input)
+		if payload.CallID == "" || !valid {
 			return nil
 		}
 		at, err := datetime.Parse(ev.CreatedAt)
 		if err != nil {
 			return err
 		}
-		row := models.CallCsat{ID: uuid.New().String(), CallID: payload.CallID, Score: payload.Score, ScoredAt: at}
+		row := models.CallCsat{ID: uuid.New().String(), CallID: payload.CallID, Score: score, ScoredAt: at}
 		if payload.AgentID != "" {
 			row.AgentID = &payload.AgentID
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -19,9 +21,10 @@ import (
 
 // Session 与 OpenAI/通义 Realtime WebSocket 的双向音频会话。
 type Session struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
-	onAudio func(pcm []byte) // TTS 下行 PCM 增量回调
+	conn  *websocket.Conn
+	mu    sync.Mutex
+	done  chan error
+	start sync.Once
 
 	log       *slog.Logger // 可选，由 BindCallLog 注入
 	callID    string
@@ -47,6 +50,7 @@ func Connect(ctx context.Context, cfg config.AibotOpenAIConfig, systemPrompt str
 	}
 	s := &Session{
 		conn:      conn,
+		done:      make(chan error, 1),
 		provider:  strings.TrimSpace(cfg.Provider),
 		inRateHz:  RealtimeInputRate(cfg),
 		outRateHz: RealtimeOutputRate(cfg),
@@ -77,7 +81,6 @@ func Connect(ctx context.Context, cfg config.AibotOpenAIConfig, systemPrompt str
 			"output_rate_hz", s.outRateHz,
 		)
 	}
-	go s.readLoop()
 	return s, nil
 }
 
@@ -92,60 +95,163 @@ func (s *Session) BindCallLog(log *slog.Logger, callID string) {
 	s.mu.Unlock()
 }
 
-// readLoop 处理 Realtime 事件；音频 delta 交给 onAudio，并输出诊断日志。
-func (s *Session) readLoop() {
+// OutputCallbacks express conversation decisions, without phone media processing.
+type OutputCallbacks struct {
+	Audio  func(uint64, []byte) error
+	Clear  func(uint64) error
+	Finish func(uint64) error
+}
+
+func (s *Session) Done() <-chan error { return s.done }
+
+type outputChunk struct {
+	generation uint64
+	pcm        []byte
+	finish     bool
+}
+
+func (s *Session) Start(ctx context.Context, cb OutputCallbacks) {
+	s.start.Do(func() {
+		ctx, cancel := context.WithCancel(ctx)
+		// Bounded provider handoff lets VAD clear playback while a send waits for credit.
+		chunks := make(chan outputChunk, 100) // at most 10 seconds of 100 ms model blocks
+		result := make(chan error, 2)
+		go func() {
+			defer cancel()
+			result <- s.readLoop(ctx, OutputCallbacks{
+				Clear: cb.Clear,
+				Audio: func(g uint64, b []byte) error {
+					for len(b) > 0 {
+						n := min(len(b), s.outRateHz/10*2)
+						part := append([]byte(nil), b[:n]...)
+						select {
+						case chunks <- outputChunk{generation: g, pcm: part}:
+						default:
+							return errors.New("model audio handoff exceeds 10 seconds")
+						}
+						b = b[n:]
+					}
+					return nil
+				},
+				Finish: func(g uint64) error {
+					select {
+					case chunks <- outputChunk{generation: g, finish: true}:
+						return nil
+					default:
+						return errors.New("model audio handoff full")
+					}
+				},
+			})
+		}()
+		go func() {
+			defer cancel()
+			for {
+				select {
+				case <-ctx.Done():
+					result <- ctx.Err()
+					return
+				case c := <-chunks:
+					var err error
+					if c.finish {
+						err = cb.Finish(c.generation)
+					} else {
+						err = cb.Audio(c.generation, c.pcm)
+					}
+					if err != nil {
+						result <- err
+						return
+					}
+				}
+			}
+		}()
+		go func() { err := <-result; cancel(); s.done <- err }()
+	})
+}
+
+// Provider response IDs prevent late deltas from a canceled response from replaying.
+func (s *Session) readLoop(ctx context.Context, cb OutputCallbacks) error {
+	generation := uint64(1)
+	current := ""
+	blocked := map[string]bool{}
+	interrupted := false
 	for {
-		_, data, err := s.conn.Read(context.Background())
+		_, data, err := s.conn.Read(ctx)
 		if err != nil {
-			return
+			return err
 		}
 		var env struct {
-			Type  string `json:"type"`
-			Delta string `json:"delta"`
+			Type       string `json:"type"`
+			Delta      string `json:"delta"`
+			ResponseID string `json:"response_id"`
+			Response   struct {
+				ID string `json:"id"`
+			} `json:"response"`
 		}
 		if json.Unmarshal(data, &env) != nil {
 			continue
 		}
+		id := env.ResponseID
+		if id == "" {
+			id = env.Response.ID
+		}
 		switch env.Type {
-		// OpenAI 与通义事件名略有差异，统一当作 PCM16 增量处理。
-		case "response.audio.delta", "response.output_audio.delta":
-			if env.Delta == "" {
+		case "input_audio_buffer.speech_started":
+			if current != "" {
+				blocked[current] = true
+			}
+			interrupted = true
+			generation++
+			if err := cb.Clear(generation); err != nil {
+				return err
+			}
+		case "response.created":
+			if id == "" || blocked[id] {
 				continue
+			}
+			current = id
+			interrupted = false
+			generation++
+			if err := cb.Clear(generation); err != nil {
+				return err
+			}
+		case "response.audio.delta", "response.output_audio.delta":
+			if interrupted || (id != "" && blocked[id]) {
+				continue
+			}
+			if current != "" && id != "" && id != current {
+				continue
+			}
+			if current == "" {
+				current = id
 			}
 			pcm, err := base64.StdEncoding.DecodeString(env.Delta)
 			if err != nil {
-				continue
+				return err
+			}
+			if len(pcm)%2 != 0 {
+				return fmt.Errorf("model returned incomplete PCM16 sample")
 			}
 			s.outBytes.Add(int64(len(pcm)))
 			s.outChunks.Add(1)
 			s.outSamples.Add(int64(len(pcm) / 2))
-			if s.outChunks.Load() == 1 && s.log != nil {
-				s.mu.Lock()
-				callID := s.callID
-				outHz := s.outRateHz
-				s.mu.Unlock()
-				ms := int64(len(pcm)/2) * 1000 / int64(outHz)
-				if outHz <= 0 {
-					ms = 0
+			// Providers can return large deltas. Only split transport blocks; Switch paces them.
+			for len(pcm) > 0 {
+				n := min(len(pcm), s.outRateHz*2)
+				if err := cb.Audio(generation, pcm[:n]); err != nil {
+					return err
 				}
-				s.log.Info("aibot.realtime.audio_first_delta",
-					"call_id", callID,
-					"bytes", len(pcm),
-					"pcm_samples", len(pcm)/2,
-					"implied_ms_at_output_rate", ms,
-					"output_rate_hz", outHz,
-				)
+				pcm = pcm[n:]
 			}
-			s.mu.Lock()
-			fn := s.onAudio
-			s.mu.Unlock()
-			if fn != nil {
-				fn(pcm)
+		case "response.audio.done", "response.output_audio.done":
+			if interrupted || (id != "" && (blocked[id] || id != current)) {
+				continue
 			}
-		case "response.audio.done", "response.output_audio.done", "response.done", "response.completed":
+			if err := cb.Finish(generation); err != nil {
+				return err
+			}
 			s.logAudioSummary(env.Type)
 		case "error":
-			return
+			return fmt.Errorf("model realtime session error")
 		}
 	}
 }
@@ -179,14 +285,7 @@ func (s *Session) logAudioSummary(reason string) {
 	)
 }
 
-// OnAudio 注册 TTS PCM 增量回调（在 readLoop 中调用）。
-func (s *Session) OnAudio(fn func([]byte)) {
-	s.mu.Lock()
-	s.onAudio = fn
-	s.mu.Unlock()
-}
-
-// AppendInputPCM 发送 24kHz/16k mono PCM16（调用方负责重采样）。
+// AppendInputPCM 发送 24kHz/16k mono PCM16（Switch 按连接约定提供采样率）。
 func (s *Session) AppendInputPCM(ctx context.Context, pcm []byte) error {
 	if len(pcm) == 0 {
 		return nil
@@ -199,6 +298,8 @@ func (s *Session) AppendInputPCM(ctx context.Context, pcm []byte) error {
 }
 
 func (s *Session) writeJSON(ctx context.Context, v any) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -212,18 +313,6 @@ func (s *Session) Close() error {
 		return nil
 	}
 	return s.conn.Close(websocket.StatusNormalClosure, "done")
-}
-
-// PCM16BytesToSamples 小端 PCM16 转 int16 样本。
-func PCM16BytesToSamples(b []byte) []int16 {
-	if len(b) < 2 {
-		return nil
-	}
-	out := make([]int16, len(b)/2)
-	for i := range out {
-		out[i] = int16(int(b[2*i]) | int(b[2*i+1])<<8)
-	}
-	return out
 }
 
 // RealtimeInputRate 返回 provider 约定的上行 PCM 采样率（通义 16kHz，OpenAI 24kHz）。

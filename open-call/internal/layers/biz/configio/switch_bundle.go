@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"open-call/internal/layers/biz/ivr"
 	"open-call/internal/ports"
 	"open-call/internal/store/models"
 )
@@ -36,7 +37,7 @@ func bundleFromActive(active ports.SwitchActiveConfiguration) Bundle {
 		row := models.Queue{
 			ID: q.ID, Name: q.Name, VideoEnabled: q.VideoEnabled, MaxWaitSec: q.MaxWaitSec,
 			DispatchStrategy: q.DispatchStrategy, RecordingPolicy: q.RecordingPolicy, OverflowAction: q.OverflowAction,
-			WaitPrompt: q.WaitPrompt, AnnounceRecording: q.AnnounceRecording, PriorityEnabled: q.PriorityEnabled,
+			WaitPrompt: q.WaitPrompt, AudioProfile: q.AudioProfile, AnnounceRecording: q.AnnounceRecording, PriorityEnabled: q.PriorityEnabled,
 			BusinessHoursJSON: q.BusinessHoursJSON, AfterHoursAction: q.AfterHoursAction,
 			ForceHangupOnCheckout: q.ForceHangupOnCheckout, ListenAnnounce: q.ListenAnnounce,
 		}
@@ -69,6 +70,21 @@ func bundleFromActive(active ports.SwitchActiveConfiguration) Bundle {
 		out.IVRFlows = append(out.IVRFlows, models.IVRFlow{ID: ivr.FlowID, Name: ivr.FlowID, DraftJSON: ivr.PayloadJSON})
 	}
 	return out
+}
+
+// mergeIVRDrafts 备份保留业务草稿与名称；仅为外部发布的流程补上可编辑表示。
+func mergeIVRDrafts(business, published []models.IVRFlow) []models.IVRFlow {
+	seen := make(map[string]bool, len(business))
+	for _, flow := range business {
+		seen[flow.ID] = true
+	}
+	for _, flow := range published {
+		if !seen[flow.ID] {
+			business = append(business, flow)
+			seen[flow.ID] = true
+		}
+	}
+	return business
 }
 
 func compileSwitchBundle(ctx context.Context, db *gorm.DB, bundle Bundle) (ports.SwitchConfigBundle, error) {
@@ -153,7 +169,11 @@ func compileSwitchBundle(ctx context.Context, db *gorm.DB, bundle Bundle) (ports
 	sort.Strings(flowIDs)
 	for _, id := range flowIDs {
 		snap := latestIVR[id]
-		out.IVRs = append(out.IVRs, ports.SwitchIVRConfig{FlowID: snap.FlowID, Version: snap.Version, PayloadJSON: snap.PayloadJSON})
+		payload, err := ivr.CompilePayload(snap.PayloadJSON)
+		if err != nil {
+			return ports.SwitchConfigBundle{}, err
+		}
+		out.IVRs = append(out.IVRs, ports.SwitchIVRConfig{FlowID: snap.FlowID, Version: snap.Version, PayloadJSON: payload})
 	}
 	return out, nil
 }

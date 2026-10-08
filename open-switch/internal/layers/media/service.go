@@ -45,24 +45,26 @@ type peer struct {
 }
 
 type room struct {
-	mu          sync.RWMutex
-	direct      bool
-	bridgeA     string
-	bridgeB     string
-	promptSeq   atomic.Uint64
-	enableVideo bool
-	sipAudio    bool
-	mixAudio    bool
-	mixer       *scheduledRoomMixer
-	sipRTP      map[*sipRTP]struct{}
-	peers       map[string]*peer
-	dtmf        map[string]ports.DTMFHandler
-	rec             *recorder
-	audioProfile    string
-	preferWideband  bool
-	dtmfMu      sync.Mutex
-	dtmfPending []func()
-	dtmfRunning bool
+	streams        map[string]*applicationStream
+	playbacks      map[string]*assetPlayback
+	mu             sync.RWMutex
+	direct         bool
+	bridgeA        string
+	bridgeB        string
+	promptSeq      atomic.Uint64
+	enableVideo    bool
+	sipAudio       bool
+	mixAudio       bool
+	mixer          *scheduledRoomMixer
+	sipRTP         map[*sipRTP]struct{}
+	peers          map[string]*peer
+	dtmf           map[string]ports.DTMFHandler
+	rec            *recorder
+	audioProfile   string
+	preferWideband bool
+	dtmfMu         sync.Mutex
+	dtmfPending    []func()
+	dtmfRunning    bool
 
 	connectGraceUntil time.Time
 	promptStopAt      time.Time
@@ -116,21 +118,21 @@ func (s *Service) UnbridgeLegs(callID string) {
 
 // recorder 单次通话的录制状态（音频 WAV、可选视频合成或 Ogg）。
 type recorder struct {
-	id        string
-	callID    string
-	path      string // 主录音或合成视频最终路径
-	audioPath string
-	mode      string
-	videoRec  *videoRecording
-	file      *os.File
-	ogg       *oggwriter.OggWriter
-	pcm       *pcmMix              // 主混音（SIP 为 16 kHz 线性 PCM）
-	legPCM    map[string]*pcmMix   // 按 leg_id 分轨
-	legPaths  map[string]string    // leg_id -> 分轨 WAV 路径
-	sampleRateHz int
-	mu        sync.Mutex
-	bytes     int64
-	ended     *time.Time
+	id                     string
+	callID                 string
+	path                   string // 主录音或合成视频最终路径
+	audioPath              string
+	mode                   string
+	videoRec               *videoRecording
+	file                   *os.File
+	ogg                    *oggwriter.OggWriter
+	pcm                    *pcmMix            // 主混音（SIP 为 16 kHz 线性 PCM）
+	legPCM                 map[string]*pcmMix // 按 leg_id 分轨
+	legPaths               map[string]string  // leg_id -> 分轨 WAV 路径
+	sampleRateHz           int
+	mu                     sync.Mutex
+	bytes                  int64
+	ended                  *time.Time
 	started                time.Time
 	gateInboundUntilPrompt bool // IVR 阶段是否屏蔽对端上行写入录音
 	pcmAnchored            bool
@@ -141,37 +143,37 @@ type recorder struct {
 
 // Options 媒体层启动选项。
 type Options struct {
-	ICE           config.ICEConfig
-	TURN          config.TURNConfig
-	AudioRecDir   string
-	VideoRecDir   string
-	VideoFormat   string
-	FFmpegPath    string
-	SIP           config.SIPConfig
-	Media         config.MediaConfig
+	ICE         config.ICEConfig
+	TURN        config.TURNConfig
+	AudioRecDir string
+	VideoRecDir string
+	VideoFormat string
+	FFmpegPath  string
+	SIP         config.SIPConfig
+	Media       config.MediaConfig
 }
 
 // Service 实现 MediaPort 的进程内 SFU。
 type Service struct {
-	api           *webrtc.API
-	apiPCMU       *webrtc.API
-	ice           []webrtc.ICEServer
-	turn          config.TURNConfig
-	audioRecDir   string
-	videoRecDir   string
-	videoFormat   string
-	ffmpegPath    string
-	sip           *sipUA
-	mu            sync.Mutex
-	rooms         map[string]*room
-	recByID       map[string]*recorder
-	sipPending        map[string]bool
-	sipRTPPending     map[string]map[*sipRTP]struct{}
-	callAudioProfile  map[string]string
-	answers           answerGate
-	queueAnswerGrace  time.Duration
-	queueAnswerFade   time.Duration
-	rtpPtimeDiag      *rtpPtimeDiag
+	api              *webrtc.API
+	apiPCMU          *webrtc.API
+	ice              []webrtc.ICEServer
+	turn             config.TURNConfig
+	audioRecDir      string
+	videoRecDir      string
+	videoFormat      string
+	ffmpegPath       string
+	sip              *sipUA
+	mu               sync.Mutex
+	rooms            map[string]*room
+	recByID          map[string]*recorder
+	sipPending       map[string]bool
+	sipRTPPending    map[string]map[*sipRTP]struct{}
+	callAudioProfile map[string]string
+	answers          answerGate
+	queueAnswerGrace time.Duration
+	queueAnswerFade  time.Duration
+	rtpPtimeDiag     *rtpPtimeDiag
 	onPromptFinished PromptFinishedHandler // 非循环放音结束通知 L3
 	backend          MediaBackend
 }
@@ -273,19 +275,19 @@ func NewService(opt Options) (*Service, error) {
 	apiPCMU := webrtc.NewAPI(webrtc.WithMediaEngine(mePCMU), webrtc.WithSettingEngine(sePCMU), webrtc.WithInterceptorRegistry(irPCMU))
 
 	s := &Service{
-		api:           api,
-		apiPCMU:       apiPCMU,
-		ice:           iceServers,
-		turn:          opt.TURN,
-		audioRecDir:   opt.AudioRecDir,
-		videoRecDir:   opt.VideoRecDir,
-		videoFormat:   opt.VideoFormat,
-		ffmpegPath:    opt.FFmpegPath,
-		rooms:         map[string]*room{},
-		recByID:       map[string]*recorder{},
-		sipPending:    map[string]bool{},
-		sipRTPPending:     map[string]map[*sipRTP]struct{}{},
-		callAudioProfile:  map[string]string{},
+		api:              api,
+		apiPCMU:          apiPCMU,
+		ice:              iceServers,
+		turn:             opt.TURN,
+		audioRecDir:      opt.AudioRecDir,
+		videoRecDir:      opt.VideoRecDir,
+		videoFormat:      opt.VideoFormat,
+		ffmpegPath:       opt.FFmpegPath,
+		rooms:            map[string]*room{},
+		recByID:          map[string]*recorder{},
+		sipPending:       map[string]bool{},
+		sipRTPPending:    map[string]map[*sipRTP]struct{}{},
+		callAudioProfile: map[string]string{},
 	}
 	s.sip = newSIPUA(opt.SIP, s)
 	s.queueAnswerGrace = opt.Media.QueueAnswerGraceDuration()
@@ -386,6 +388,14 @@ func (s *Service) CloseRoom(ctx context.Context, callID string) error {
 	if r.mixer != nil {
 		r.mixer.stop()
 	}
+	for _, a := range r.streams {
+		a.Close()
+	}
+	r.streams = nil
+	for _, p := range r.playbacks {
+		p.complete("stopped")
+	}
+	r.playbacks = nil
 	peers := r.peers
 	r.peers = map[string]*peer{}
 	r.mu.Unlock()
@@ -417,6 +427,16 @@ func (s *Service) LeaveRoom(ctx context.Context, callID, legID string) error {
 			delete(r.sipRTP, rt)
 		}
 	}
+	if a := r.streams[legID]; a != nil {
+		a.Close()
+		delete(r.streams, legID)
+	}
+	for id, p := range r.playbacks {
+		if p.legID == legID {
+			p.complete("stopped")
+			delete(r.playbacks, id)
+		}
+	}
 	p := r.peers[legID]
 	delete(r.peers, legID)
 	r.mu.Unlock()
@@ -434,6 +454,14 @@ func (s *Service) JoinWebRTC(ctx context.Context, callID, legID string, role dto
 	}
 
 	r.mu.RLock()
+	if a := r.streams[legID]; a != nil {
+		select {
+		case <-a.done:
+		default:
+			r.mu.RUnlock()
+			return dto.LocalOffer{}, errs.Conflict("该腿已接入 PCM 会话", "")
+		}
+	}
 	sipAudio := r.sipAudio
 	mixAudio := r.mixAudio
 	enableVideo := r.enableVideo
@@ -671,6 +699,10 @@ func (s *Service) SetTrackMuted(ctx context.Context, callID, legID string, audio
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if a := r.streams[legID]; a != nil {
+		a.muted = audio
+		return nil
+	}
 	if p := r.peers[legID]; p != nil {
 		p.audioMuted = audio
 		p.videoMuted = video
@@ -696,6 +728,11 @@ func (s *Service) SetHold(ctx context.Context, callID, legID string, on bool) er
 	var holdMusicSeq uint64
 	startHoldMusic := false
 	r.mu.Lock()
+	if a := r.streams[legID]; a != nil {
+		a.held = on
+		r.mu.Unlock()
+		return nil
+	}
 	if p := r.peers[legID]; p != nil {
 		p.held = on
 		if on {

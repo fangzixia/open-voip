@@ -38,7 +38,7 @@ type QueueSnapshot struct {
 	ListenAnnounce bool `json:"listen_announce"`
 	// PriorityEnabled 是否允许 VIP/高优先级入队。
 	PriorityEnabled bool `json:"priority_enabled"`
-	// PostCallIVRFlowID 坐席转满意度时启动的 IVR 流程。
+	// PostCallIVRFlowID 服务阶段结束后可执行的 IVR 流程。
 	PostCallIVRFlowID string `json:"post_call_ivr_flow_id,omitempty"`
 }
 

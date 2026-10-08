@@ -342,6 +342,7 @@ func (s *Service) doTransfer(ctx context.Context, callID string, req dto.Transfe
 	s.mu.Lock()
 	rt.rec.QueueID = new(req.TargetQueueID)
 	rt.queueName = q.Name
+	rt.postCallIVRFlowID = q.PostCallIVRFlowID
 	rt.offeredAgent = ""
 	rt.consultFrom = ""
 	rt.transferMode = "blind"
@@ -395,25 +396,8 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if req.AgentID == "" || req.Destination == "" {
 		return "", errs.InvalidRequest("agent_id 与 destination 必填")
 	}
-	promptOutbound := req.PromptAssetID != ""
-	if promptOutbound {
-		if !looksPSTN(req.Destination) {
-			return "", errs.InvalidRequest("语音通知仅支持 PSTN 号码")
-		}
-		if _, err := s.deps.Media.PromptDuration(ctx, req.PromptAssetID); err != nil {
-			return "", err
-		}
-	}
-	for _, open := range s.openCallsForAgent(ctx, req.AgentID) {
-		if open == callID {
-			continue
-		}
-		hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := s.failCall(hctx, open, dto.HangupReasonError, codeCallSuperseded, "已发起新外呼，上一通话已结束")
-		cancel()
-		if err != nil {
-			slog.Warn("外呼前结束旧通话超时或失败", "call_id", open, "err", err)
-		}
+	if len(s.openCallsForAgent(ctx, req.AgentID)) > 0 {
+		return "", errs.Conflict("坐席正在处理另一通话，请先结束当前通话", errs.CodeAgentBusy)
 	}
 	now := time.Now().UTC()
 	ctx, unlock := s.command(ctx, callID)
@@ -423,17 +407,15 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 		return "", err
 	}
 	ctx = scope.WithConfigVersion(ctx, info.ConfigVersion)
+	fromState, err := outboundAgentFromState(info.State)
+	if err != nil {
+		return "", err
+	}
 	dir := "internal"
 	if looksPSTN(req.Destination) {
 		dir = "outbound"
 	}
-	if promptOutbound {
-		dir = "outbound"
-	}
 	rec := ports.CallRecord{Version: 1, ConfigVersion: new(info.ConfigVersion), ID: callID, Direction: dir, SessionType: dto.SessionTypeAudio, State: stateCreated, CreatedAt: now, UpdatedAt: now}
-	if promptOutbound {
-		rec.Metadata = promptOutboundMetadata(req.AgentID, req.PromptAssetID)
-	}
 	if err := s.deps.Calls.InsertCall(ctx, rec); err != nil {
 		return "", err
 	}
@@ -441,29 +423,20 @@ func (s *Service) doOutboundWithID(ctx context.Context, req dto.OutboundRequest,
 	if err := s.deps.Calls.InsertLeg(ctx, fromLeg); err != nil {
 		return "", err
 	}
-	fromState, err := outboundAgentFromState(info.State)
-	if err != nil {
-		return "", err
-	}
 	busyReason := "outbound"
-	if promptOutbound {
-		busyReason = "prompt_outbound"
-	}
 	if err := s.setAgentState(ctx, callID, req.AgentID, fromState, "on_call", busyReason); err != nil {
+		// 并发外呼只能有一个预留成功；失败呼叫需结束，避免遗留 created 记录。
+		_ = s.hangupWithFailure(ctx, callID, dto.HangupReasonError, err)
 		return "", err
 	}
 	caller := info.Extension
 	rt := &runtimeCall{rec: rec, legs: []ports.CallLegRecord{fromLeg}, caller: caller, callee: req.Destination, queuedAt: now, maxWait: 2 * time.Minute}
 	rt.activeAgent = req.AgentID
-	if promptOutbound {
-		rt.promptOutbound = true
-		rt.promptAsset = req.PromptAssetID
-	}
 	s.mu.Lock()
 	s.calls[callID] = rt
 	s.mu.Unlock()
 
-	if promptOutbound || looksPSTN(req.Destination) {
+	if looksPSTN(req.Destination) {
 		return s.originateSIPCall(ctx, callID, rt, req)
 	}
 
@@ -560,12 +533,6 @@ func (s *Service) originateSIPCall(ctx context.Context, callID string, rt *runti
 		s.emitOutboundProgress(ctx, callID, req.AgentID, "connected", "")
 		_ = s.cdrUpsert(ctx, callID, "answered")
 		_ = s.publishCall(ctx, callID, "call.answered", req.AgentID, map[string]any{"call_id": callID, "agent_id": req.AgentID})
-		s.mu.Lock()
-		prompt := rt.promptOutbound
-		s.mu.Unlock()
-		if prompt {
-			s.emitOutboundProgress(ctx, callID, req.AgentID, "media_ready", "等待媒体 Worker 播放通知…")
-		}
 	}()
 	return callID, nil
 }
@@ -602,10 +569,6 @@ func (s *Service) beginRecordingIfNeeded(ctx context.Context, callID string) {
 	s.mu.Lock()
 	rt := s.calls[callID]
 	if rt == nil || rt.recordingID != "" {
-		s.mu.Unlock()
-		return
-	}
-	if rt.promptOutbound {
 		s.mu.Unlock()
 		return
 	}
@@ -768,8 +731,10 @@ func looksPSTN(dest string) bool {
 
 func outboundAgentFromState(state string) (string, error) {
 	switch state {
-	case "idle", "on_call", "ringing", "acw":
+	case "idle", "acw":
 		return state, nil
+	case "on_call", "ringing":
+		return "", errs.Conflict("坐席正在处理另一通话", errs.CodeAgentBusy)
 	case "busy":
 		return "", errs.Conflict("坐席示忙，请先置闲", errs.CodeAgentNotIdle)
 	case "offline", "":
@@ -779,20 +744,21 @@ func outboundAgentFromState(state string) (string, error) {
 	}
 }
 
-func (s *Service) openCallsForAgent(ctx context.Context, agentID string) []string {
-	calls, err := s.ListCalls(ctx)
-	if err != nil {
-		return nil
-	}
+func (s *Service) openCallsForAgent(_ context.Context, agentID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var ids []string
-	for _, c := range calls {
-		if c.AgentID == agentID {
-			ids = append(ids, c.ID)
+	for _, c := range s.calls {
+		if c.rec.State == stateEnded {
 			continue
 		}
-		for _, leg := range c.Legs {
-			if leg.AgentID == agentID {
-				ids = append(ids, c.ID)
+		if c.activeAgent == agentID || c.offeredAgent == agentID {
+			ids = append(ids, c.rec.ID)
+			continue
+		}
+		for _, leg := range c.legs {
+			if leg.AgentID != nil && *leg.AgentID == agentID {
+				ids = append(ids, c.rec.ID)
 				break
 			}
 		}

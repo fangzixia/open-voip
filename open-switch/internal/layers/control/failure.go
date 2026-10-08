@@ -17,7 +17,6 @@ const (
 	codeIVRActionFailed  = "IVR_ACTION_FAILED"
 	codeRouteQueueFailed = "ROUTE_QUEUE_FAILED"
 	codeCallState        = "CALL_STATE_ERROR"
-	codeCallSuperseded   = "CALL_SUPERSEDED"
 	codeSwitchRecover    = "SWITCH_RECOVER"
 	codeSIPDevice        = "SIP_DEVICE_UNAVAILABLE"
 )
@@ -167,10 +166,6 @@ func enrichCallView(v *ports.CallView, rt *runtimeCall) {
 	v.EndMessage = rt.endMessage
 	v.ErrorCode = rt.endCode
 	v.PstnDialState = rt.pstnDialState
-	if rt.promptOutbound {
-		v.OutboundMode = "prompt_outbound"
-		v.PromptAssetID = rt.promptAsset
-	}
 	v.Result = rt.cdrResult
 	if v.EndMessage == "" || v.ErrorCode == "" || v.Result == "" {
 		msg, code, res := endDetailFromMetadata(rt.rec)

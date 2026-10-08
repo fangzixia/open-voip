@@ -117,17 +117,20 @@ func (s *Service) dispatchMixTick(callID string, r *room, mix *scheduledRoomMixe
 		return
 	}
 	frames := mix.advanceTick()
-	r.mu.RLock()
+	r.mu.Lock()
 	if !r.mixAudio {
-		r.mu.RUnlock()
+		targeted := r.applicationFrames(map[string][]int16{}, time.Now())
+		r.dispatchDirectPlayback(mix, targeted)
+		r.mu.Unlock()
 		return
 	}
+	targeted := r.applicationFrames(frames, time.Now())
 	rec := r.rec
 	for id, p := range r.peers {
 		if p.held {
 			continue
 		}
-		mixed := mixPCMFramesLimited(frames, id)
+		mixed := addTargetAudio(mixPCMFramesLimited(frames, id), targeted[id])
 		if rec != nil && rec.tapRecording() {
 			role := p.role
 			if role == "" {
@@ -152,7 +155,7 @@ func (s *Service) dispatchMixTick(callID string, r *room, mix *scheduledRoomMixe
 		if rt.blocked() {
 			continue
 		}
-		mixed := mixPCMFramesLimited(frames, rt.legID)
+		mixed := addTargetAudio(mixPCMFramesLimited(frames, rt.legID), targeted[rt.legID])
 		if rec != nil && rec.tapRecording() {
 			role := r.legRoles[rt.legID]
 			if role == "" {
@@ -170,5 +173,5 @@ func (s *Service) dispatchMixTick(callID string, r *room, mix *scheduledRoomMixe
 			rt.writePCMU(raw)
 		}
 	}
-	r.mu.RUnlock()
+	r.mu.Unlock()
 }

@@ -13,10 +13,10 @@ import (
 	"open-call/internal/ports"
 )
 
-// Worker 虚拟坐席：AI 呼入与语音通知媒体。
+// Worker owns only robot seat business sessions.
 type Worker struct {
 	cfg          config.AibotConfig
-	sig          *Signaling
+	sig          *switchapi.Client
 	usage        *UsageRecorder
 	log          *slog.Logger
 	agentID      string
@@ -30,7 +30,7 @@ type Worker struct {
 func NewWorker(cfg config.AibotConfig, sw *switchapi.Client, usage *UsageRecorder, queuePrompts QueuePromptStore, log *slog.Logger) *Worker {
 	return &Worker{
 		cfg:          cfg,
-		sig:          NewSignaling(sw),
+		sig:          sw,
 		usage:        usage,
 		log:          log,
 		agentID:      cfg.AgentID,
@@ -64,7 +64,7 @@ func (w *Worker) maintainCheckIn(ctx context.Context) {
 	backoff := checkInBackoffMin
 	checkedIn := false
 	for {
-		err := w.sig.api.CheckIn(ctx, w.agentID, queueIDs)
+		_, err := w.sig.CheckIn(ctx, w.agentID, queueIDs)
 		wait := checkInSteadyPeriod
 		if err != nil {
 			if w.log != nil && !isBusyCheckIn(err) {
@@ -110,40 +110,24 @@ func waitCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// OnCallEvent 由 WS Hub 回调，驱动自动接听与语音通知。
-//
-// call.ringing：ACD 分给本 agent 时自动 RunInboundAI（与人工点应答等价，但由 Worker 代答）。
-// call.outbound_progress / call.answered：外呼语音通知在媒体就绪后播放素材 WAV。
-// active 表保证每 call_id 仅一个会话 goroutine。
+// OnCallEvent drives robot seat sessions independently of notifications.
 func (w *Worker) OnCallEvent(ctx context.Context, ev ports.CallEvent) {
 	if !w.cfg.Enabled {
 		return
 	}
 	switch ev.Type {
 	case "call.ringing":
-		if ev.AgentID != "" && ev.AgentID != w.agentID {
+		if ev.AgentID != w.agentID || w.agentID == "" || ev.CallID == "" {
 			return
 		}
-		callID := ev.CallID
-		if callID == "" {
-			callID, _ = ev.Payload["call_id"].(string)
+		w.startInbound(ctx, ev.CallID)
+	case "call.ended":
+		w.mu.Lock()
+		cancel := w.active[ev.CallID]
+		w.mu.Unlock()
+		if cancel != nil {
+			cancel()
 		}
-		if callID == "" {
-			return
-		}
-		w.startInbound(ctx, callID)
-	case "call.outbound_progress":
-		phase, _ := ev.Payload["phase"].(string)
-		if phase != "media_ready" && phase != "connected" {
-			return
-		}
-		callID := ev.CallID
-		if callID == "" {
-			callID, _ = ev.Payload["call_id"].(string)
-		}
-		w.maybePrompt(ctx, callID)
-	case "call.answered":
-		w.maybePrompt(ctx, ev.CallID)
 	}
 }
 
@@ -154,57 +138,15 @@ func (w *Worker) startInbound(parent context.Context, callID string) {
 		w.mu.Unlock()
 		return
 	}
-	sctx, cancel := context.WithCancel(parent)
+	sctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	w.active[callID] = cancel
 	w.mu.Unlock()
 	go func() {
 		defer w.clearCall(callID)
+		defer cancel()
 		cfg := w.cfg
 		if err := RunInboundAI(sctx, w.sig, cfg, callID, w.agentID, w.queuePrompts, w.usage, w.log); err != nil && w.log != nil {
 			w.log.Warn("AI 呼入会话结束", "call_id", callID, "err", err)
-		}
-	}()
-}
-
-// maybePrompt 对外呼语音通知在媒体就绪后播放 IVR 素材。
-func (w *Worker) maybePrompt(ctx context.Context, callID string) {
-	if callID == "" {
-		return
-	}
-	view, err := w.sig.api.GetCall(ctx, callID)
-	if err != nil {
-		return
-	}
-	if view.OutboundMode != "prompt_outbound" {
-		return
-	}
-	if view.PromptAssetID == "" {
-		return
-	}
-	agentLeg, ok := findAgentLeg(view, w.agentID)
-	if !ok {
-		agentLeg, ok = findAgentLeg(view, view.AgentID)
-	}
-	if !ok {
-		return
-	}
-	_ = agentLeg
-	w.mu.Lock()
-	if _, ok := w.active[callID]; ok {
-		w.mu.Unlock()
-		return
-	}
-	sctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	w.active[callID] = cancel
-	w.mu.Unlock()
-	go func() {
-		defer func() {
-			cancel()
-			w.clearCall(callID)
-		}()
-		time.Sleep(200 * time.Millisecond)
-		if err := RunPromptOutbound(sctx, w.sig, callID, w.agentID, view.PromptAssetID, w.log); err != nil && w.log != nil {
-			w.log.Warn("语音通知失败", "call_id", callID, "err", err)
 		}
 	}()
 }

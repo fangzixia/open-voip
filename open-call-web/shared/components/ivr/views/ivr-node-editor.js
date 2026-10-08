@@ -41,6 +41,15 @@ export function renderNodeEditor(host) {
       ${n.type==="queue_condition" ? html`<label>队列<select .value=${n.queue_id||""} @change=${e=>host.updateNode("queue_id",e.target.value)}><option value="">请选择</option>${(host.queues||[]).filter(q=>!q.video_enabled).map(q=>html`<option value=${q.id}>${q.name}</option>`)}</select></label><label>等待人数 &gt; <input type="number" min="0" .value=${String(n.waiting_gt??0)} @input=${e=>host.updateNode("waiting_gt",Number(e.target.value))} /> 视为忙碌</label><label>空闲时${renderTargetSelect(host, n.open,v=>host.updateNode("open",v),id)}</label><label>忙碌时${renderTargetSelect(host, n.busy||n.closed,v=>host.updateNode("busy",v),id)}</label>` : nothing}
       ${n.type==="voicemail" ? html`<label>提示文字<input .value=${n.prompt||""} @input=${e=>host.updateNode("prompt",e.target.value)} /></label><label>可选提示 WAV<select .value=${n.file||""} @change=${e=>host.updateNode("file",e.target.value)}><option value="">无</option>${host.assets.map(a=>html`<option value=${`${a.id}.wav`}>${a.name}</option>`)}</select></label><p class="muted">执行后进入留言录音并结束流程。</p>` : nothing}
       ${n.type==="csat" ? html`<label>提示文字<input .value=${n.prompt||""} @input=${e=>host.updateNode("prompt",e.target.value)} /></label><label>可选引导 WAV<select .value=${n.file||""} @change=${e=>host.updateNode("file",e.target.value)}><option value="">无</option>${host.assets.map(a=>html`<option value=${`${a.id}.wav`}>${a.name}</option>`)}</select></label><label>等待按键秒数<input type="number" min="1" max="120" .value=${String(n.timeout_sec||8)} @input=${e=>host.updateNode("timeout_sec",Number(e.target.value))} /></label><label>打分后（1–5）${renderTargetSelect(host, n.next,v=>host.updateNode("next",v),id)}</label><label>超时去向${renderTargetSelect(host, n.default,v=>host.updateNode("default",v),id)}</label>` : nothing}
+      ${n.type==="collect_input" ? html`
+        <label>结果名称<input .value=${n.result_key||""} @input=${e=>host.updateNode("result_key",e.target.value)} /></label>
+        <label>允许的按键<input .value=${n.accepted_digits||""} @input=${e=>host.updateNode("accepted_digits",e.target.value)} placeholder="例如：0123456789*#" /></label>
+        <label>提示文字<input .value=${n.prompt||""} @input=${e=>host.updateNode("prompt",e.target.value)} /></label>
+        <label>可选引导 WAV<select .value=${n.file||""} @change=${e=>host.updateNode("file",e.target.value)}><option value="">无</option>${host.assets.map(a=>html`<option value=${`${a.id}.wav`}>${a.name}</option>`)}</select></label>
+        <label>等待按键秒数<input type="number" min="1" max="120" .value=${String(n.timeout_sec||8)} @input=${e=>host.updateNode("timeout_sec",Number(e.target.value))} /></label>
+        <label>采集后${renderTargetSelect(host,n.next,v=>host.updateNode("next",v),id)}</label>
+        <label>超时去向${renderTargetSelect(host,n.default,v=>host.updateNode("default",v),id)}</label>
+      ` : nothing}
       ${n.type==="route_queue" ? (() => {
         const session = n.session_type || "audio";
         const wantVideo = session === "video";

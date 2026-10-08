@@ -5,6 +5,23 @@ import { layoutIVR, simulateIVR, validateIVR } from "./ivr-model.js";
 
 const queue = { id: "q1", name: "语音服务" };
 const asset = { id: "11111111-1111-4111-8111-111111111111", name: "welcome.wav" };
+
+test("generic input and business survey use explicit success and timeout paths", () => {
+  const doc = { start: "input", nodes: {
+    input: { type: "collect_input", result_key: "reference", accepted_digits: "09*#", timeout_sec: 8, next: "end", default: "end" },
+    end: { type: "hangup" },
+  } };
+  assert.deepEqual(validateIVR(doc), []);
+  for (const digits of ["0", "9", "*", "#", "5#", ""]) assert.equal(simulateIVR(doc, { digits }).result, "结束通话");
+  assert.equal(simulateIVR(doc, { digits: "#" }).path[0].event, "按键 #");
+  delete doc.nodes.input.result_key;
+  assert.ok(validateIVR(doc).some(issue => issue.includes("结果标识")));
+  doc.nodes.input = { type: "csat", timeout_sec: 8, next: "end", default: "end" };
+  assert.deepEqual(validateIVR(doc), []);
+  assert.equal(simulateIVR(doc, { digits: "95" }).path[1].event, "评分 5");
+  delete doc.nodes.input.default;
+  assert.ok(validateIVR(doc).some(issue => issue.includes("超时去向")));
+});
 const document = () => ({
   start: "menu",
   nodes: {

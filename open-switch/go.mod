@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/coder/websocket v1.8.15
 	github.com/emiago/sipgo v1.6.0
 	github.com/go-audio/wav v1.1.0
 	github.com/go-chi/chi/v5 v5.3.2

@@ -6,11 +6,12 @@ import "time"
 type LegRole string
 
 const (
-	LegRoleCustomer   LegRole = "customer"
-	LegRoleAgent      LegRole = "agent"
-	LegRoleIVRBot     LegRole = "ivr_bot"
-	LegRoleSupervisor LegRole = "supervisor"
-	LegRolePSTN       LegRole = "pstn"
+	LegRoleApplication LegRole = "application"
+	LegRoleCustomer    LegRole = "customer"
+	LegRoleAgent       LegRole = "agent"
+	LegRoleIVRBot      LegRole = "ivr_bot"
+	LegRoleSupervisor  LegRole = "supervisor"
+	LegRolePSTN        LegRole = "pstn"
 )
 
 // RoomOptions 创建媒体 Room 时的选项。

@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -153,29 +152,17 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (DTO, error) {
 	if in.Name == "" {
 		return DTO{}, errs.InvalidRequest("队列名称必填")
 	}
-	if in.MaxWaitSec <= 0 {
+	if in.MaxWaitSec == 0 {
 		in.MaxWaitSec = 300
 	}
 	if in.Strategy == "" {
 		in.Strategy = "longest_idle"
 	}
-	if in.Strategy != "longest_idle" && in.Strategy != "round_robin" {
-		return DTO{}, errs.InvalidRequest("分配策略无效")
-	}
 	if in.RecordingPolicy == "" {
 		in.RecordingPolicy = "off"
 	}
-	if err := validateQueueValues(in.RecordingPolicy, in.OverflowPolicy, in.AfterHoursAction, in.BusinessHoursJSON); err != nil {
-		return DTO{}, err
-	}
-	if err := validateAudioProfile(in.AudioProfile); err != nil {
-		return DTO{}, err
-	}
 	cfg := createToSwitch(in)
 	cfg.ID = uuid.New().String()
-	if err := s.validateReferences(ctx, cfg.ID, in.OverflowQueueID, in.IVRFlowID, in.PostCallIVRFlowID, in.SkillIDs); err != nil {
-		return DTO{}, err
-	}
 	created, err := s.sw.CreateQueueConfig(ctx, cfg)
 	if err != nil {
 		return DTO{}, err
@@ -198,15 +185,9 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 		merged.Name = name
 	}
 	if in.MaxWaitSec != nil {
-		if *in.MaxWaitSec <= 0 {
-			return DTO{}, errs.InvalidRequest("max_wait_sec 必须大于 0")
-		}
 		merged.MaxWaitSec = *in.MaxWaitSec
 	}
 	if in.Strategy != nil {
-		if *in.Strategy != "longest_idle" && *in.Strategy != "round_robin" {
-			return DTO{}, errs.InvalidRequest("分配策略无效")
-		}
 		merged.DispatchStrategy = *in.Strategy
 	}
 	if in.VideoEnabled != nil {
@@ -255,15 +236,6 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (DTO, e
 	if in.SkillIDs != nil {
 		skills = *in.SkillIDs
 		merged.SkillIDs = skills
-	}
-	if err := validateQueueValues(merged.RecordingPolicy, merged.OverflowAction, merged.AfterHoursAction, merged.BusinessHoursJSON); err != nil {
-		return DTO{}, err
-	}
-	if err := validateAudioProfile(merged.AudioProfile); err != nil {
-		return DTO{}, err
-	}
-	if err := s.validateReferences(ctx, id, merged.OverflowQueueID, merged.IVRFlowID, merged.PostCallIVRFlowID, skills); err != nil {
-		return DTO{}, err
 	}
 	updated, err := s.sw.UpdateQueueConfig(ctx, id, merged)
 	if err != nil {
@@ -334,73 +306,6 @@ func (s *Service) AgentIDs(ctx context.Context, queueID string) ([]string, error
 		return []string{}, nil
 	}
 	return q.AgentIDs, nil
-}
-
-func validateAudioProfile(profile string) error {
-	p := strings.TrimSpace(profile)
-	if p == "" || p == "narrowband" {
-		return nil
-	}
-	if p == "wideband" || p == "hd_webrtc" {
-		return errs.InvalidRequest("audio_profile 仅支持 narrowband（窄带 PSTN）")
-	}
-	return errs.InvalidRequest("audio_profile 须为 narrowband")
-}
-
-func validateQueueValues(recording, overflow, after, hours string) error {
-	if recording != "off" && recording != "audio" {
-		if recording == "video_composite" {
-			return errs.InvalidRequest("recording_policy 不支持 video_composite，请使用 audio")
-		}
-		return errs.InvalidRequest("recording_policy 无效")
-	}
-	if overflow != "" && overflow != "hangup" && overflow != "voicemail" && overflow != "queue" {
-		return errs.InvalidRequest("overflow_policy 无效")
-	}
-	if after != "" && after != "hangup" && after != "voicemail" {
-		return errs.InvalidRequest("after_hours_action 无效")
-	}
-	if strings.TrimSpace(hours) != "" && hours != "always" && !json.Valid([]byte(hours)) {
-		return errs.InvalidRequest("business_hours_json 不是有效 JSON")
-	}
-	return nil
-}
-
-func (s *Service) validateReferences(ctx context.Context, queueID, overflowID, ivrID, postCallIVRID string, skills []string) error {
-	if overflowID != "" {
-		if overflowID == queueID {
-			return errs.InvalidRequest("队列不能溢出到自身")
-		}
-		if _, err := s.sw.GetQueueConfig(ctx, overflowID); err != nil {
-			return errs.InvalidRequest("overflow_queue_id 不存在")
-		}
-	}
-	if ivrID != "" {
-		if _, err := s.sw.GetIVRFlow(ctx, ivrID); err != nil {
-			return errs.InvalidRequest("ivr_flow_id 尚未发布到 Switch")
-		}
-	}
-	if postCallIVRID != "" {
-		if _, err := s.sw.GetIVRFlow(ctx, postCallIVRID); err != nil {
-			return errs.InvalidRequest("post_call_ivr_flow_id 尚未发布到 Switch")
-		}
-	}
-	if len(skills) > 0 {
-		all, err := s.sw.ListSkillConfigs(ctx)
-		if err != nil {
-			return err
-		}
-		set := map[string]bool{}
-		for _, sk := range all {
-			set[sk.ID] = true
-		}
-		for _, id := range uniqueStrings(skills) {
-			if !set[id] {
-				return errs.InvalidRequest("skill_ids 包含不存在的技能")
-			}
-		}
-	}
-	return nil
 }
 
 func uniqueStrings(in []string) []string {

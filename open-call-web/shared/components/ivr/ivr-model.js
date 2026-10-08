@@ -6,6 +6,7 @@ export const NODE_TYPES = {
   queue_condition: "排队判断",
   voicemail: "留言",
   csat: "满意度",
+  collect_input: "采集按键",
   route_queue: "转入队列",
   business_action: "业务判断",
   hangup: "结束通话",
@@ -21,6 +22,7 @@ export function outgoing(node) {
     case "time_condition": return [["营业", node.open], ["非营业", node.closed]].filter(([, target]) => target);
     case "queue_condition": return [["空闲", node.open], ["忙碌", node.busy || node.closed]].filter(([, target]) => target);
     case "csat": return [...(node.next ? [["打分后", node.next]] : []), ...(node.default ? [["超时", node.default]] : [])];
+    case "collect_input": return [...(node.next ? [["采集后", node.next]] : []), ...(node.default ? [["超时", node.default]] : [])];
     default: return [];
   }
 }
@@ -35,8 +37,8 @@ export function validateIVR(doc, queues = [], assets = []) {
   if (ids.length > 100) issues.push("节点不能超过 100 个");
   for (const [id, node] of Object.entries(nodes)) {
     if (!NODE_TYPES[node.type]) { issues.push(`${id}：节点类型无效`); continue; }
-    if (["play", "menu", "csat"].includes(node.type)) {
-      if (node.type !== "csat" || node.file) {
+    if (["play", "menu", "csat", "collect_input"].includes(node.type)) {
+      if (["play", "menu"].includes(node.type) || node.file) {
         if (!node.file) issues.push(`${id}：请选择语音素材`);
         else if (!assets.some(asset => `${asset.id}.wav` === node.file)) issues.push(`${id}：语音素材不存在`);
       }
@@ -49,7 +51,11 @@ export function validateIVR(doc, queues = [], assets = []) {
       if (!(node.max_retries >= 0 && node.max_retries <= 5)) issues.push(`${id}：无效按键重试次数须为 0–5`);
       for (const digit of Object.keys(node.choices || {})) if (!/^[0-9*#]$/.test(digit)) issues.push(`${id}：按键 ${digit} 无效`);
     }
-    if (node.type === "csat" && !node.default && !node.next) issues.push(`${id}：请配置超时或打分后去向`);
+    if (["csat", "collect_input"].includes(node.type) && (!node.default || !node.next)) issues.push(`${id}：请配置采集后和超时去向`);
+    if (node.type === "collect_input") {
+      if (!node.result_key?.trim()) issues.push(`${id}：请填写结果标识`);
+      if (!/^[0-9*#]+$/.test(node.accepted_digits || "")) issues.push(`${id}：请填写允许的按键`);
+    }
     if (node.type === "business_action") {
       if (!node.action?.trim()) issues.push(`${id}：请输入业务动作名称`);
       if (!(node.timeout_sec >= 1 && node.timeout_sec <= 120)) issues.push(`${id}：业务超时须为 1–120 秒`);
@@ -100,19 +106,17 @@ export function simulateIVR(doc, { digits = "", open = true, queueBusy = false, 
       if (outcome !== undefined && !node.choices?.[outcome]) return { path, result: "业务结果未在流程中声明" };
       current = outcome === undefined ? node.default : node.choices[outcome];
     }
-    else if (node.type === "csat") {
+    else if (["csat", "collect_input"].includes(node.type)) {
       const digit = digits[input++];
-      if (digit >= "1" && digit <= "5") {
-        path[path.length - 1].event = `评分 ${digit}`;
-        current = node.next || "";
-        if (!current) return { path, result: "满意度已记录" };
+      const accepted = node.type === "csat" ? "12345" : node.accepted_digits || "";
+      if (digit && accepted.includes(digit)) {
+        path[path.length - 1].event = node.type === "csat" ? `评分 ${digit}` : `按键 ${digit}`;
+        current = node.next;
       } else if (!digit) {
         path[path.length - 1].event = "超时";
-        current = node.default || "";
-        if (!current) return { path, result: "满意度超时" };
+        current = node.default;
       } else {
         path[path.length - 1].event = `无效 ${digit}`;
-        current = node.default || current;
       }
     }
     else if (node.type === "menu") {

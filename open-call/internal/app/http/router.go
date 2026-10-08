@@ -28,6 +28,7 @@ import (
 	"open-call/internal/layers/biz/skill"
 	"open-call/internal/layers/biz/user"
 	"open-call/internal/layers/biz/webhook"
+	"open-call/internal/notification"
 	"open-call/internal/ports"
 	"open-call/internal/tts"
 )
@@ -61,10 +62,11 @@ type RouterDeps struct {
 	}
 	SwitchEventHandler http.HandlerFunc
 	// FFmpeg 启动时解析的 ffmpeg 可执行路径，供 TTS 等需要转码的功能使用。
-	FFmpeg string
-	TTS    *tts.Engine
-	Switch *switchapi.Client
-	DB *gorm.DB
+	FFmpeg        string
+	TTS           *tts.Engine
+	Notifications *notification.Service
+	Switch        *switchapi.Client
+	DB            *gorm.DB
 }
 
 // NewRouter 构建 chi 路由。
@@ -203,7 +205,13 @@ func NewRouter(deps RouterDeps) http.Handler {
 				staff.With(middleware.RequirePermission("guest.issue")).Post("/guest/sessions", deps.handleGuestSessions)
 			})
 
+			if deps.Notifications != nil {
+				priv.With(middleware.RequirePermission("calls.operate")).Post("/calls/voice-notifications", deps.handleNotificationSubmit)
+				priv.With(middleware.RequirePermission("calls.read")).Get("/calls/voice-notifications/{taskId}", deps.handleNotificationGet)
+				priv.With(middleware.RequirePermission("calls.operate")).Delete("/calls/voice-notifications/{taskId}", deps.handleNotificationCancel)
+			}
 			priv.With(middleware.RequirePermission("calls.wrap_up")).Post("/calls/{callId}/wrap-up", deps.handleWrapUp)
+			priv.With(middleware.RequirePermission("calls.operate")).Post("/calls/{callId}/survey", deps.handleCallSurvey)
 		})
 	})
 

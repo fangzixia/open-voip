@@ -92,7 +92,9 @@ type Service struct {
 }
 
 // NewService 创建配置导入导出服务。
-func NewService(db *gorm.DB, sw ports.SwitchConfigVersionPort) *Service { return &Service{db: db, sw: sw} }
+func NewService(db *gorm.DB, sw ports.SwitchConfigVersionPort) *Service {
+	return &Service{db: db, sw: sw}
+}
 
 // Export 导出用户、坐席、路由、绑定、IVR 版本及 Webhook 配置。
 func (s *Service) Export(ctx context.Context) (Bundle, error) {
@@ -142,7 +144,7 @@ func (s *Service) Export(ctx context.Context) (Bundle, error) {
 		out.QueueSkills = switchPart.QueueSkills
 		out.QueueAgents = switchPart.QueueAgents
 		out.DIDs = switchPart.DIDs
-		out.IVRFlows = switchPart.IVRFlows
+		out.IVRFlows = mergeIVRDrafts(out.IVRFlows, switchPart.IVRFlows)
 		out.IVRVersions = switchPart.IVRVersions
 	}
 	return out, nil

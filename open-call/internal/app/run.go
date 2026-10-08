@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm/logger"
 
+	"open-call/internal/aibot"
 	apphttp "open-call/internal/app/http"
 	"open-call/internal/app/ws"
 	"open-call/internal/config"
@@ -37,9 +38,9 @@ import (
 	"open-call/internal/layers/biz/skill"
 	"open-call/internal/layers/biz/user"
 	"open-call/internal/layers/biz/webhook"
+	"open-call/internal/notification"
 	"open-call/internal/store"
 	"open-call/internal/store/migrate"
-	"open-call/internal/aibot"
 	"open-call/internal/tts"
 )
 
@@ -125,6 +126,8 @@ func Run(configPath string) error {
 	go hookSvc.RunWorker(workerCtx, log)
 	go runMaintenance(workerCtx, log, authSvc, guestSvc, recMeta)
 
+	notifications := notification.NewService(db, switchClient, log)
+	go notifications.Run(workerCtx)
 	usageRec := aibot.NewUsageRecorder(db, hookSvc, log)
 	aiWorker := aibot.NewWorker(cfg.Aibot, switchClient, usageRec, aibot.QueuePromptStore{DB: db}, log)
 	wsHub.RegisterCallEventHook(aiWorker.OnCallEvent)
@@ -151,6 +154,7 @@ func Run(configPath string) error {
 		FFmpeg:             ffmpegBin,
 		TTS:                ttsEngine,
 		Switch:             switchClient,
+		Notifications:      notifications,
 		DB:                 db,
 		SwitchEventHandler: SwitchEventHTTP(db, wsHub, businessActions, switchClient),
 		Auth:               authSvc,

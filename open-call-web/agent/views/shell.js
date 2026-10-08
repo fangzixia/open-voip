@@ -31,11 +31,11 @@ export function renderAppContent(host, actions) {
       ["answer", "askVideo", "completeXfer", "conf", "decline", "dial", "doCheckIn", "doCheckOut", "downgrade", "dtmf", "hangup", "hold", "playRemoteAudio", "respondVideo", "setDest", "setIdle", "setShowPad", "setWrapNotes", "setXferMode", "share", "stageCaller", "stageQueue", "submitWrap", "toggleBusy", "toggleMute", "waitingCount", "xfer"], sessionState) : ""}
     ${host.nav === "inbound" ? page(renderInboundView, ["incoming", "permissions"], ["answer", "decline"]) : ""}
     ${host.nav === "outbound" ? page(renderOutboundView,
-      ["dest", "guestExpiresAt", "guestLink", "guestMedia", "ivrAssets", "me", "permissions", "promptAssetId", "voiceNotifyBusy"],
-      ["copyGuestLink", "dial", "listen", "makeLink", "setDest", "setGuestMedia", "setPromptAssetId", "voiceNotify"]) : ""}
+      ["dest", "guestExpiresAt", "guestLink", "guestMedia", "ivrAssets", "me", "permissions", "promptAssetId", "voiceNotifyBusy", "notificationTask"],
+      ["copyGuestLink", "dial", "listen", "makeLink", "setDest", "setGuestMedia", "setPromptAssetId", "voiceNotify", "refreshNotification", "cancelNotification"]) : ""}
     ${host.nav === "queue" ? page(renderQueueView,
       ["busyReason", "queues", "selectedQueues"],
-      ["doCheckIn", "doCheckOut", "setBusyReason", "setSelectedQueues", "toggleBusy"], state) : ""}
+      ["doCheckIn", "doCheckOut", "setBusyReason", "setSelectedQueues", "toggleBusy"], sessionState) : ""}
     ${host.nav === "device" ? page(renderDeviceView,
       ["audioDeviceId", "call", "devices", "hasLocal", "speakerDeviceId", "videoDeviceId"],
       ["onCamChange", "onMicChange", "onSpeakerChange", "preview"]) : ""}

@@ -42,16 +42,6 @@ type OutboundRequest struct {
 	Destination string `json:"destination"`
 	// TrunkID PSTN 中继 ID，可空（分机互拨不需要）。
 	TrunkID string `json:"trunk_id"`
-	// PromptAssetID 非空时为语音通知（内部由 VoiceNotification 注入，普通 outbound 勿传）。
-	PromptAssetID string `json:"prompt_asset_id,omitempty"`
-}
-
-// VoiceNotificationRequest 坐席发起单通语音通知（PSTN 放音后自动挂断）。
-type VoiceNotificationRequest struct {
-	AgentID       string `json:"agent_id"`
-	Destination   string `json:"destination"`
-	PromptAssetID string `json:"prompt_asset_id"`
-	TrunkID       string `json:"trunk_id"`
 }
 
 // TransferRequest 转接参数。

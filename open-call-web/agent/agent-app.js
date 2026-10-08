@@ -6,7 +6,7 @@ import { FeedbackController, runFeedbackAction } from "../shared/feedback.js";
 import { beginTrace, clearCallContext, setCallContext } from "../shared/call-context.js";
 import { formatDateTime } from "../shared/datetime.js";
 import { LitElement } from "lit";
-import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listIvrAssets, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, sendDtmf, setAgentState, startSSO, setCallVersion, startSurvey, transferCall, completeTransfer, voiceNotificationCall, wrapUp } from "../shared/api.js";
+import { answerCall, authMe, authOptions, declineCall, fetchMyCalls, checkIn, checkOut, conferenceInvite, createGuestSession, downgradeVideo, exchangeSSOTicket, fetchAgentMe, fetchLiveReport, getCall, hangupCall, holdCall, listAgents, listIvrAssets, listQueues, listenCall, login, logout, outboundCall, popSSOTicket, requestVideo, sendDtmf, setAgentState, startSSO, setCallVersion, startSurvey, transferCall, completeTransfer, voiceNotificationCall, getVoiceNotification, cancelVoiceNotification, wrapUp } from "../shared/api.js";
 import { clearAccessToken, getAccessToken, setAuthTokens } from "../shared/auth-store.js";
 import { appStyles } from "../shared/styles/index.js";
 import { listMediaDevices } from "../shared/webrtc.js";
@@ -71,6 +71,7 @@ export class AgentApp extends LitElement {
     promptAssetId: { type: String },
     ivrAssets: { type: Array },
     voiceNotifyBusy: { type: Boolean },
+ notificationTask: { type: Object },
   };
 
   static styles = appStyles;
@@ -288,10 +289,6 @@ export class AgentApp extends LitElement {
         this.#endLocal(this.call.id, endMeta);
       }
       if (active) {
-        if (active.outbound_mode === "prompt_outbound") {
-          this.outboundNotice = outboundProgressLabel(active.state === "active" ? "playing" : "dialing");
-          return;
-        }
         this.call = active;
         if (active?.version != null) setCallVersion(active.version, active.id);
         const activeLeg = active.legs?.find((item) => item.agent_id === this.me.id);
@@ -371,7 +368,6 @@ export class AgentApp extends LitElement {
       }
     } else if (msg.type === "call.answered" && msg.payload?.call_id) {
       void this.#syncCalls().then(async () => {
-        if (this.call?.outbound_mode === "prompt_outbound") return;
         if (this.call?.state !== "active") return;
         this.outboundNotice = "";
         if (!this.media.pc && this.me?.terminal_type !== "sip") {
@@ -574,16 +570,8 @@ export class AgentApp extends LitElement {
       if (this.voiceNotifyBusy) return;
       this.voiceNotifyBusy = true;
       try {
-        await this.#ensureCheckedIn();
-        if (this.me?.session?.state === "busy") {
-          const sess = await setAgentState(this.me.id, "idle", "");
-          this.me = { ...this.me, session: sess };
-        }
-        if (this.me?.terminal_type === "sip") {
-          this.feedback.ok("请从已注册的 SIP 话机操作", epoch);
-          return;
-        }
         const view = await voiceNotificationCall(dest, asset);
+ this.notificationTask = view;
         this.outboundNotice = "已提交语音通知，关闭页面不影响播放";
         reportEvent("call.voice_notification_created", { call_id: view?.id || "", state: view?.state });
         this.feedback.ok("语音通知已提交", epoch);
@@ -871,6 +859,14 @@ export class AgentApp extends LitElement {
       setDest: (value) => { this.dest = value; },
       setPromptAssetId: (value) => { this.promptAssetId = value; },
       voiceNotify: (...args) => this.#voiceNotify(...args),
+      refreshNotification: () => this.#run(async () => {
+        if (this.notificationTask?.id) this.notificationTask = await getVoiceNotification(this.notificationTask.id);
+      }),
+      cancelNotification: () => this.#run(async () => {
+        if (!this.notificationTask?.id) return;
+        await cancelVoiceNotification(this.notificationTask.id);
+        this.notificationTask = await getVoiceNotification(this.notificationTask.id);
+      }),
       setUsername: (value) => { this.username = value; },
       setPassword: (value) => { this.password = value; },
       setGuestMedia: (value) => { this.guestMedia = value; },

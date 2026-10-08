@@ -46,16 +46,12 @@ tts:
     response_format: mp3
 
 # 虚拟坐席 Worker：AI 呼入（WebRTC + Realtime）与语音通知放音（WebRTC）。
-# 语音通知 API 的 agent_id 须与本节 agent_id 一致（媒体服务账号）。
+# 本节仅控制机器人坐席。语音通知独立运行，不需要启用 AI。
 aibot:
   enabled: false
-  username: "ai-bot"
-  password: "REPLACE-AIBOT-PASSWORD-12+"
   agent_id: ""
   queue_ids: []
   system_prompt: "你是呼叫中心智能助手，简洁友好地解答用户问题；需要人工时说转人工。"
-  # 预留：Switch↔Bot 宽带 Opus（当前下行仍为 PCMU 8kHz，音质主要靠高质量重采样与 16kHz 分轨录音）。
-  wideband_webrtc: false
   openai_realtime:
     # provider: qwen 时使用 DashScope 头；openai 时使用 OpenAI-Beta。
     provider: ""

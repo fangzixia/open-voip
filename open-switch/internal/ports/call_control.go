@@ -24,8 +24,6 @@ type CallControlPort interface {
 	CompleteTransfer(ctx context.Context, callID string) error
 	// Outbound 坐席发起外呼或分机互拨。
 	Outbound(ctx context.Context, req dto.OutboundRequest) (callID string, err error)
-	// VoiceNotification 坐席发起 PSTN 语音通知（服务端放音后挂断）。
-	VoiceNotification(ctx context.Context, req dto.VoiceNotificationRequest) (callID string, err error)
 	// StartIVR 为已有 Call 绑定 IVR 运行时（快照 ID）。
 	StartIVR(ctx context.Context, callID, snapshotID string) error
 	// Hold 保持或恢复。
@@ -48,6 +46,6 @@ type CallControlPort interface {
 	ForceReleaseAgent(ctx context.Context, agentID, policy string) error
 	// GetCall 读取通话视图（L4 Guest 入队后取 leg，不经过 SignalingPort）。
 	GetCall(ctx context.Context, callID string) (CallView, error)
-	// StartSurvey 坐席转满意度 IVR，客户继续在线。
-	StartSurvey(ctx context.Context, callID, flowID string) error
+	// EnterIVR 释放服务方媒体腿，让客户进入指定的已发布 IVR。
+	EnterIVR(ctx context.Context, callID, flowID string) error
 }

@@ -12,33 +12,46 @@ func validateIVR(payload string, queues map[string]bool) error {
 	var doc struct {
 		Start string `json:"start"`
 		Nodes map[string]struct {
-			Type    string            `json:"type"`
-			Action  string            `json:"action"`
-			File    string            `json:"file"`
-			QueueID string            `json:"queue_id"`
-			Next    string            `json:"next"`
-			Default string            `json:"default"`
-			Invalid string            `json:"invalid"`
-			Open      string            `json:"open"`
-			Closed    string            `json:"closed"`
-			Busy      string            `json:"busy"`
-			Schedule  string            `json:"schedule"`
-			WaitingGt int               `json:"waiting_gt"`
-			Timeout   int               `json:"timeout_sec"`
-			Choices   map[string]string `json:"choices"`
+			Type           string            `json:"type"`
+			Action         string            `json:"action"`
+			File           string            `json:"file"`
+			QueueID        string            `json:"queue_id"`
+			Next           string            `json:"next"`
+			Default        string            `json:"default"`
+			Invalid        string            `json:"invalid"`
+			Open           string            `json:"open"`
+			Closed         string            `json:"closed"`
+			Busy           string            `json:"busy"`
+			Schedule       string            `json:"schedule"`
+			WaitingGt      int               `json:"waiting_gt"`
+			Timeout        int               `json:"timeout_sec"`
+			Choices        map[string]string `json:"choices"`
+			AcceptedDigits string            `json:"accepted_digits"`
+			ResultKey      string            `json:"result_key"`
+			MaxRetries     *int              `json:"max_retries"`
+			SessionType    string            `json:"session_type"`
 		} `json:"nodes"`
 	}
 	if json.Unmarshal([]byte(payload), &doc) != nil || doc.Start == "" || len(doc.Nodes) == 0 || len(doc.Nodes) > 100 {
 		return errs.InvalidRequest("IVR 图无效")
 	}
 	edges := map[string][]string{}
+	if _, ok := doc.Nodes[doc.Start]; !ok {
+		return errs.InvalidRequest("IVR start 节点不存在")
+	}
 	for id, node := range doc.Nodes {
+		if node.MaxRetries != nil && (*node.MaxRetries < 0 || *node.MaxRetries > 5) {
+			return errs.InvalidRequest("IVR 无效按键重试必须为 0–5 次")
+		}
 		if node.Timeout < 0 || node.Timeout > 120 {
 			return errs.InvalidRequest("IVR 超时必须为 0–120 秒")
 		}
 		switch node.Type {
 		case "hangup":
 		case "route_queue":
+			if node.SessionType != "" && node.SessionType != "audio" && node.SessionType != "video" {
+				return errs.InvalidRequest("IVR 通话类型无效")
+			}
 			if !queues[node.QueueID] {
 				return errs.InvalidRequest("IVR 引用了不存在的队列")
 			}
@@ -90,9 +103,17 @@ func validateIVR(payload string, queues map[string]bool) error {
 			}
 			edges[id] = []string{node.Open, node.Busy, node.Closed}
 		case "voicemail":
-		case "csat":
-			if node.Timeout < 0 || node.Timeout > 120 {
-				return errs.InvalidRequest("IVR 超时必须为 0–120 秒")
+		case "collect_input":
+			if strings.TrimSpace(node.ResultKey) == "" || node.AcceptedDigits == "" {
+				return errs.InvalidRequest("按键采集必须指定 result_key 与 accepted_digits")
+			}
+			for _, digit := range node.AcceptedDigits {
+				if !strings.ContainsRune("0123456789*#", digit) {
+					return errs.InvalidRequest("按键采集包含无效 DTMF")
+				}
+			}
+			if node.Next == "" || node.Default == "" {
+				return errs.InvalidRequest("按键采集必须指定 next 与 default")
 			}
 			if node.Next != "" {
 				edges[id] = []string{node.Next}

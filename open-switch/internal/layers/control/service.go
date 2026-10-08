@@ -45,42 +45,42 @@ type Deps struct {
 	CallEvents      ports.CallEventPublisher
 	Recordings      ports.RecordingStorePort
 	Commands        ports.CommandStore
-	Bridges ports.BridgeSessionPort
-	Routing ports.RoutingSessionPort
+	Bridges         ports.BridgeSessionPort
+	Routing         ports.RoutingSessionPort
 }
 
 type runtimeCall struct {
-	sipOfferLeg    string
-	sipOfferCancel context.CancelFunc
-	rec            ports.CallRecord
-	legs           []ports.CallLegRecord
-	activeAgent    string
-	offeredAgent   string
-	offerAt        time.Time
-	queuedAt       time.Time
-	answeredAt     *time.Time
-	caller         string
-	callee         string
-	queueName      string
-	maxWait        time.Duration
-	held           bool
-	recordingID    string
-	videoFromLeg   string
-	videoUpgradeOk bool
-	videoStartedAt *time.Time
-	screenShares   int
-	notify         string
-	ivr            *ivrRuntime
-	waitPrompt     string
-	consultFrom    string
-	transferMode   string
-	playbacks      map[string]string
-	endMessage     string
-	endCode        string
-	cdrResult      string
+	sipOfferLeg       string
+	sipOfferCancel    context.CancelFunc
+	rec               ports.CallRecord
+	legs              []ports.CallLegRecord
+	activeAgent       string
+	offeredAgent      string
+	offerAt           time.Time
+	queuedAt          time.Time
+	answeredAt        *time.Time
+	caller            string
+	callee            string
+	queueName         string
+	postCallIVRFlowID string
+	maxWait           time.Duration
+	held              bool
+	recordingID       string
+	videoFromLeg      string
+	videoUpgradeOk    bool
+	videoStartedAt    *time.Time
+	screenShares      int
+	notify            string
+	ivr               *ivrRuntime
+	waitPrompt        string
+	consultFrom       string
+	transferMode      string
+	playbacks         map[string]ports.PlaybackStatus
+	directDialHashes  map[string]string
+	endMessage        string
+	endCode           string
+	cdrResult         string
 	pstnDialState     string
-	promptOutbound bool
-	promptAsset    string
 }
 
 // Service 实现 CallControlPort 与 SignalingPort。
@@ -191,14 +191,15 @@ func (s *Service) StartInbound(ctx context.Context, req dto.InboundRequest) (str
 		caller = "guest"
 	}
 	rt := &runtimeCall{
-		rec:        rec,
-		legs:       []ports.CallLegRecord{leg},
-		queuedAt:   now,
-		caller:     caller,
-		callee:     q.Name,
-		queueName:  q.Name,
-		maxWait:    maxWait,
-		waitPrompt: q.WaitPrompt,
+		rec:               rec,
+		legs:              []ports.CallLegRecord{leg},
+		queuedAt:          now,
+		caller:            caller,
+		callee:            q.Name,
+		queueName:         q.Name,
+		postCallIVRFlowID: q.PostCallIVRFlowID,
+		maxWait:           maxWait,
+		waitPrompt:        q.WaitPrompt,
 	}
 	if req.IVRFlowID != "" && rt.callee == "" {
 		rt.callee = "ivr:" + req.IVRFlowID
@@ -488,7 +489,7 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	offered := rt.offeredAgent
 	prev := rt.rec.State
 	consultFrom := rt.consultFrom
-	toACW := (prev == stateActive || prev == stateHeld || prev == stateTransferring || consultFrom != "") && !rt.promptOutbound
+	toACW := (prev == stateActive || prev == stateHeld || prev == stateTransferring || consultFrom != "")
 	seen := map[string]struct{}{}
 	if offered != "" {
 		seen[offered] = struct{}{}
@@ -913,13 +914,14 @@ func toView(rt *runtimeCall) ports.CallView {
 		Version: rt.rec.Version, ConfigVersion: rt.rec.ConfigVersion,
 		ID:        rt.rec.ID,
 		CreatedAt: rt.rec.CreatedAt, Caller: rt.caller, Callee: rt.callee, AnsweredAt: rt.answeredAt, EndedAt: rt.rec.EndedAt,
-		State:           rt.rec.State,
-		Direction:       rt.rec.Direction,
-		SessionType:     rt.rec.SessionType,
-		AgentID:         rt.offeredAgent,
-		Held:            rt.held,
-		RecordingNotice: rt.notify,
-		Legs:            make([]ports.LegView, 0, len(rt.legs)),
+		State:             rt.rec.State,
+		Direction:         rt.rec.Direction,
+		SessionType:       rt.rec.SessionType,
+		AgentID:           rt.offeredAgent,
+		Held:              rt.held,
+		PostCallIVRFlowID: rt.postCallIVRFlowID,
+		RecordingNotice:   rt.notify,
+		Legs:              make([]ports.LegView, 0, len(rt.legs)),
 	}
 	if rt.rec.QueueID != nil {
 		v.QueueID = *rt.rec.QueueID

@@ -65,7 +65,7 @@ export class IVRFlowEditor extends LitElement {
   addNode(type, position = null) {
     const id=`node_${randomId().slice(0, 8)}`;
     const defaultSchedule='{"timezone":"Asia/Shanghai","mon":"09:00-18:00","tue":"09:00-18:00","wed":"09:00-18:00","thu":"09:00-18:00","fri":"09:00-18:00","sat":"closed","sun":"closed"}';
-    const defaults={ business_action:{type,action:"",timeout_sec:10,choices:{yes:"",no:""},default:""}, play:{type,prompt:"",file:"",timeout_sec:2,next:""}, menu:{type,prompt:"",file:"",timeout_sec:8,max_retries:2,choices:{},default:"",invalid:""}, time_condition:{type,schedule:defaultSchedule,open:"",closed:""}, queue_condition:{type,queue_id:this.queues[0]?.id||"",waiting_gt:0,open:"",busy:""}, voicemail:{type,prompt:"",file:""}, csat:{type,prompt:"",file:"",timeout_sec:8,next:"",default:""}, route_queue:{type,queue_id:this.queues[0]?.id||"",session_type:"audio"}, hangup:{type} };
+    const defaults={ business_action:{type,action:"",timeout_sec:10,choices:{yes:"",no:""},default:""}, play:{type,prompt:"",file:"",timeout_sec:2,next:""}, menu:{type,prompt:"",file:"",timeout_sec:8,max_retries:2,choices:{},default:"",invalid:""}, time_condition:{type,schedule:defaultSchedule,open:"",closed:""}, queue_condition:{type,queue_id:this.queues[0]?.id||"",waiting_gt:0,open:"",busy:""}, voicemail:{type,prompt:"",file:""}, collect_input:{type,result_key:"",accepted_digits:"0123456789*#",prompt:"",file:"",timeout_sec:8,next:"",default:""}, csat:{type,prompt:"",file:"",timeout_sec:8,next:"",default:""}, route_queue:{type,queue_id:this.queues[0]?.id||"",session_type:"audio"}, hangup:{type} };
     this.mutate(d=>{ d.nodes[id]=defaults[type]; if (!d.start) d.start=id; if (position) { d.layout ||= {}; d.layout[id]=position; } }); this.selectedNode=id;
   }
   /** 删除节点时一并清理起点、布局及其他节点指向它的分支。 */
@@ -156,7 +156,7 @@ export class IVRFlowEditor extends LitElement {
   linkEditor() {
     const link=this.linkDraft; if (!link) return nothing;
     const source=this.draft.nodes[link.from];
-    const branches=source.type==="play"?[["next","下一步"]]:source.type==="time_condition"?[["open","营业"],["closed","非营业"]]:source.type==="queue_condition"?[["open","空闲"],["busy","忙碌"]]:source.type==="csat"?[["next","打分后"],["default","超时"]]:source.type==="business_action"?[...Object.keys(source.choices||{}).map(k=>[`choice:${k}`,k]),["default","超时"]]:[
+    const branches=source.type==="play"?[["next","下一步"]]:source.type==="time_condition"?[["open","营业"],["closed","非营业"]]:source.type==="queue_condition"?[["open","空闲"],["busy","忙碌"]]:["csat","collect_input"].includes(source.type)?[["next",source.type==="csat"?"打分后":"采集后"],["default","超时"]]:source.type==="business_action"?[...Object.keys(source.choices||{}).map(k=>[`choice:${k}`,k]),["default","超时"]]:[
       ..."1234567890*#".split("").map(d=>[`choice:${d}`,`按 ${d}`]),["default","超时"],["invalid","无效按键"]
     ];
     return html`<div class="link-editor"><strong>连接 ${NODE_TYPES[source.type]} → ${NODE_TYPES[this.draft.nodes[link.to].type]}</strong>

@@ -125,6 +125,8 @@ func (d SwitchRouterDeps) registerSwitchAPI(api chi.Router) {
 	api.Delete("/calls/{callId}/bridges/{bridgeId}", d.handleDeleteBridge)
 	api.Post("/calls/{callId}/legs/{legId}/hold", d.handleLegHold)
 	api.Post("/calls/{callId}/legs/{legId}/reject", d.handleLegReject)
+	api.Get("/calls/{callId}/legs/{legId}/media", d.handleMediaStream)
+	api.Get("/calls/{callId}/legs/{legId}/playbacks/{playbackId}", d.handleLegPlaybackGet)
 	api.Post("/calls/{callId}/legs/{legId}/playbacks", d.handleLegPlaybackStart)
 	api.Delete("/calls/{callId}/legs/{legId}/playbacks/{playbackId}", d.handleLegPlaybackStop)
 	api.Post("/calls/{callId}/recording/start", d.handleDirectRecordingStart)
@@ -140,7 +142,6 @@ func (d SwitchRouterDeps) registerSwitchAPI(api chi.Router) {
 	api.Post("/calls/{callId}/hangup", d.handleCallHangup)
 	api.Post("/calls/inbound", d.handleSwitchInbound)
 	api.Post("/calls/outbound", d.handleOutbound)
-	api.Post("/calls/voice-notifications", d.handleVoiceNotification)
 	api.Post("/calls/{callId}/answer", d.handleCallAnswer)
 	api.Post("/calls/{callId}/decline", d.handleDecline)
 	api.Post("/calls/{callId}/hold", d.handleHold)
@@ -154,7 +155,7 @@ func (d SwitchRouterDeps) registerSwitchAPI(api chi.Router) {
 	api.Post("/calls/{callId}/video/downgrade", d.handleVideoDowngrade)
 	api.Post("/calls/{callId}/screen-share", d.handleScreenShare)
 	api.Post("/calls/{callId}/dtmf", d.handleDTMF)
-	api.Post("/calls/{callId}/survey", d.handleCallSurvey)
+	api.Post("/calls/{callId}/ivr", d.handleCallEnterIVR)
 
 	api.Post("/calls/{callId}/legs/{legId}/offer", d.handleOffer)
 	api.Post("/calls/{callId}/legs/{legId}/answer", d.handleAnswerSDP)
@@ -195,7 +196,7 @@ func (d SwitchRouterDeps) authorizeCallResource(next http.Handler) http.Handler 
 				continue
 			}
 			id := strings.Split(strings.TrimPrefix(path, prefix), "/")[0]
-			if suffix == "/calls/" && (id == "direct" || id == "inbound" || id == "outbound" || id == "voice-notifications" || (r.Method == http.MethodPost && strings.TrimSuffix(path, "/") == base+"/calls")) {
+			if suffix == "/calls/" && (id == "direct" || id == "inbound" || id == "outbound" || (r.Method == http.MethodPost && strings.TrimSuffix(path, "/") == base+"/calls")) {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -51,7 +51,14 @@ func (c *Client) GetQueueConfig(ctx context.Context, id string) (ports.SwitchQue
 
 func (c *Client) UpdateQueueConfig(ctx context.Context, id string, in ports.SwitchQueueConfig) (ports.SwitchQueueConfig, error) {
 	var out ports.SwitchQueueConfig
-	err := c.do(ctx, http.MethodPatch, "/switch/v1/queues/"+url.PathEscape(id)+"/config", in, &out)
+	body := struct {
+		ports.SwitchQueueConfig
+		AudioProfile      string `json:"audio_profile"`
+		PostCallIVRFlowID string `json:"post_call_ivr_flow_id"`
+		OverflowQueueID   string `json:"overflow_queue_id"`
+		IVRFlowID         string `json:"ivr_flow_id"`
+	}{in, in.AudioProfile, in.PostCallIVRFlowID, in.OverflowQueueID, in.IVRFlowID}
+	err := c.do(ctx, http.MethodPatch, "/switch/v1/queues/"+url.PathEscape(id)+"/config", body, &out)
 	return out, err
 }
 

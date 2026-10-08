@@ -23,6 +23,12 @@ export function renderOutboundView(model, actions) {
             </select>
           </label>
           <button class="primary" ?disabled=${model.voiceNotifyBusy || !model.dest?.trim() || !model.promptAssetId} @click=${() => actions.voiceNotify()}>发起语音通知</button>
+          ${model.notificationTask ? html`
+            <p>最近通知：${model.notificationTask.destination} · ${{ queued: "等待执行", dialing: "正在拨号", playing: "正在播放", finishing: "正在结束", stopping: "正在取消或清理", completed: "播放完成", canceled: "已取消", failed: "失败" }[model.notificationTask.state] || model.notificationTask.state}</p>
+            ${model.notificationTask.error ? html`<p class="hint">${model.notificationTask.error}</p>` : ""}
+            <button class="secondary" @click=${() => actions.refreshNotification()}>刷新通知状态</button>
+            ${!["completed", "canceled", "failed"].includes(model.notificationTask.state) ? html`<button class="secondary" @click=${() => actions.cancelNotification()}>取消通知</button>` : ""}
+          ` : ""}
         `) : ""}
         ${model.guestLink ? html`
           <div class="invite-link">
