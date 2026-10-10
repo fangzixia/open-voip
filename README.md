@@ -11,6 +11,7 @@ open-voip/
 
 - 软交换：[open-switch/README.md](open-switch/README.md)
 - 呼叫中心：[open-call/README.md](open-call/README.md)
+- VoIP 流程与技术方案总览：[docs/voip-architecture-flows.md](docs/voip-architecture-flows.md)
 - 与 open-switch 对接：[docs/open-switch对接说明.md](docs/open-switch对接说明.md)、[docs/switch-standalone-runbook.md](docs/switch-standalone-runbook.md)
 - 前端：[open-call-web/README.md](open-call-web/README.md)
 
