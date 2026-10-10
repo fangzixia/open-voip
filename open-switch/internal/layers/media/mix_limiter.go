@@ -1,50 +1,33 @@
 package media
 
-import "math"
-
 const mixHeadroom = 0.85
 
-func mixPCMFrames(frames map[string][]int16, skipLeg string) []int16 {
-	return mixPCMFramesLimited(frames, skipLeg)
+func mixPCMFrames(frames map[string][]int16, skip string) []int16 {
+	return mixPCMFramesLimited(frames, skip)
 }
 
-// mixPCMFramesLimited 多路 float 累加后经软限幅，再转 int16。
-func mixPCMFramesLimited(frames map[string][]int16, skipLeg string) []int16 {
-	n := mixInternalFrameSamples
-	if n <= 0 {
-		n = mixFrameSamples
-	}
-	buf := make([]float64, n)
-	for legID, frame := range frames {
-		if legID == skipLeg || len(frame) == 0 {
-			continue
-		}
-		lim := len(frame)
-		if lim > n {
-			lim = n
-		}
-		for i := 0; i < lim; i++ {
-			buf[i] += float64(frame[i])
+// Reserve headroom before summing. Silence is still an eligible source and
+// cannot increase the gain of the other sources unexpectedly.
+func mixPCMFramesLimited(frames map[string][]int16, skip string) []int16 {
+	out := make([]int16, mixFrameSamples)
+	count := 0
+	for id, frame := range frames {
+		if id != skip && len(frame) > 0 {
+			count++
 		}
 	}
-	ceil := 32767.0 * mixHeadroom
-	out := make([]int16, n)
-	for i, v := range buf {
-		out[i] = int16(softLimit(v, ceil))
+	if count == 0 {
+		return out
+	}
+	gain := mixHeadroom / float64(count)
+	for i := range out {
+		var v float64
+		for id, frame := range frames {
+			if id != skip && i < len(frame) {
+				v += float64(frame[i]) * gain
+			}
+		}
+		out[i] = int16(v)
 	}
 	return out
-}
-
-func softLimit(v, ceil float64) int16 {
-	if v > ceil {
-		v = ceil + (v-ceil)*0.15
-	} else if v < -ceil {
-		v = -ceil + (v+ceil)*0.15
-	}
-	if v > 32767 {
-		v = 32767
-	} else if v < -32768 {
-		v = -32768
-	}
-	return int16(math.Round(v))
 }

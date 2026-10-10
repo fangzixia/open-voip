@@ -20,13 +20,20 @@ import (
 
 // Item 录音列表项。
 type Item struct {
-	ID        string     `json:"id"`
-	CallID    string     `json:"call_id"`
-	MediaType string     `json:"media_type"`
-	Format    string     `json:"format"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	FileSize  int64      `json:"file_size"`
+	RecordingSemantics string            `json:"recording_semantics"`
+	Channels           int               `json:"channels"`
+	DurationSamples    int64             `json:"duration_samples"`
+	Status             string            `json:"status"`
+	FailureReason      string            `json:"failure_reason,omitempty"`
+	SampleRateHz       int               `json:"sample_rate_hz,omitempty"`
+	LegPaths           map[string]string `json:"leg_paths,omitempty"`
+	ID                 string            `json:"id"`
+	CallID             string            `json:"call_id"`
+	MediaType          string            `json:"media_type"`
+	Format             string            `json:"format"`
+	StartedAt          time.Time         `json:"started_at"`
+	EndedAt            *time.Time        `json:"ended_at,omitempty"`
+	FileSize           int64             `json:"file_size"`
 }
 
 // ListResult 分页。
@@ -87,6 +94,9 @@ func (s *Service) Open(ctx context.Context, row models.Recording, format string)
 var _ ports.RecordingStorePort = (*Service)(nil)
 
 func (s *Service) Save(ctx context.Context, rec ports.RecordingMeta) error {
+	if rec.LegPaths == nil {
+		rec.LegPaths = map[string]string{}
+	}
 	if rec.ID == "" {
 		rec.ID = uuid.New().String()
 	}
@@ -95,9 +105,24 @@ func (s *Service) Save(ctx context.Context, rec ports.RecordingMeta) error {
 		StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, RetainUntil: rec.RetainUntil, FileSize: rec.FileSize,
 		CreatedAt: time.Now().UTC(),
 	}
+	row.RecordingSemantics, row.Channels, row.DurationSamples, row.Status, row.FailureReason = rec.RecordingSemantics, rec.Channels, rec.DurationSamples, rec.Status, rec.FailureReason
+	row.SampleRateHz, row.LegPaths = rec.SampleRateHz, rec.LegPaths
+	updates := clause.AssignmentColumns([]string{"file_path", "media_type", "retain_until", "recording_semantics", "channels", "status", "sample_rate_hz"})
+	for name, expression := range map[string]string{
+		"duration_samples": "GREATEST(oc_recordings.duration_samples, EXCLUDED.duration_samples)",
+		"file_size":        "GREATEST(oc_recordings.file_size, EXCLUDED.file_size)",
+		"ended_at":         "GREATEST(oc_recordings.ended_at, EXCLUDED.ended_at)",
+		"leg_paths":        "oc_recordings.leg_paths || EXCLUDED.leg_paths",
+		"failure_reason":   "COALESCE(NULLIF(oc_recordings.failure_reason, ''), EXCLUDED.failure_reason)",
+	} {
+		updates = append(updates, clause.Assignment{Column: clause.Column{Name: name}, Value: gorm.Expr(expression)})
+	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"file_path", "media_type", "ended_at", "retain_until", "file_size"}),
+		Columns: []clause.Column{{Name: "id"}},
+		// Inbox events can arrive out of order. A partial failed recording
+		// cannot become completed when an older saved event is replayed.
+		Where:     clause.Where{Exprs: []clause.Expression{gorm.Expr("(oc_recordings.status <> 'failed' OR excluded.status = 'failed') AND (excluded.status <> 'recording' OR oc_recordings.status = 'recording')")}},
+		DoUpdates: updates,
 	}).Create(&row).Error
 }
 
@@ -125,7 +150,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, callID string) (
 	for _, r := range rows {
 		items = append(items, Item{ID: r.ID, CallID: r.CallID, MediaType: r.MediaType,
 			Format:    strings.TrimPrefix(strings.ToLower(filepath.Ext(r.FilePath)), "."),
-			StartedAt: r.StartedAt, EndedAt: r.EndedAt, FileSize: r.FileSize})
+			StartedAt: r.StartedAt, EndedAt: r.EndedAt, FileSize: r.FileSize, RecordingSemantics: r.RecordingSemantics, Channels: r.Channels, DurationSamples: r.DurationSamples, Status: r.Status, FailureReason: r.FailureReason, SampleRateHz: r.SampleRateHz, LegPaths: r.LegPaths})
 	}
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }

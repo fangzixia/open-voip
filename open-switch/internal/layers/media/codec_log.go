@@ -13,7 +13,7 @@ import (
 // offeredCodecsLabel 将 SDP offer 中的音频 PT 转为可读列表（用于日志）。
 func (m sdpMedia) offeredCodecsLabel() string {
 	if len(m.Types) == 0 {
-		return "default_g711"
+		return "none"
 	}
 	parts := make([]string, 0, len(m.Types))
 	for _, t := range m.Types {
@@ -37,7 +37,7 @@ func (m sdpMedia) offeredCodecsLabel() string {
 	return strings.Join(parts, ",")
 }
 
-func logCodecNegotiation(rtpSess *sipRTP, offer sdpMedia, codec sipAudioCodec, pt uint8, preferWB, preferOpus bool, audioProfile string, phase string) {
+func logCodecNegotiation(rtpSess *sipRTP, offer sdpMedia, codec sipAudioCodec, pt uint8, audioProfile string, phase string) {
 	if rtpSess == nil {
 		return
 	}
@@ -53,8 +53,6 @@ func logCodecNegotiation(rtpSess *sipRTP, offer sdpMedia, codec sipAudioCodec, p
 		"sample_rate_hz", rate,
 		"offer_codecs", offer.offeredCodecsLabel(),
 		"audio_profile", audioProfile,
-		"prefer_wideband", preferWB,
-		"prefer_opus", preferOpus,
 	)
 	slog.Info("SIP 音频编码已协商",
 		"call_id", rtpSess.callID,
@@ -64,8 +62,6 @@ func logCodecNegotiation(rtpSess *sipRTP, offer sdpMedia, codec sipAudioCodec, p
 		"sample_rate_hz", rate,
 		"offer_codecs", offer.offeredCodecsLabel(),
 		"audio_profile", audioProfile,
-		"prefer_wideband", preferWB,
-		"prefer_opus", preferOpus,
 		"phase", phase,
 	)
 }

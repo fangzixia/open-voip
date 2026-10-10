@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
@@ -26,7 +27,17 @@ func TestCallEventsConcurrentCursorIntegration(t *testing.T) {
 	}
 	stream := CallEvents{DB: db}
 	ctx := context.Background()
+	missing := ports.CallEvent{CallID: uuid.NewString(), Type: "recording.failed"}
+	if err := stream.Append(ctx, &missing); err == nil || missing.ID != 0 {
+		t.Fatal("event for absent call reused sequence zero")
+	}
 	calls := []string{uuid.New().String(), uuid.New().String()}
+	for _, id := range calls {
+		if e := db.Exec("INSERT INTO os_calls(id,direction,session_type,state,created_at,updated_at) VALUES (?,'inbound','audio','active',?,?)", id, time.Now(), time.Now()).Error; e != nil {
+			t.Fatal(e)
+		}
+	}
+	defer db.Exec("DELETE FROM os_calls WHERE id IN (?, ?)", calls[0], calls[1])
 	defer db.Exec("DELETE FROM os_call_events WHERE call_id IN (?, ?)", calls[0], calls[1])
 	var wg sync.WaitGroup
 	errs := make(chan error, 20)

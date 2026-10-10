@@ -52,14 +52,19 @@ func (d *Dispatcher) notifyWake() {
 	}
 }
 
-func (d *Dispatcher) Enqueue(ctx context.Context, row store.CallEventRow) {
+// Stage uses the event's transaction, so FK checks never wait for a different
+// connection to commit the very event being inserted.
+func (d *Dispatcher) Stage(ctx context.Context, tx *gorm.DB, eventID int64) error {
 	if strings.TrimSpace(d.CallbackURL) == "" {
-		return
+		return nil
 	}
-	_ = d.DB.WithContext(ctx).Exec(`
+	return tx.WithContext(ctx).Exec(`
 INSERT INTO os_integrator_event_deliveries (event_id, status, attempts, next_retry_at, last_error, updated_at)
 VALUES (?, 'pending', 0, NOW(), '', NOW())
-	ON CONFLICT (event_id) DO NOTHING`, row.ID).Error
+	ON CONFLICT (event_id) DO NOTHING`, eventID).Error
+}
+
+func (d *Dispatcher) Notify(_ context.Context, _ store.CallEventRow) {
 	d.notifyWake()
 }
 

@@ -1,0 +1,239 @@
+// Copyright 2026 LiveKit, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package amrwb
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+
+	"github.com/livekit/amrwb-cgo"
+
+	"github.com/livekit/media-sdk"
+)
+
+const (
+	SDPNameOnly    = "AMR-WB"
+	SDPNameAndRate = SDPNameOnly + "/16000"
+	SDPName        = SDPNameAndRate // Deprecated: use SDPNameOnly or SDPNameAndRate
+	SampleRate     = 16000
+)
+
+type Format = amrwb.Format
+
+const (
+	Storage               = amrwb.Storage
+	RTPBandwidthEfficient = amrwb.RTPBandwidthEfficient
+)
+
+func init() {
+	info := media.CodecTypeInfo{
+		Name:        SDPNameOnly,
+		Kind:        media.Audio,
+		RTPIsStatic: false,
+		Priority:    -4,
+		FileExt:     "amrwb",
+	}
+	media.RegisterCodec(media.NewCodec(info, nil, func(c media.CodecConfig) (media.CodecInfo, media.CreateFunc, bool) {
+		if c.Channels != 0 && c.Channels != 1 {
+			return media.CodecInfo{}, nil, false
+		}
+		if c.SampleRate == 0 {
+			c.SampleRate = SampleRate
+		}
+		if c.SampleRate != SampleRate {
+			return media.CodecInfo{}, nil, false
+		}
+		const (
+			paramOctetAlign = "octet-align"
+			paramModeSet    = "mode-set"
+		)
+		var (
+			format   = RTPBandwidthEfficient
+			mode     = amrwb.Best
+			accepted media.CodecParams
+		)
+
+		// Select between bandwidth-efficient format (bit packing) and octet-aligned modes (align with pad bits).
+		if v, ok := c.Params.Get(paramOctetAlign); ok && v != "0" {
+			// TODO: support octet-aligned mode
+			return media.CodecInfo{}, nil, false
+		}
+		accepted.Add(paramOctetAlign, "0")
+
+		// Pick the best mode the peer can support.
+		// TODO: we should probably change the priority of the codec based on this as well
+		maxMode := -1
+		if v, ok := c.Params.Get(paramModeSet); ok {
+			for s := range strings.SplitSeq(v, ",") {
+				if s == "" {
+					continue
+				}
+				m, err := strconv.Atoi(s)
+				if err != nil {
+					return media.CodecInfo{}, nil, false
+				}
+				maxMode = max(m, maxMode)
+			}
+		}
+		if maxMode >= 0 {
+			mode = amrwb.Mode(maxMode)
+		}
+		accepted.Add(paramModeSet, strconv.Itoa(int(mode)))
+
+		info := media.CodecInfo{CodecTypeInfo: info, CodecConfig: c}
+		info.Params = accepted
+		create := media.NewAudioCodecFunc(info, func(w media.PCM16Writer) media.WriteCloser[Sample] {
+			return Decode(w, format)
+		}, func(w media.WriteCloser[Sample]) media.PCM16Writer {
+			return EncodeWith(w, format, mode)
+		})
+		return info, create, true
+	}))
+}
+
+type Sample []byte
+
+func (s Sample) Size() int {
+	return len(s)
+}
+
+func (s Sample) CopyTo(dst []byte) (int, error) {
+	if len(dst) < len(s) {
+		return 0, io.ErrShortBuffer
+	}
+	n := copy(dst, s)
+	return n, nil
+}
+
+type Writer = media.WriteCloser[Sample]
+
+func Decode(w media.PCM16Writer, format amrwb.Format) Writer {
+	if w.SampleRate() != SampleRate {
+		w = media.ResampleWriter(w, SampleRate)
+	}
+	return &Decoder{
+		w: w,
+		d: amrwb.NewDecoder(format),
+	}
+}
+
+type Decoder struct {
+	w     media.PCM16Writer
+	d     *amrwb.Decoder
+	frame amrwb.PCMFrame
+	buf   media.PCM16Sample
+}
+
+func (d *Decoder) String() string {
+	return fmt.Sprintf("AMR-WB(decode) -> %s", d.w)
+}
+
+func (d *Decoder) SampleRate() int {
+	return SampleRate
+}
+
+func (d *Decoder) Close() error {
+	d.d.Close()
+	return d.w.Close()
+}
+
+func (d *Decoder) WriteSample(in Sample) error {
+	d.buf = d.buf[:0]
+	var blockErr error
+	for len(in) > 0 {
+		n, err := d.d.Decode(&d.frame, in)
+		if err != nil {
+			blockErr = err
+			break
+		}
+		in = in[n:]
+		d.buf = append(d.buf, d.frame[:]...)
+	}
+	if len(d.buf) != 0 {
+		if err := d.w.WriteSample(d.buf); err != nil {
+			return err
+		}
+	}
+	return blockErr
+}
+
+func Encode(w Writer, format amrwb.Format) media.PCM16Writer {
+	return EncodeWith(w, format, amrwb.Best)
+}
+
+func EncodeWith(w Writer, format amrwb.Format, mode amrwb.Mode) media.PCM16Writer {
+	if w.SampleRate() != SampleRate {
+		panic("unsupported sample rate")
+	}
+	return &Encoder{
+		w: w,
+		e: amrwb.NewEncoder(format, mode),
+	}
+}
+
+type Encoder struct {
+	w    Writer
+	e    *amrwb.Encoder
+	buf  []byte
+	done bool
+}
+
+func (e *Encoder) String() string {
+	return fmt.Sprintf("AMR-WB(encode) -> %s", e.w)
+}
+
+func (e *Encoder) SampleRate() int {
+	return SampleRate
+}
+
+func (e *Encoder) Close() error {
+	return e.w.Close()
+}
+
+func (e *Encoder) WriteSample(in media.PCM16Sample) error {
+	if len(in) == 0 {
+		return nil
+	}
+	var blockErr error
+	if e.done {
+		// We zero-padded previous frame, but we still got data after that.
+		// The stream must be normalized with FullFrames by the caller instead.
+		blockErr = errors.New("amrwb: writing frame after a short previous frame")
+	}
+	e.buf = e.buf[:0]
+	for len(in) > 0 {
+		const n = amrwb.PCMFrameSize
+		if len(in) < n {
+			// Zero pad, it's okay for the last frame only.
+			// We'll return the error if we get another frame after this.
+			e.done = true
+			var buf amrwb.PCMFrame
+			copy(buf[:], in)
+			in = buf[:]
+		}
+		frame := (*amrwb.PCMFrame)(in[:n])
+		in = in[n:]
+		e.buf = e.e.Encode(e.buf, frame)
+	}
+	if len(e.buf) != 0 {
+		if err := e.w.WriteSample(e.buf); err != nil {
+			return err
+		}
+	}
+	return blockErr
+}

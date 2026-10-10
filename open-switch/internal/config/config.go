@@ -43,8 +43,6 @@ type MediaConfig struct {
 	QueueAnswerGraceMS int `yaml:"queue_answer_grace_ms"`
 	// QueueAnswerFadeMS 停止等待音前的淡出毫秒数。
 	QueueAnswerFadeMS int `yaml:"queue_answer_fade_ms"`
-	// LogRTPPtimeMismatch 为 true 时采样记录 RTP 时间戳增量与载荷样本数不一致（media.rtp.ptime_mismatch）。
-	LogRTPPtimeMismatch bool `yaml:"log_rtp_ptime_mismatch"`
 }
 
 // QueueAnswerGraceDuration 返回排队接听 grace 时长。
@@ -134,9 +132,7 @@ type SIPConfig struct {
 	GatewayDevice string `yaml:"gateway_device"`
 	// Trunks 中继列表。
 	Trunks []SIPTrunkConfig `yaml:"trunks"`
-	// PreferWideband 呼入应答优先 G.722（对端 offer 含 PT=9 时）。
-	PreferWideband bool `yaml:"prefer_wideband"`
-	// PreferredCodecs 出局 SDP 编解码顺序（如 G722、PCMA、PCMU、OPUS）。
+	// PreferredCodecs 出局 SDP 编解码集合（PCMA、PCMU）。
 	PreferredCodecs []string `yaml:"preferred_codecs"`
 }
 
@@ -364,9 +360,15 @@ func (c *Config) Validate() error {
 			}
 			for _, codec := range t.Codecs {
 				c := strings.ToUpper(strings.TrimSpace(codec))
-				if c != "" && c != "PCMU" && c != "PCMA" && c != "G722" && c != "OPUS" {
-					errs = append(errs, fmt.Sprintf("sip.trunks[%d].codecs 支持 PCMU/PCMA/G722/OPUS，收到 %q", i, codec))
+				if c != "" && c != "PCMU" && c != "PCMA" {
+					errs = append(errs, fmt.Sprintf("sip.trunks[%d].codecs 仅支持 PCMU/PCMA，收到 %q", i, codec))
 				}
+			}
+		}
+		for _, codec := range c.SIP.PreferredCodecs {
+			name := strings.ToUpper(strings.TrimSpace(codec))
+			if name != "PCMU" && name != "PCMA" {
+				errs = append(errs, "sip.preferred_codecs 仅支持 PCMU/PCMA")
 			}
 		}
 	}

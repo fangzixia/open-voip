@@ -1,0 +1,945 @@
+// Copyright 2024 LiveKit, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package sdp
+
+import (
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"net/netip"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pion/sdp/v3"
+
+	"github.com/livekit/media-sdk"
+	"github.com/livekit/media-sdk/dtmf"
+	"github.com/livekit/media-sdk/rtp"
+	"github.com/livekit/media-sdk/srtp"
+)
+
+var (
+	ErrNoCommonMedia  = errors.New("common audio codec not found")
+	ErrNoCommonCrypto = errors.New("no common encryption profiles")
+)
+
+type Encryption int
+
+const (
+	EncryptionNone Encryption = iota
+	EncryptionAllow
+	EncryptionRequire
+)
+
+type CodecInfo struct {
+	Type  byte
+	Codec media.CodecType
+	Info  media.CodecInfo
+}
+
+func (c *CodecInfo) Equals(c2 *CodecInfo) bool {
+	if c == nil && c2 == nil {
+		return true
+	} else if c == nil || c2 == nil {
+		return false
+	}
+	return c.Type == c2.Type && c.Info.Equals(&c2.Info)
+}
+
+// OfferCodecsWith lists enabled codecs in the set for the SDP offer and assigns payload types to them.
+func OfferCodecsWith(s *media.CodecSet) []CodecInfo {
+	if s == nil {
+		s = media.GlobalCodecs()
+	}
+	const dynamicType = 101
+	codecs := s.ListEnabled()
+	slices.SortFunc(codecs, func(a, b media.CodecType) int {
+		ai, bi := a.Info(), b.Info()
+		if ai.Priority == bi.Priority {
+			return strings.Compare(ai.SDPName(), bi.SDPName())
+		}
+		return bi.Priority - ai.Priority
+	})
+	infos := make([]CodecInfo, 0, len(codecs))
+	nextType := byte(dynamicType)
+	for _, c := range codecs {
+		cinfo := c.Info()
+		for _, ci := range c.Offer(s) {
+			info := CodecInfo{
+				Codec: c,
+				Info:  ci,
+			}
+			if cinfo.RTPIsStatic {
+				info.Type = cinfo.RTPDefType
+			} else {
+				typ := nextType
+				nextType++
+				info.Type = typ
+			}
+			infos = append(infos, info)
+		}
+	}
+	return infos
+}
+
+// OfferCodecs is the same as OfferCodecsWith called with media.GlobalCodecs().
+//
+// Deprecated: use OfferCodecsWith
+func OfferCodecs() []CodecInfo {
+	return OfferCodecsWith(media.GlobalCodecs())
+}
+
+type MediaDesc struct {
+	Audio          []CodecInfo
+	Data           []CodecInfo
+	Unknown        []CodecInfo
+	CryptoProfiles []srtp.Profile
+	Direction      sdp.Direction
+}
+
+func appendCryptoProfiles(attrs []sdp.Attribute, profiles []srtp.Profile) []sdp.Attribute {
+	var buf []byte
+	for _, p := range profiles {
+		buf = buf[:0]
+		buf = append(buf, p.Key...)
+		buf = append(buf, p.Salt...)
+		skey := base64.StdEncoding.WithPadding(base64.StdPadding).EncodeToString(buf)
+		attrs = append(attrs, sdp.Attribute{
+			Key:   "crypto",
+			Value: fmt.Sprintf("%d %s inline:%s", p.Index, p.Profile, skey),
+		})
+	}
+	return attrs
+}
+
+// OfferMediaWith creates a new SDP media description with a given codec set, public IP address and listening port.
+func OfferMediaWith(s *media.CodecSet, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (MediaDesc, *sdp.MediaDescription, error) {
+	opt := &Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+
+	// Static compiler check for frame duration hardcoded below.
+	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
+
+	codecs := OfferCodecsWith(s)
+	attrs := make([]sdp.Attribute, 0, len(codecs)+4)
+	formats := make([]string, 0, len(codecs))
+	var (
+		audioCodecs []CodecInfo
+		dataCodecs  []CodecInfo
+	)
+	for _, codec := range codecs {
+		ci := codec.Info
+		switch codec.Info.Kind {
+		default:
+			continue
+		case media.Audio:
+			audioCodecs = append(audioCodecs, codec)
+		case media.Data:
+			dataCodecs = append(dataCodecs, codec)
+		}
+		styp := strconv.Itoa(int(codec.Type))
+		formats = append(formats, styp)
+		attrs = append(attrs, sdp.Attribute{
+			Key:   "rtpmap",
+			Value: fmt.Sprintf("%s %s", styp, ci.SDPFullName()),
+		})
+		if len(ci.Params) != 0 {
+			attrs = append(attrs, sdp.Attribute{
+				Key:   "fmtp",
+				Value: styp + " " + ci.Params.String(),
+			})
+		}
+	}
+	var cryptoProfiles []srtp.Profile
+	if encrypted != EncryptionNone {
+		var err error
+		cryptoProfiles, err = opt.Srtp.LocalProfiles()
+		if err != nil {
+			return MediaDesc{}, nil, err
+		}
+		attrs = appendCryptoProfiles(attrs, cryptoProfiles)
+	}
+
+	attrs = append(attrs, []sdp.Attribute{
+		{Key: "ptime", Value: "20"},
+		{Key: "sendrecv"},
+	}...)
+
+	proto := "AVP"
+	if encrypted != EncryptionNone {
+		proto = "SAVP"
+	}
+	return MediaDesc{
+			Audio:          audioCodecs,
+			Data:           dataCodecs,
+			CryptoProfiles: cryptoProfiles,
+		}, &sdp.MediaDescription{
+			MediaName: sdp.MediaName{
+				Media:   "audio",
+				Port:    sdp.RangedPort{Value: rtpListenerPort},
+				Protos:  []string{"RTP", proto},
+				Formats: formats,
+			},
+			Attributes: attrs,
+		}, nil
+}
+
+// OfferMedia creates a new SDP media description.
+//
+// Deprecated: use OfferMediaWith
+func OfferMedia(rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (MediaDesc, *sdp.MediaDescription, error) {
+	return OfferMediaWith(media.GlobalCodecs(), rtpListenerPort, encrypted, opts...)
+}
+
+// AnswerMedia creates a new SDP media description for an answer.
+func AnswerMedia(rtpListenerPort int, audio *AudioConfig, crypt *srtp.Profile) *sdp.MediaDescription {
+	// Static compiler check for frame duration hardcoded below.
+	var _ = [1]struct{}{}[20*time.Millisecond-rtp.DefFrameDur]
+
+	formats := make([]string, 0, 2)
+	attrs := make([]sdp.Attribute, 0, 7)
+
+	ac := audio.Info
+	formats = append(formats, strconv.Itoa(int(audio.Type)))
+	attrs = append(attrs, sdp.Attribute{
+		Key: "rtpmap", Value: fmt.Sprintf("%d %s", audio.Type, ac.SDPFullName()),
+	})
+	if len(ac.Params) != 0 {
+		attrs = append(attrs, sdp.Attribute{
+			Key: "fmtp", Value: fmt.Sprintf("%d %s", audio.Type, ac.Params.String()),
+		})
+	}
+	if d := audio.DTMF; d != nil {
+		formats = append(formats, strconv.Itoa(int(d.Type)))
+		attrs = append(attrs, sdp.Attribute{
+			Key: "rtpmap", Value: fmt.Sprintf("%d %s", d.Type, d.Info.SDPFullName()),
+		})
+		if len(d.Info.Params) != 0 {
+			attrs = append(attrs, sdp.Attribute{
+				Key: "fmtp", Value: fmt.Sprintf("%d %s", d.Type, d.Info.Params.String()),
+			})
+		}
+	}
+	proto := "AVP"
+	if crypt != nil {
+		proto = "SAVP"
+		attrs = appendCryptoProfiles(attrs, []srtp.Profile{*crypt})
+	}
+	attrs = append(attrs, []sdp.Attribute{
+		{Key: "ptime", Value: "20"},
+		{Key: "sendrecv"},
+	}...)
+	return &sdp.MediaDescription{
+		MediaName: sdp.MediaName{
+			Media:   "audio",
+			Port:    sdp.RangedPort{Value: rtpListenerPort},
+			Protos:  []string{"RTP", proto},
+			Formats: formats,
+		},
+		Attributes: attrs,
+	}
+}
+
+type Description struct {
+	SDP  sdp.SessionDescription
+	Addr netip.AddrPort
+	MediaDesc
+}
+
+type Offer Description
+
+type Answer Description
+
+type Options struct {
+	Srtp srtp.Options
+}
+
+type NegotiationOption func(*Options)
+
+func WithLocalProfiles(profiles []srtp.Profile) NegotiationOption {
+	return func(o *Options) {
+		if len(profiles) != 0 {
+			o.Srtp.Profiles = profiles
+		}
+	}
+}
+
+// NewOfferWith creates a new SDP offer with a given codec set, public IP address and listening port.
+func NewOfferWith(s *media.CodecSet, publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (*Offer, error) {
+	sessId := rand.Uint64() // TODO: do we need to track these?
+
+	m, mediaDesc, err := OfferMediaWith(s, rtpListenerPort, encrypted, opts...)
+	if err != nil {
+		return nil, err
+	}
+	offer := sdp.SessionDescription{
+		Version: 0,
+		Origin: sdp.Origin{
+			Username:       "-",
+			SessionID:      sessId,
+			SessionVersion: sessId,
+			NetworkType:    "IN",
+			AddressType:    "IP4",
+			UnicastAddress: publicIp.String(),
+		},
+		SessionName: "LiveKit",
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address:     &sdp.Address{Address: publicIp.String()},
+		},
+		TimeDescriptions: []sdp.TimeDescription{
+			{
+				Timing: sdp.Timing{
+					StartTime: 0,
+					StopTime:  0,
+				},
+			},
+		},
+		MediaDescriptions: []*sdp.MediaDescription{mediaDesc},
+	}
+	return &Offer{
+		SDP:       offer,
+		Addr:      netip.AddrPortFrom(publicIp, uint16(rtpListenerPort)),
+		MediaDesc: m,
+	}, nil
+}
+
+// NewOffer creates a new SDP offer.
+//
+// Deprecated: use NewOfferWith
+func NewOffer(publicIp netip.Addr, rtpListenerPort int, encrypted Encryption, opts ...NegotiationOption) (*Offer, error) {
+	return NewOfferWith(media.GlobalCodecs(), publicIp, rtpListenerPort, encrypted, opts...)
+}
+
+// Answer generates an SDP answer for an offer.
+func (d *Offer) Answer(publicIp netip.Addr, rtpListenerPort int, enc Encryption, opts ...NegotiationOption) (*Answer, *MediaConfig, error) {
+	opt := &Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	audio, err := SelectAudio(d.MediaDesc, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var (
+		sconf *srtp.Config
+		sprof *srtp.Profile
+	)
+	if len(d.CryptoProfiles) != 0 && enc != EncryptionNone {
+		answer, err := opt.Srtp.LocalProfiles()
+		if err != nil {
+			return nil, nil, err
+		}
+		sconf, sprof, err = SelectCrypto(d.CryptoProfiles, answer, true)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if sprof == nil && enc == EncryptionRequire {
+		return nil, nil, ErrNoCommonCrypto
+	}
+
+	mediaDesc := AnswerMedia(rtpListenerPort, audio, sprof)
+	answer := sdp.SessionDescription{
+		Version: 0,
+		Origin: sdp.Origin{
+			Username:       "-",
+			SessionID:      d.SDP.Origin.SessionID,
+			SessionVersion: d.SDP.Origin.SessionID + 2,
+			NetworkType:    "IN",
+			AddressType:    "IP4",
+			UnicastAddress: publicIp.String(),
+		},
+		SessionName: "LiveKit",
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address:     &sdp.Address{Address: publicIp.String()},
+		},
+		TimeDescriptions: []sdp.TimeDescription{
+			{
+				Timing: sdp.Timing{
+					StartTime: 0,
+					StopTime:  0,
+				},
+			},
+		},
+		MediaDescriptions: []*sdp.MediaDescription{mediaDesc},
+	}
+	src := netip.AddrPortFrom(publicIp, uint16(rtpListenerPort))
+	var dataCodecs []CodecInfo
+	if d := audio.DTMF; d != nil {
+		dataCodecs = []CodecInfo{*d}
+	}
+	return &Answer{
+			SDP:  answer,
+			Addr: src,
+			MediaDesc: MediaDesc{
+				Audio: []CodecInfo{audio.CodecInfo},
+				Data:  dataCodecs,
+			},
+		}, &MediaConfig{
+			Local:         src,
+			Remote:        d.Addr,
+			Audio:         *audio,
+			Crypto:        sconf,
+			PeerDirection: d.Direction,
+		}, nil
+}
+
+// Apply the SDP offer to generate the final media config.
+func (d *Answer) Apply(offer *Offer, enc Encryption) (*MediaConfig, error) {
+	mc, _, err := d.apply(offer, enc, false)
+	return mc, err
+}
+
+// Applies the answer to the offer and returns the negotiated MediaConfig and the offerer's local SDP bytes.
+func (d *Answer) ApplyWithLocal(offer *Offer, enc Encryption) (*MediaConfig, *sdp.SessionDescription, error) {
+	return d.apply(offer, enc, true)
+}
+
+func (d *Answer) apply(offer *Offer, enc Encryption, generateLocalSDP bool) (*MediaConfig, *sdp.SessionDescription, error) {
+	audio, err := SelectAudio(d.MediaDesc, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	var sconf *srtp.Config
+	var sprof *srtp.Profile
+	if len(d.CryptoProfiles) != 0 && enc != EncryptionNone {
+		sconf, sprof, err = SelectCrypto(offer.CryptoProfiles, d.CryptoProfiles, false)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if sconf == nil && enc == EncryptionRequire {
+		return nil, nil, ErrNoCommonCrypto
+	}
+	mc := &MediaConfig{
+		Local:         offer.Addr,
+		Remote:        d.Addr,
+		Audio:         *audio,
+		Crypto:        sconf,
+		PeerDirection: d.Direction,
+	}
+
+	if !generateLocalSDP {
+		return mc, nil, nil
+	}
+	localSDP, err := buildLocalSDP(offer.SDP.Origin.SessionID, offer.Addr, audio, sprof)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mc, localSDP, nil
+}
+
+// buildLocalSDP produces the offerer's local SDP (negotiated view, our connection).
+func buildLocalSDP(sessionID uint64, local netip.AddrPort, audio *AudioConfig, sprof *srtp.Profile) (*sdp.SessionDescription, error) {
+	if sessionID == 0 {
+		sessionID = rand.Uint64()
+	}
+	addrStr := local.Addr().String()
+	portVal := int(local.Port())
+	mediaDesc := AnswerMedia(portVal, audio, sprof)
+	s := &sdp.SessionDescription{
+		Version: 0,
+		Origin: sdp.Origin{
+			Username:       "-",
+			SessionID:      sessionID,
+			SessionVersion: sessionID + 4,
+			NetworkType:    "IN",
+			AddressType:    "IP4",
+			UnicastAddress: addrStr,
+		},
+		SessionName: "LiveKit",
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address:     &sdp.Address{Address: addrStr},
+		},
+		TimeDescriptions: []sdp.TimeDescription{
+			{Timing: sdp.Timing{StartTime: 0, StopTime: 0}},
+		},
+		MediaDescriptions: []*sdp.MediaDescription{mediaDesc},
+	}
+	return s, nil
+}
+
+// ParseWith parses the SDP description using the codecs from the codec set.
+//
+// This is a helper that is called by both ParseOfferWith and ParseAnswerWith.
+func ParseWith(s *media.CodecSet, data []byte) (*Description, error) {
+	offer := new(Description)
+	if err := offer.SDP.Unmarshal(data); err != nil {
+		return nil, err
+	}
+	audio := GetAudio(&offer.SDP)
+	if audio == nil {
+		return nil, errors.New("no audio in sdp")
+	}
+	var err error
+	offer.Addr, err = GetAudioDest(&offer.SDP, audio)
+	if err != nil {
+		return nil, err
+	} else if !offer.Addr.IsValid() || offer.Addr.Port() == 0 {
+		return nil, fmt.Errorf("invalid audio address %q", offer.Addr)
+	}
+	m, err := ParseMediaWith(s, audio)
+	if err != nil {
+		return nil, err
+	}
+	offer.MediaDesc = *m
+
+	dir := sdp.DirectionSendRecv
+	for _, key := range []string{"sendrecv", "sendonly", "recvonly", "inactive"} {
+		if _, ok := offer.SDP.Attribute(key); ok {
+			dir, _ = sdp.NewDirection(key)
+			break
+		}
+	}
+	if m.Direction != 0 {
+		dir = m.Direction
+	}
+	offer.MediaDesc.Direction = dir
+
+	return offer, nil
+}
+
+// ParseOfferWith parses the SDP offer using the codecs from the codec set.
+func ParseOfferWith(s *media.CodecSet, data []byte) (*Offer, error) {
+	d, err := ParseWith(s, data)
+	if err != nil {
+		return nil, err
+	}
+	return (*Offer)(d), nil
+}
+
+// ParseAnswerWith parses the SDP answer using the codecs from the codec set.
+func ParseAnswerWith(s *media.CodecSet, data []byte) (*Answer, error) {
+	d, err := ParseWith(s, data)
+	if err != nil {
+		return nil, err
+	}
+	return (*Answer)(d), nil
+}
+
+// Parse the SDP description.
+// This is a helper that is called by both ParseOffer and ParseAnswer.
+//
+// Deprecated: use ParseWith
+func Parse(data []byte) (*Description, error) {
+	return ParseWith(media.GlobalCodecs(), data)
+}
+
+// ParseOffer parses the SDP offer.
+//
+// Deprecated: use ParseOfferWith
+func ParseOffer(data []byte) (*Offer, error) {
+	return ParseOfferWith(media.GlobalCodecs(), data)
+}
+
+// ParseAnswer parses the SDP answer.
+//
+// Deprecated: use ParseAnswerWith
+func ParseAnswer(data []byte) (*Answer, error) {
+	return ParseAnswerWith(media.GlobalCodecs(), data)
+}
+
+// Returns valid lifetime, counted in packets encrypted using the associated key.
+func parseLifetime(s string) (uint64, error) {
+	// See RFC4568, section 6.1
+	s = strings.TrimSpace(s)
+
+	// Possible format 2^N (and only that)
+	if strings.HasPrefix(s, "2^") {
+		exp, err := strconv.ParseUint(s[2:], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid exponent in 2^%s: %v", s[2:], err)
+		}
+		if exp > 63 {
+			return 0, fmt.Errorf("exponent too large: 2^%d", exp)
+		}
+		return 1 << exp, nil
+	}
+
+	// Otherwise, parse as decimal integer
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid lifetime value %q: %v", s, err)
+	}
+	if val == 0 {
+		return 0, fmt.Errorf("lifetime must be positive")
+	}
+	return val, nil
+}
+
+// Returns a slice of <= 8 bytes with the MKI value encoded in big-endian.
+func parseMKI(s string) ([]byte, error) {
+	// See RFC4568, section 6.1
+	s = strings.TrimSpace(s)
+
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("MKI must be in format 'value:length', got %q", s)
+	}
+
+	value, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid MKI value %q: %v", parts[0], err)
+	}
+
+	length, err := strconv.ParseUint(parts[1], 10, 8)
+	if err != nil {
+		return nil, fmt.Errorf("invalid MKI length %q: %v", parts[1], err)
+	}
+	if length == 0 || length > 8 {
+		return nil, fmt.Errorf("supported MKI length between 1 and 8 bytes, got %d", length)
+	}
+	maxValue := uint64(1) << (length * 8)
+	if value >= maxValue {
+		return nil, fmt.Errorf("value %d is too large for %d bytes", value, length)
+	}
+
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, value)
+	mki := buf[8-length:]
+
+	return mki, nil
+}
+
+func parseSRTPProfile(val string) (*srtp.Profile, error) {
+	val = strings.TrimSpace(val)
+	sub := strings.SplitN(val, " ", 3)
+	if len(sub) != 3 {
+		return nil, nil // ignore
+	}
+	sind, prof, skey := sub[0], srtp.ProtectionProfile(sub[1]), sub[2]
+	ind, err := strconv.Atoi(sind)
+	if err != nil {
+		return nil, err
+	}
+	var ok bool
+	skey, ok = strings.CutPrefix(skey, "inline:")
+	if !ok {
+		return nil, nil // ignore
+	}
+
+	if strings.ContainsAny(skey, " \t") {
+		return nil, nil // RFC 4568 session-parameter list not supported; ignore
+	}
+
+	// Split by '|' per RFC 4568 6.1
+	parts := strings.Split(skey, "|")
+	keyMaterial := parts[0] // First part is always the base64-encoded key+salt
+
+	keys, err := base64.RawStdEncoding.DecodeString(keyMaterial)
+	if err != nil {
+		// Fallback to padded encoding if raw fails
+		if keys, err = base64.StdEncoding.DecodeString(keyMaterial); err != nil {
+			return nil, fmt.Errorf("cannot parse crypto key %q: %v", keyMaterial, err)
+		}
+	}
+
+	// Parse optional lifetime parameter (if present)
+	lifetime := uint64(0)
+	if len(parts) > 1 && parts[1] != "" {
+		lifetime, err = parseLifetime(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid lifetime parameter %q: %v", parts[1], err)
+		}
+	}
+
+	var mki []byte
+	if len(parts) > 2 && parts[2] != "" {
+		mki, err = parseMKI(parts[2])
+		if err != nil {
+			return nil, fmt.Errorf("invalid MKI parameter %q: %v", parts[2], err)
+		}
+	}
+
+	var salt []byte
+	if sp, err := prof.Parse(); err == nil {
+		keyLen, err := sp.KeyLen()
+		if err != nil {
+			return nil, err
+		}
+		if keyLen > len(keys) {
+			return nil, fmt.Errorf("parsed key length is greater than key buffer size: keyLen: %d; len(keys): %d", keyLen, len(keys))
+		}
+		keys, salt = keys[:keyLen], keys[keyLen:]
+	}
+	return &srtp.Profile{
+		Index:    ind,
+		Profile:  prof,
+		Key:      keys,
+		Salt:     salt,
+		MKI:      mki,
+		Lifetime: lifetime,
+	}, nil
+}
+
+// ParseMediaWith parses SDP media description based on the given codec set.
+func ParseMediaWith(s *media.CodecSet, d *sdp.MediaDescription) (*MediaDesc, error) {
+	type codecInfo struct {
+		Type   int
+		Name   string
+		Config media.CodecConfig
+	}
+	var (
+		out    MediaDesc
+		codecs []*codecInfo
+	)
+	getCodec := func(typ int) *codecInfo {
+		for _, c := range codecs {
+			if c.Type == typ {
+				return c
+			}
+		}
+		c := &codecInfo{Type: typ}
+		codecs = append(codecs, c)
+		return c
+	}
+	for _, m := range d.Attributes {
+		switch m.Key {
+		case "rtpmap":
+			sub := strings.SplitN(m.Value, " ", 2)
+			if len(sub) != 2 {
+				continue
+			}
+			typ, err := strconv.Atoi(sub[0])
+			if err != nil {
+				continue
+			}
+			sname := strings.SplitN(sub[1], "/", 4)
+			if len(sname) < 2 || len(sname) > 3 {
+				continue
+			}
+			name := sname[0]
+			rate, err := strconv.Atoi(sname[1])
+			if err != nil {
+				continue
+			}
+			channels := 0
+			if len(sname) > 2 {
+				channels, err = strconv.Atoi(sname[2])
+				if err != nil {
+					continue
+				}
+			}
+			c := getCodec(typ)
+			c.Name = name
+			c.Config.SampleRate = rate
+			c.Config.Channels = channels
+		case "fmtp":
+			sub := strings.SplitN(m.Value, " ", 2)
+			if len(sub) != 2 {
+				continue
+			}
+			typ, err := strconv.Atoi(sub[0])
+			if err != nil {
+				continue
+			}
+			c := getCodec(typ)
+			for _, par := range strings.Split(sub[1], ";") {
+				p := media.CodecParam{Key: par}
+				if i := strings.IndexByte(par, '='); i >= 0 {
+					p.Key = par[:i]
+					p.Val = par[i+1:]
+				}
+				c.Config.Params = append(c.Config.Params, p)
+			}
+		case "crypto":
+			p, err := parseSRTPProfile(m.Value)
+			if err != nil {
+				return nil, fmt.Errorf("cannot parse srtp profile %q: %v", m.Value, err)
+			} else if p == nil {
+				continue
+			}
+			out.CryptoProfiles = append(out.CryptoProfiles, *p)
+		case "sendrecv", "sendonly", "recvonly", "inactive":
+			dir, err := sdp.NewDirection(m.Key)
+			if err != nil {
+				continue
+			}
+			out.Direction = dir
+		}
+	}
+	for _, f := range d.MediaName.Formats {
+		typ, err := strconv.Atoi(f)
+		if err != nil {
+			continue
+		}
+		c := getCodec(typ)
+		_ = c // just add
+	}
+	for _, ci := range codecs {
+		var codec media.CodecType
+		if ci.Name != "" {
+			codec = CodecByNameWith(s, ci.Name)
+		} else {
+			codec = rtp.CodecByPayloadType(byte(ci.Type))
+			if !s.IsEnabled(codec) {
+				codec = nil
+			}
+		}
+		var info media.CodecInfo
+		if codec != nil {
+			var ok bool
+			info, _, ok = codec.Supports(ci.Config)
+			if !ok {
+				codec = nil
+			}
+		}
+		ci := CodecInfo{
+			Type:  byte(ci.Type),
+			Codec: codec,
+			Info:  info,
+		}
+		switch info.Kind {
+		case media.Audio:
+			out.Audio = append(out.Audio, ci)
+		case media.Data:
+			out.Data = append(out.Data, ci)
+		default:
+			out.Unknown = append(out.Unknown, ci)
+		}
+	}
+	return &out, nil
+}
+
+// ParseMedia parses SDP media description.
+//
+// Deprecated: use ParseMediaWith
+func ParseMedia(d *sdp.MediaDescription) (*MediaDesc, error) {
+	return ParseMediaWith(media.GlobalCodecs(), d)
+}
+
+// MediaConfig is the canonical representation of the negotiated session.
+type MediaConfig struct {
+	Local         netip.AddrPort
+	Remote        netip.AddrPort
+	Audio         AudioConfig
+	Crypto        *srtp.Config
+	PeerDirection sdp.Direction // RFC 3264, offer direction for server, answer direction for client
+}
+
+type AudioConfig struct {
+	CodecInfo
+	DTMF *CodecInfo
+}
+
+func SelectAudio(desc MediaDesc, answer bool) (*AudioConfig, error) {
+	var (
+		priority   int
+		audioCodec *CodecInfo
+	)
+	for _, c := range desc.Audio {
+		if audioCodec == nil || c.Info.Priority > priority {
+			audioCodec = &c
+			priority = c.Info.Priority
+		}
+		if answer {
+			break
+		}
+	}
+	if audioCodec == nil {
+		return nil, ErrNoCommonMedia
+	}
+	a := &AudioConfig{
+		CodecInfo: *audioCodec,
+	}
+	di := slices.IndexFunc(desc.Data, func(d CodecInfo) bool {
+		return d.Info.Name == dtmf.SDPNameOnly && d.Info.RTPClockRate == a.Info.RTPClockRate
+	})
+	if di < 0 {
+		maxRate := -1
+		for i, d := range desc.Data {
+			if d.Info.Name != dtmf.SDPNameOnly {
+				continue
+			}
+			if d.Info.RTPClockRate > a.Info.RTPClockRate {
+				continue
+			}
+			if maxRate < 0 || d.Info.RTPClockRate > maxRate {
+				maxRate = d.Info.RTPClockRate
+				di = i
+			}
+		}
+	}
+	if di >= 0 {
+		a.DTMF = new(desc.Data[di])
+	}
+	return a, nil
+}
+
+func SelectCrypto(offer, answer []srtp.Profile, swap bool) (*srtp.Config, *srtp.Profile, error) {
+	if len(offer) == 0 {
+		return nil, nil, nil
+	}
+	for _, ans := range answer {
+		sp, err := ans.Profile.Parse()
+		if err != nil {
+			continue
+		}
+		i := slices.IndexFunc(offer, func(off srtp.Profile) bool {
+			return off.Profile == ans.Profile
+		})
+		if i >= 0 {
+			off := offer[i]
+			c := &srtp.Config{
+				Keys: srtp.SessionKeys{
+					LocalMasterKey:   off.Key,
+					LocalMasterSalt:  off.Salt,
+					RemoteMasterKey:  ans.Key,
+					RemoteMasterSalt: ans.Salt,
+				},
+				Profile: sp,
+			}
+			if swap {
+				c.Keys.LocalMasterKey, c.Keys.RemoteMasterKey = c.Keys.RemoteMasterKey, c.Keys.LocalMasterKey
+				c.Keys.LocalMasterSalt, c.Keys.RemoteMasterSalt = c.Keys.RemoteMasterSalt, c.Keys.LocalMasterSalt
+			}
+
+			// Add MKI to configuration
+			localMKI := off.MKI
+			remoteMKI := ans.MKI
+			if swap {
+				localMKI, remoteMKI = remoteMKI, localMKI
+			}
+			if len(localMKI) > 0 {
+				c.LocalOptions = append(c.LocalOptions, srtp.MasterKeyIndicator(localMKI))
+			}
+			if len(remoteMKI) > 0 {
+				c.RemoteOptions = append(c.RemoteOptions, srtp.MasterKeyIndicator(remoteMKI))
+			}
+
+			prof := &off
+			if swap {
+				prof = &ans
+				// Echo the cipher suite tag of the offer, in the answer
+				prof.Index = off.Index
+			}
+			return c, prof, nil
+		}
+	}
+	return nil, nil, nil
+}

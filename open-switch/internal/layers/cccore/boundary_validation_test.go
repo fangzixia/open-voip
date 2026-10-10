@@ -14,6 +14,12 @@ func TestQueueTechnicalConfigurationAuthority(t *testing.T) {
 			{ID: q2, Name: "overflow"},
 		}}
 		normalizeBundle(&bundle)
+		if profile != "narrowband" {
+			if err := validateBundle(bundle); err == nil {
+				t.Fatalf("unsupported profile accepted: %s", profile)
+			}
+			continue
+		}
 		if err := validateBundle(bundle); err != nil {
 			t.Fatalf("valid config %s: %v", profile, err)
 		}

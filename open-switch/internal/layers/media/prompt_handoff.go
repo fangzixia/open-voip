@@ -19,20 +19,6 @@ func durationToFadeFrames(d time.Duration) int {
 	return n
 }
 
-func scaleMulawFrame(mulaw []byte, gain int32) []byte {
-	if gain >= 32767 || len(mulaw) == 0 {
-		return mulaw
-	}
-	if gain <= 0 {
-		return make([]byte, len(mulaw))
-	}
-	pcm := pcmuPayloadToPCM(mulaw)
-	for i := range pcm {
-		pcm[i] = int16(int32(pcm[i]) * gain / 32767)
-	}
-	return pcmToG711(pcm, 0)
-}
-
 func (r *room) clearHandoffLocked() {
 	r.connectGraceUntil = time.Time{}
 	r.promptStopAt = time.Time{}
@@ -61,45 +47,13 @@ func (r *room) mediaForwardAllowed(from, to string) bool {
 	if !r.canForward(from, to) {
 		return false
 	}
-	r.mu.RLock()
 	grace := r.connectGraceUntil
-	r.mu.RUnlock()
 	if grace.IsZero() || !time.Now().Before(grace) {
 		return true
 	}
 	fromRole := r.legRole(from)
 	toRole := r.legRole(to)
 	return fromRole != dto.LegRoleAgent || !isCustomerRole(toRole)
-}
-
-// promptGainAndContinue 在 handoff/淡出阶段计算帧增益；cont=false 表示本帧为最后一帧。
-func (r *room) promptGainAndContinue(seq uint64) (gain int32, cont bool) {
-	if r.promptSeq.Load() != seq {
-		return 0, false
-	}
-	r.mu.Lock()
-	now := time.Now()
-	if r.promptFadeLeft > 0 {
-		left := r.promptFadeLeft
-		r.promptFadeLeft--
-		total := r.promptFadeTotal
-		if total < 1 {
-			total = 1
-		}
-		gain := int32(left) * 32767 / int32(total)
-		last := left == 1
-		if last {
-			r.promptSeq.Add(1)
-			r.clearHandoffLocked()
-		}
-		r.mu.Unlock()
-		return gain, !last
-	}
-	if !r.promptStopAt.IsZero() && !now.Before(r.promptStopAt) && r.promptFadeTotal > 0 {
-		r.promptFadeLeft = r.promptFadeTotal
-	}
-	r.mu.Unlock()
-	return 32767, true
 }
 
 func (s *Service) beginPromptFade(callID string, r *room, stopAt time.Time) {

@@ -87,8 +87,11 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 	logSDP("send", "offer", callID, sdp)
 	slog.Info("SIP 出局 offer 编解码",
 		"call_id", callID, "leg_id", legID,
-		"offer_codecs", strings.Join(codecs, ","),
-		"prefer_wideband", u.cfg.PreferWideband)
+		"offer_codecs", strings.Join(codecs, ","))
+	if sdp == "" {
+		rtpSess.close()
+		return errs.Unprocessable("出局中继未配置 PCMA/PCMU", "SIP_CODEC_UNSUPPORTED")
+	}
 	if u.dlgCli == nil {
 		rtpSess.close()
 		return errs.Unprocessable("SIP 未就绪", errs.CodeSIPDisabled)
@@ -132,6 +135,7 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 		}
 		u.putDialog(sess)
 
+		negotiated := false
 		err = dlg.WaitAnswer(waitCtx, sipgo.AnswerOptions{
 			Username: user,
 			Password: pass,
@@ -146,8 +150,20 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 						return perr
 					}
 				}
+				if res.IsSuccess() && len(res.Body()) == 0 && !negotiated {
+					_ = dlg.Ack(ctx)
+					_ = dlg.Bye(ctx)
+					return errs.Unprocessable("SIP 应答缺少音频协商", "SIP_CODEC_UNSUPPORTED")
+				}
 				if (res.StatusCode == 183 || res.StatusCode == 180 || res.IsSuccess()) && len(res.Body()) > 0 {
-					applyRemoteSDP(rtpSess, parseSDP(string(res.Body())))
+					if err := applyRemoteSDP(rtpSess, parseSDP(string(res.Body()))); err != nil {
+						if res.IsSuccess() {
+							_ = dlg.Ack(ctx)
+							_ = dlg.Bye(ctx)
+						}
+						return errs.Unprocessable(err.Error(), "SIP_CODEC_UNSUPPORTED")
+					}
+					negotiated = true
 				}
 				return nil
 			},
@@ -177,6 +193,9 @@ func (u *sipUA) originate(ctx context.Context, callID, legID, dial, trunkID stri
 		var dres *sipgo.ErrDialogResponse
 		if !errors.As(err, &dres) || dres == nil || dres.Res == nil {
 			rtpSess.close()
+			if e, ok := err.(*errs.APIError); ok {
+				return e
+			}
 			return errs.Unprocessable("SIP 对端无应答或超时", "SIP_TIMEOUT")
 		}
 		code := dres.Res.StatusCode
@@ -329,8 +348,8 @@ func (u *sipUA) offerCodecs(tr *config.SIPTrunkConfig) []string {
 	if tr != nil && len(tr.Codecs) > 0 {
 		return tr.Codecs
 	}
-	if len(u.cfg.Trunks) > 0 && len(u.cfg.Trunks[0].Codecs) > 0 {
-		return u.cfg.Trunks[0].Codecs
+	if len(u.cfg.PreferredCodecs) > 0 {
+		return u.cfg.PreferredCodecs
 	}
 	return []string{"PCMU", "PCMA"}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm/logger"
+	"open-call/internal/datetime"
 	"open-call/internal/integration/switchapi"
 	"open-call/internal/store"
 	"open-call/internal/store/migrate"
@@ -30,7 +31,7 @@ func TestProjectCsatScored(t *testing.T) {
 	ev := switchapi.Event{
 		ID:        42,
 		Type:      "ivr.input_collected",
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		CreatedAt: datetime.Format(time.Now()),
 		Payload:   map[string]any{"call_id": "00000000-0000-4000-8000-000000000001", "input": "4", "result_key": "csat", "agent_id": "00000000-0000-4000-8000-000000000002"},
 	}
 	if err := projectSwitchEvent(context.Background(), db, ev); err != nil {

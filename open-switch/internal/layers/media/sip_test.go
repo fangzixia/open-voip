@@ -22,6 +22,20 @@ func TestExtractSIPUser(t *testing.T) {
 	}
 }
 
+const testSDPHeader = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+
+func TestSDPAudioScopeDoesNotUseVideoAddressOrCodec(t *testing.T) {
+	media := parseSDP(testSDPHeader + "m=audio 9000 RTP/AVP 8\r\nc=IN IP4 192.0.2.1\r\na=rtpmap:8 PCMA/8000\r\nm=video 9002 RTP/AVP 8\r\nc=IN IP4 192.0.2.2\r\na=rtpmap:8 VP8/90000\r\n")
+	if media.IP != "192.0.2.1" || media.Port != 9000 || !media.validG711PT(8) {
+		t.Fatalf("video attributes corrupted audio negotiation: %+v", media)
+	}
+	for _, body := range []string{"m=audio 9000 RTP/AVP 0\r\n", testSDPHeader + "m=audio 9000 RTP/AVP 0\r\nm=audio 9002 RTP/AVP 8\r\n"} {
+		if parseSDP(body).hasAudioCodec() {
+			t.Fatal("malformed or ambiguous SDP accepted")
+		}
+	}
+}
+
 func TestParseAndBuildSDP(t *testing.T) {
 	body := "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 192.168.2.111\r\nt=0 0\r\nm=audio 4000 RTP/AVP 0 8 101\r\n"
 	m := parseSDP(body)
@@ -39,7 +53,7 @@ func TestParseAndBuildSDP(t *testing.T) {
 	if !strings.Contains(sdp, "PCMA/8000") || !strings.Contains(sdp, "PCMU/8000") {
 		t.Fatalf("expected both codecs: %s", sdp)
 	}
-	pcmaOnly := "m=audio 4000 RTP/AVP 8 101\r\nc=IN IP4 1.1.1.1\r\n"
+	pcmaOnly := testSDPHeader + "m=audio 4000 RTP/AVP 8 101\r\nc=IN IP4 1.1.1.1\r\n"
 	if parseSDP(pcmaOnly).preferG711() != 8 {
 		t.Fatal("expected PCMA")
 	}
@@ -130,30 +144,30 @@ func TestRequire100rel(t *testing.T) {
 }
 
 func TestBuildAnswerSDPSubset(t *testing.T) {
-	offerPCMA := parseSDP("m=audio 4000 RTP/AVP 8 0 101\r\nc=IN IP4 1.1.1.1\r\n")
-	ans := buildAnswerSDP("127.0.0.1", 20000, offerPCMA, false, false)
+	offerPCMA := parseSDP(testSDPHeader + "m=audio 4000 RTP/AVP 8 0 101\r\nc=IN IP4 1.1.1.1\r\n")
+	ans := buildAnswerSDP("127.0.0.1", 20000, offerPCMA)
 	if !strings.Contains(ans, "m=audio 20000 RTP/AVP 8") {
 		t.Fatalf("expected PCMA when listed first in offer: %s", ans)
 	}
 	if strings.Contains(ans, "rtpmap:0") {
 		t.Fatal("answer must not include unselected PCMU")
 	}
-	offerPCMU := parseSDP("m=audio 4000 RTP/AVP 0 8 101\r\nc=IN IP4 1.1.1.1\r\n")
-	ans0 := buildAnswerSDP("127.0.0.1", 20001, offerPCMU, false, false)
+	offerPCMU := parseSDP(testSDPHeader + "m=audio 4000 RTP/AVP 0 8 101\r\nc=IN IP4 1.1.1.1\r\n")
+	ans0 := buildAnswerSDP("127.0.0.1", 20001, offerPCMU)
 	if !strings.Contains(ans0, "m=audio 20001 RTP/AVP 0 101") {
 		t.Fatalf("expected single PCMU + 101: %s", ans0)
 	}
 	if strings.Contains(ans0, "PCMA/8000") {
 		t.Fatal("answer must not include unselected PCMA")
 	}
-	pcma := parseSDP("m=audio 4000 RTP/AVP 8\r\n")
-	ans8 := buildAnswerSDP("127.0.0.1", 20001, pcma, false, false)
+	pcma := parseSDP(testSDPHeader + "m=audio 4000 RTP/AVP 8\r\n")
+	ans8 := buildAnswerSDP("127.0.0.1", 20001, pcma)
 	if !strings.Contains(ans8, "RTP/AVP 8") || strings.Contains(ans8, "rtpmap:0") {
 		t.Fatalf("pcma answer: %s", ans8)
 	}
-	ans722 := buildAnswerSDP("127.0.0.1", 1, parseSDP("m=audio 9 RTP/AVP 9\r\n"), true, false)
-	if !strings.Contains(ans722, "G722") {
-		t.Fatalf("expected G722 answer: %s", ans722)
+	ans722 := buildAnswerSDP("127.0.0.1", 1, parseSDP(testSDPHeader+"m=audio 9 RTP/AVP 9\r\n"))
+	if ans722 != "" {
+		t.Fatalf("unsupported wideband offer must fail: %s", ans722)
 	}
 }
 

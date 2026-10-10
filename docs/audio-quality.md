@@ -1,41 +1,50 @@
-# 通话音质档位（窄带 PSTN）
+# 通话与录音媒体契约
 
-产品收敛为 **无视频、SIP/WebRTC 混音房间均为 G.711 @ 8 kHz（PCMA/PCMU，ptime 20 ms）**。
+普通电话和音频混音房间使用 PCMA/PCMU、8 kHz，统一输出 160 样本/20 ms。SIP 使用实际协商的静态 PT 0/8；网页坐席使用 PCMU/8000。不通过修改 PT 冒充转码。不支持的协商明确失败，未知动态 PT 不猜测为 Opus。独立视频/WebRTC 的既有能力保留，宽带混音不在本期能力范围内。
 
-| 档位 | 配置值 | SIP | WebRTC 坐席/AI |
-|------|--------|-----|----------------|
-| 标准窄带 | `narrowband`（唯一推荐） | PCMA/PCMU @ 8 kHz | PCMU/8000 |
+## 统一实时管线
 
-`wideband` / `hd_webrtc` 在媒体层不再扩展能力；队列配置应使用 `narrowband`。
+收包校验 → LiveKit jitter 排序与缺包等待 → zaf/g711 解码及 SpanDSP PLC → 有状态 libsoxr 转换 → LiveKit mixer 房间时钟 → 按接收者排除自身及角色路由 → 实际协商编码 → 有界发送队列。
 
-## 录音（FS 式 tap）
+SIP、WebRTC、应用 PCM、IVR、等待音和素材播放共享房间时钟。`BridgeLegs` 只改变路由，每个音频接收目标只有一个输出生产者。独立视频的原始视频与音频轨道仍按其既有协议转发。
 
-| 文件 | 内容 |
-|------|------|
-| 主录音 `callId-recId.wav` | **客户 leg** 听到的混音（`dispatchMixTick` 的 `mixed`，与实时听感一致） |
-| 分轨 `...-leg-<id>.wav` | 该 leg **上行 decode 后**顺序 PCM |
-| 采样率 | **8000 Hz**（`record_engine=tap`，`record_sample_rate_hz=8000`） |
+- 输入支持 10/20/30/40 ms。内部以 64 位相对采样位置跟踪时间，RTP 时间戳差按有符号回绕计算。
+- 每流分别拥有排序、PLC、重采样和时间状态。SSRC 切换、序号重启、重新协商、离房显式重置或释放。
+- 静音由实际收到的样本表示；缺失由样本位置是否存在判断。只有缺失区间调用 PLC。
+- 默认总播放储备约 60 ms：初始排序等待、PCM 储备和原生转换延迟共享预算。缺包等待 60 ms，不再叠加 mixer 的默认预缓冲。
+- 输入 PCM 上限 1600 样本/200 ms；超限舍弃过期内容并重新同步。持续迟到达到 60 ms 时重新锚定未来输入，避免旧声音被 PLC 无限续播。
+- 每秒按缓冲占用调整转换比率，校正限定 ±300 ppm。转换器按流保持状态，只在结束时排空；取消 generation 时销毁残留状态。
+- 输出增益总和不超过 0.85，参与源变化时在一帧内过渡。媒体锁内不写盘、执行外部回调或网络发送。
+- 每个目标的发送队列上限 10 帧；阻塞只影响该目标，过期输出丢弃并计数。应用入站队列最多 2 秒，消费者停滞时失败关闭媒体会话。
+- 媒体回调和质量日志使用一个 32 条的非阻塞观察队列。日志拥塞可能丢弃诊断采样，不能拖住收音与房间时钟；业务录音失败事件通过持久化事件链路发布。
 
-IVR 阶段若启用 `gate_inbound_until_prompt`：主录仅写入出站提示音；坐席接通后 control 调用 `SetRecordingMixInbound(true)` 再收录上行分轨。
+## 完整主录与对齐分轨
 
-## 日志字段（排查电话侧编码）
+新主录是允许录制的客户、坐席/AI 上行及提示音各计一次的完整单声道对话。它不再等于客户接收到的混音。每个 leg 分轨记录播放时间轴上的解码/PLC 后 PCM，晚加入、保持、静音及离开期间补零，创建后保留至本次录音结束。
 
-| 事件 | 组件 | 关键字段 |
-|------|------|----------|
-| `audio.profile` | media | `audio_profile`（应为 narrowband） |
-| `codec.negotiated` | sip_rtp | `codec_negotiated`、`payload_type`、`sample_rate_hz` |
-| `rtp.summary` | sip_rtp | `sequence_gaps`、`out_of_order` |
-| `rtp.ptime_mismatch` | media | 需 `media.log_rtp_ptime_mismatch: true` |
-| `recording.opened` | media | `record_sample_rate_hz=8000`、`record_engine=tap` |
-| `quality.sample` | webrtc | `stats_summary`、`rtt_ms` |
+同一房间 tick 产生一个主录和分轨帧组，所有文件共享录音开始的采样原点。格式固定为 WAV、PCM16、单声道、8 kHz。IVR 的 `GateInboundUntilPrompt` 门禁期间主录只含允许出站提示音，上行分轨补零；开启入站录制后计入双方声音。
 
-## 四路采集对照
+录音使用一个 FIFO 消费者顺序写入所有文件，队列上限 250 组/5 秒，入队不阻塞。队列满、写盘错误或停录超过 5 秒时标记 `failed`，保留部分文件并报告原因，通话继续。不得将部分文件报告为正常完成。
 
-同一 `call_id`：SIP 分轨、坐席上行分轨、听客户侧 mixed（主录）、`rtp.summary`。
+| 元数据 | 新音频录音含义 |
+|---|---|
+| `recording_semantics` | `conversation_mono_v1`；历史文件为 `legacy`，原内容不改写 |
+| `sample_rate_hz` / `channels` | 8000 / 1 |
+| `duration_samples` | 已顺序写入的主录样本数；时长为该值除以采样率 |
+| `status` | `recording`、`completed`、`failed` |
+| `failure_reason` | 失败原因，正常时为空 |
+| `leg_paths` | leg ID 到对齐 WAV 文件的映射；失败时仍返回可用部分文件 |
 
-## ECS 发版检查
+`recording.failed` 同时覆盖启动和运行中失败。运行中载荷包含录音 ID、失败原因和部分文件信息；`recording.saved` 保存当前或最终元数据。投影的失败状态不可被后来的正常状态覆盖，过时快照不可缩短已写时长或丢失已有分轨。
 
-```bash
-ssh open-voip "grep '<call_id>' /opt/open-switch/logs/trace.jsonl | grep -E 'recording.opened|rtp.summary|codec.negotiated'"
-# 期望：record_sample_rate_hz=8000，record_engine=tap
-```
+## 配置及升级
+
+发布、激活普通队列配置只接受 `narrowband`。`wideband` / `hd_webrtc` 请求明确拒绝。升级时已有活动宽带配置生成新的窄带版本并切换活动指针，保留旧版本的内容和校验和；旧宽带版本不能重新激活。SIP `preferred_codecs` 和中继编码只能配置 PCMU/PCMA。
+
+本次迁移移除旧媒体排序、混音、到达顺序录音、提示音独立发包及音频宽带转码实现。回滚使用上一发布包，在实例层排空或隔离路由，不保留双媒体引擎开关。
+
+## 可观测性
+
+`quality.media` 按 `call_id` 采样，`streams` 按 leg 包含 `ssrc`、排序后缺失、乱序、重复、超时丢弃、PLC/迟到/溢出样本、缓冲样本、`clock_ppm`、`resyncs`、原生库错误。`outputs` 按目标包含积压和丢弃，房间包含调度 P95/P99、录音积压、状态、失败原因和写盘错误。调度分布以向上取整的毫秒桶记录。
+
+`codec.negotiated` 用于核对 SIP 的 codec、PT 和时钟；`quality.sample` 是 Pion 接收统计。`rtp.summary.sequence_gaps` 只描述到达序号间隔，不能作为最终丢包率。旧 `rtp.ptime_mismatch` 和 `record_engine=tap` 已移除。验证方法见 [验收清单](audio-quality-qa.md)，当前证据见 [质量报告](audio-quality-report.md)。

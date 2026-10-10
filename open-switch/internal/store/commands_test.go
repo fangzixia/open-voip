@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm/logger"
 	"open-switch/internal/store/migrate"
 )
@@ -24,14 +25,21 @@ func TestCommandIdempotency(t *testing.T) {
 	if err = migrate.Migrate(db); err != nil {
 		t.Fatal(err)
 	}
-	cmds := Commands{DB: db}
+	cmds := Commands{DB: db, Events: CallEvents{DB: db}}
+	callID := uuid.NewString()
+	if e := db.Exec("INSERT INTO os_calls(id,direction,session_type,state,created_at,updated_at) VALUES (?,'inbound','audio','active',?,?)", callID, time.Now(), time.Now()).Error; e != nil {
+		t.Fatal(e)
+	}
+	defer db.Exec("DELETE FROM os_calls WHERE id = ?", callID)
+	defer db.Exec("DELETE FROM os_call_events WHERE call_id = ?", callID)
+	defer db.Exec("DELETE FROM os_commands WHERE call_id = ?", callID)
 	ctx := context.Background()
 	hash := "abc123"
-	first, reused, err := cmds.Accept(ctx, "00000000-0000-4000-8000-000000000001", "idem-1", hash, "sip.dial", map[string]any{"leg_id": "leg-1"})
+	first, reused, err := cmds.Accept(ctx, callID, "idem-"+callID, hash, "sip.dial", map[string]any{"leg_id": "leg-1"})
 	if err != nil || reused {
 		t.Fatalf("first accept: reused=%v err=%v", reused, err)
 	}
-	second, reused, err := cmds.Accept(ctx, "00000000-0000-4000-8000-000000000001", "idem-1", hash, "sip.dial", map[string]any{"leg_id": "leg-1"})
+	second, reused, err := cmds.Accept(ctx, callID, "idem-"+callID, hash, "sip.dial", map[string]any{"leg_id": "leg-1"})
 	if err != nil || !reused || second.ID != first.ID {
 		t.Fatalf("replay: %+v reused=%v err=%v", second, reused, err)
 	}

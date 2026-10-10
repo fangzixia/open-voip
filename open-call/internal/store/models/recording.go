@@ -4,6 +4,13 @@ import "time"
 
 // Recording 录音/录像文件元数据。
 type Recording struct {
+	RecordingSemantics string `gorm:"size:64;not null;default:legacy"`
+	Channels           int
+	DurationSamples    int64
+	Status             string `gorm:"size:32;not null;default:completed"`
+	FailureReason      string `gorm:"type:text"`
+	SampleRateHz       int
+	LegPaths           map[string]string `gorm:"serializer:json;type:jsonb"`
 	// ID 录制 UUID。
 	ID string `gorm:"type:uuid;primaryKey;comment:录音记录 ID"`
 	// CallID 关联通话。

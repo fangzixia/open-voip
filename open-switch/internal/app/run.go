@@ -77,14 +77,17 @@ func Run(configPath string) error {
 	integratorDispatch := &integration.Dispatcher{
 		DB: db, CallbackURL: cfg.Integration.EventsCallbackURL, Log: log,
 	}
-	eventStore := store.CallEvents{DB: db, AfterAppend: integratorDispatch.Enqueue}
+	eventStore := store.CallEvents{DB: db, BeforeCommit: integratorDispatch.Stage, AfterAppend: integratorDispatch.Notify}
 	commandStore := store.Commands{DB: db, Events: eventStore}
 	routingStore := store.RoutingSessions{DB: db}
 	ccCore := cccore.New(db, eventStore, cccore.Options{
-		RecordingMode:        "off",
-		AudioNotifyMessage:   cfg.Recordings.Audio.NotifyMessage,
-		VideoNotifyMessage:   cfg.Recordings.Video.NotifyMessage,
+		RecordingMode:      "off",
+		AudioNotifyMessage: cfg.Recordings.Audio.NotifyMessage,
+		VideoNotifyMessage: cfg.Recordings.Video.NotifyMessage,
 	})
+	if err := ccCore.MigrateNarrowbandConfiguration(context.Background()); err != nil {
+		return fmt.Errorf("窄带配置迁移: %w", err)
+	}
 	controlDeps := control.Deps{
 		BusinessActions: ccCore, Media: mediaSvc, ACD: ccCore, Config: ccCore, Agents: ccCore,
 		RecordingPolicy: ccCore, CDR: ccCore, Recordings: ccCore,
@@ -95,6 +98,7 @@ func Run(configPath string) error {
 	callStore := store.NewCallStore(db, eventStore)
 	controlDeps.Calls = callStore
 	callControl := control.NewService(controlDeps)
+	mediaSvc.SetRecordingFailedHandler(callControl.OnRecordingFailed)
 
 	if err := callControl.Recover(context.Background()); err != nil {
 		return fmt.Errorf("遗留通话恢复: %w", err)

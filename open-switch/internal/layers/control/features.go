@@ -650,9 +650,10 @@ func (s *Service) stopRecording(ctx context.Context, callID string) error {
 		return nil
 	}
 	started := time.Now()
-	if err := s.deps.Media.StopRecording(ctx, id); err != nil {
+	stopErr := s.deps.Media.StopRecording(ctx, id)
+	if stopErr != nil {
 		observability.Event(ctx, "recording", "recording.stop", "stop", "error", "recording_stop_failed", started, "recording_id", id)
-		return err
+		s.OnRecordingFailed(ctx, id)
 	}
 	if s.deps.Recordings != nil {
 		meta, err := s.deps.Media.RecordingInfo(ctx, id)
@@ -663,7 +664,9 @@ func (s *Service) stopRecording(ctx context.Context, callID string) error {
 			return err
 		}
 	}
-	observability.Event(ctx, "recording", "recording.stop", "stop", "ok", "", started, "recording_id", id)
+	if stopErr == nil {
+		observability.Event(ctx, "recording", "recording.stop", "stop", "ok", "", started, "recording_id", id)
+	}
 	return nil
 }
 

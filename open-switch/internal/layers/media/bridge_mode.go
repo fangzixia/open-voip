@@ -14,16 +14,14 @@ func (r *room) bridgeAllowed() bool {
 }
 
 func (s *Service) enterBridgeMode(r *room, legA, legB string) {
-	if r == nil || legA == "" || legB == "" || !r.bridgeAllowed() {
+	if r == nil || legA == "" || legB == "" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.mixer != nil && len(r.playbacks) == 0 {
-		r.mixer.stop()
-		r.mixer = nil
+	if !r.bridgeAllowed() {
+		return
 	}
 	r.direct = true
-	r.mixAudio = false
 	r.bridgeA, r.bridgeB = legA, legB
 }

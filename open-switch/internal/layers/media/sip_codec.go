@@ -4,34 +4,29 @@ package media
 type sipAudioCodec uint8
 
 const (
-	sipCodecPCMU sipAudioCodec = 0
-	sipCodecPCMA sipAudioCodec = 8
-	sipCodecG722 sipAudioCodec = 9
-	sipCodecOpus sipAudioCodec = 111
+	sipCodecPCMU    sipAudioCodec = 0
+	sipCodecPCMA    sipAudioCodec = 8
+	sipCodecUnknown sipAudioCodec = 255
 )
 
 func (c sipAudioCodec) payloadType() uint8 { return uint8(c) }
 
 func (c sipAudioCodec) sampleRate() int {
 	switch c {
-	case sipCodecG722:
-		return 16000
-	case sipCodecOpus:
-		return 48000
-	default:
+	case sipCodecPCMU, sipCodecPCMA:
 		return 8000
-}
+	default:
+		return 0
+	}
 }
 
 func codecFromPT(pt uint8) sipAudioCodec {
 	switch pt {
+	case 0:
+		return sipCodecPCMU
 	case 8:
 		return sipCodecPCMA
-	case 9:
-		return sipCodecG722
-	case 111:
-		return sipCodecOpus
 	default:
-		return sipCodecPCMU
+		return sipCodecUnknown
 	}
 }

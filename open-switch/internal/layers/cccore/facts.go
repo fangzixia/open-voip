@@ -45,10 +45,36 @@ func (s *Service) Upsert(ctx context.Context, req ports.CDRWriteRequest) error {
 
 // Save 在 Switch 库中保存录音技术元数据并发布 recording.saved 事件。
 func (s *Service) Save(ctx context.Context, rec ports.RecordingMeta) error {
+	if rec.LegPaths == nil {
+		rec.LegPaths = map[string]string{}
+	}
 	row := models.Recording{ID: rec.ID, CallID: rec.CallID, FilePath: rec.FilePath, MediaType: rec.MediaType, StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, RetainUntil: rec.RetainUntil, FileSize: rec.FileSize, CreatedAt: time.Now().UTC()}
+	row.RecordingSemantics, row.Channels, row.DurationSamples, row.Status, row.FailureReason = rec.RecordingSemantics, rec.Channels, rec.DurationSamples, rec.Status, rec.FailureReason
+	row.SampleRateHz, row.LegPaths = rec.SampleRateHz, rec.LegPaths
+	updates := clause.AssignmentColumns([]string{"file_path", "media_type", "started_at", "retain_until", "recording_semantics", "channels", "status", "sample_rate_hz"})
+	for name, expression := range map[string]string{
+		"duration_samples": "GREATEST(os_recordings.duration_samples, EXCLUDED.duration_samples)",
+		"file_size":        "GREATEST(os_recordings.file_size, EXCLUDED.file_size)",
+		"ended_at":         "GREATEST(os_recordings.ended_at, EXCLUDED.ended_at)",
+		"leg_paths":        "os_recordings.leg_paths || EXCLUDED.leg_paths",
+		"failure_reason":   "COALESCE(NULLIF(os_recordings.failure_reason, ''), EXCLUDED.failure_reason)",
+	} {
+		updates = append(updates, clause.Assignment{Column: clause.Column{Name: name}, Value: gorm.Expr(expression)})
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"file_path", "media_type", "started_at", "ended_at", "retain_until", "file_size"})}).Create(&row).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, Where: clause.Where{Exprs: []clause.Expression{gorm.Expr("(os_recordings.status <> 'failed' OR EXCLUDED.status = 'failed') AND (EXCLUDED.status <> 'recording' OR os_recordings.status = 'recording')")}}, DoUpdates: updates}).Create(&row).Error; err != nil {
 			return err
+		}
+		// Publish the committed merge, rather than an older incoming snapshot.
+		if err := tx.First(&row, "id = ?", rec.ID).Error; err != nil {
+			return err
+		}
+		rec = ports.RecordingMeta{
+			ID: row.ID, CallID: row.CallID, FilePath: row.FilePath, MediaType: row.MediaType,
+			StartedAt: row.StartedAt, EndedAt: row.EndedAt, RetainUntil: row.RetainUntil,
+			FileSize: row.FileSize, RecordingSemantics: row.RecordingSemantics, Channels: row.Channels,
+			DurationSamples: row.DurationSamples, Status: row.Status, FailureReason: row.FailureReason,
+			SampleRateHz: row.SampleRateHz, LegPaths: row.LegPaths,
 		}
 		raw, err := datetime.Marshal(rec)
 		if err != nil {

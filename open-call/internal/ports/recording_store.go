@@ -7,6 +7,11 @@ import (
 
 // RecordingMeta 录音元数据，由 L3 在 Start/StopRecording 时写入 L4。
 type RecordingMeta struct {
+	RecordingSemantics string `json:"recording_semantics"`
+	Channels           int    `json:"channels"`
+	DurationSamples    int64  `json:"duration_samples"`
+	Status             string `json:"status"`
+	FailureReason      string `json:"failure_reason,omitempty"`
 	// ID 录音 UUID，与 MediaPort 返回值一致。
 	ID string `json:"id"`
 	// CallID 通话 ID。

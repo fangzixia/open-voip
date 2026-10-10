@@ -58,6 +58,13 @@ func (s *Service) activateConfigTx(ctx context.Context, tx *gorm.DB, version int
 		}
 		return models.ConfigVersion{}, err
 	}
+	var bundle ports.ConfigBundle
+	if err := json.Unmarshal([]byte(result.Payload), &bundle); err != nil {
+		return models.ConfigVersion{}, err
+	}
+	if err := validateBundle(bundle); err != nil {
+		return models.ConfigVersion{}, err
+	}
 	now := time.Now().UTC()
 	if err := tx.Model(&models.ConfigVersion{}).Where("status = ?", "active").Update("status", "superseded").Error; err != nil {
 		return models.ConfigVersion{}, err

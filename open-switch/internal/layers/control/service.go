@@ -525,6 +525,8 @@ func (s *Service) Hangup(ctx context.Context, callID string, reason dto.HangupRe
 	if rt.recordingID != "" {
 		if meta, err := s.deps.Media.RecordingInfo(ctx, rt.recordingID); err == nil {
 			payload := map[string]any{"call_id": callID, "recording_id": rt.recordingID, "file_path": meta.FilePath, "file_size": meta.FileSize}
+			payload["recording_semantics"], payload["channels"], payload["duration_samples"] = meta.RecordingSemantics, meta.Channels, meta.DurationSamples
+			payload["status"], payload["failure_reason"] = meta.Status, meta.FailureReason
 			if meta.SampleRateHz > 0 {
 				payload["sample_rate_hz"] = meta.SampleRateHz
 			}
@@ -664,10 +666,12 @@ func (s *Service) GetCall(ctx context.Context, callID string) (ports.CallView, e
 	defer unlock()
 	s.mu.Lock()
 	rt := s.calls[callID]
-	s.mu.Unlock()
 	if rt != nil {
-		return toView(rt), nil
+		view := toView(rt)
+		s.mu.Unlock()
+		return view, nil
 	}
+	s.mu.Unlock()
 	rec, err := s.deps.Calls.GetCall(ctx, callID)
 	if err != nil {
 		return ports.CallView{}, err

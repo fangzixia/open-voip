@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS os_schema_migrations (
   applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE os_schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT '';
+ALTER TABLE os_schema_migrations ADD COLUMN IF NOT EXISTS execution_patch TEXT NOT NULL DEFAULT '';
+ALTER TABLE os_schema_migrations ADD COLUMN IF NOT EXISTS execution_checksum TEXT NOT NULL DEFAULT '';
 `
 
 // Migrate 按 embed SQL 版本顺序执行未应用的迁移。
@@ -130,15 +132,19 @@ func migrationApplied(db *gorm.DB, version int64, name, sum string) (bool, error
 
 // applyFile 在单事务内执行 SQL 文件并记录版本。
 func applyFile(db *gorm.DB, version int64, name, content, sum string) error {
+	executed, patch, e := executionSQL(name, content)
+	if e != nil {
+		return fmt.Errorf("%s: %w", name, e)
+	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		for _, stmt := range splitSQL(content) {
+		for _, stmt := range splitSQL(executed) {
 			if err := tx.Exec(stmt).Error; err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
 		}
 		if err := tx.Exec(
-			"INSERT INTO os_schema_migrations (version, name, checksum) VALUES (?, ?, ?)",
-			version, name, sum,
+			"INSERT INTO os_schema_migrations (version, name, checksum, execution_patch, execution_checksum) VALUES (?, ?, ?, ?, ?)",
+			version, name, sum, patch, checksumSQL(executed),
 		).Error; err != nil {
 			return err
 		}
@@ -148,6 +154,9 @@ func applyFile(db *gorm.DB, version int64, name, content, sum string) error {
 
 // splitSQL 按分号切分语句，忽略引号内分号及 -- 行注释。
 func splitSQL(content string) []string {
+	// Remove the text transport marker only for execution. Checksums still
+	// cover the original embedded bytes, preserving published history.
+	content = strings.TrimPrefix(content, "\ufeff")
 	var out []string
 	var b strings.Builder
 	inSingle := false

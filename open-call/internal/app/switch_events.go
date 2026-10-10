@@ -168,10 +168,16 @@ func projectSwitchEvent(ctx context.Context, db *gorm.DB, ev switchapi.Event) er
 			return err
 		}
 		return cdr.NewRecorderService(db).Upsert(ctx, req, ev.Version)
-	case "recording.saved":
+	case "recording.saved", "recording.failed":
 		var rec ports.RecordingMeta
 		if err := datetime.UnmarshalCurrent(raw, &rec); err != nil {
 			return err
+		}
+		if rec.ID == "" {
+			return nil
+		} // Start failures have no recording/partial files.
+		if ev.Type == "recording.failed" {
+			rec.Status = "failed"
 		}
 		return recmeta.NewService(db).Save(ctx, rec)
 	case "ivr.input_collected":

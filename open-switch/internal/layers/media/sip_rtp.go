@@ -3,7 +3,7 @@ package media
 import (
 	"context"
 	"encoding/binary"
-	"log/slog"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"open-switch/internal/observability"
@@ -28,7 +28,6 @@ type sipRTP struct {
 	remote                                 *net.UDPAddr
 	remotePT                               uint8
 	remoteCodec                            sipAudioCodec
-	g722Dec                                *ffmpegG722Decoder
 	started                                time.Time
 	rxPackets, rxBytes, txPackets, txBytes uint64
 	sequenceGaps, outOfOrder               uint64
@@ -70,35 +69,26 @@ func (r *sipRTP) close() {
 		return
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	port := r.boundPort
-	ua := r.ua
-	if r.conn != nil {
-		_ = r.conn.Close()
-		r.conn = nil
-	}
-	if r.g722Dec != nil {
-		r.g722Dec.close()
-		r.g722Dec = nil
+	conn, ua, port := r.conn, r.ua, r.boundPort
+	r.conn = nil
+	already := r.summaryLogged
+	r.summaryLogged = true
+	callID, legID, started := r.callID, r.legID, r.started
+	codec := r.codecLocked()
+	rxPackets, rxBytes, txPackets, txBytes := r.rxPackets, r.rxBytes, r.txPackets, r.txBytes
+	sequenceGaps, outOfOrder := r.sequenceGaps, r.outOfOrder
+	r.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
 	}
 	if ua != nil {
 		ua.releaseRTPPort(port)
 	}
-	if !r.summaryLogged {
-		r.summaryLogged = true
-		ctx := observability.WithFields(context.Background(), observability.Fields{CallID: r.callID, LegID: r.legID})
-		codec := r.codecLocked()
-		observability.Event(ctx, "sip_rtp", "rtp.summary", "hangup", "ok", "", r.started,
-			"rx_packets", r.rxPackets, "rx_bytes", r.rxBytes, "tx_packets", r.txPackets, "tx_bytes", r.txBytes,
-			"sequence_gaps", r.sequenceGaps, "out_of_order", r.outOfOrder,
-			"codec_negotiated", codecName(codec), "sample_rate_hz", codec.sampleRate())
-		slog.Info("SIP RTP 统计",
-			"call_id", r.callID, "leg_id", r.legID,
-			"codec_negotiated", codecName(codec), "sample_rate_hz", codec.sampleRate(),
-			"rx_packets", r.rxPackets, "tx_packets", r.txPackets, "sequence_gaps", r.sequenceGaps)
+	if !already {
+		ctx := observability.WithFields(context.Background(), observability.Fields{CallID: callID, LegID: legID})
+		observability.Event(ctx, "sip_rtp", "rtp.summary", "hangup", "ok", "", started, "rx_packets", rxPackets, "rx_bytes", rxBytes, "tx_packets", txPackets, "tx_bytes", txBytes, "sequence_gaps", sequenceGaps, "out_of_order", outOfOrder, "codec_negotiated", codecName(codec), "sample_rate_hz", codec.sampleRate())
 	}
 }
-
 func (r *sipRTP) latch(addr *net.UDPAddr) {
 	if r == nil || addr == nil || addr.IP == nil {
 		return
@@ -121,15 +111,9 @@ func (r *sipRTP) setRemoteCodec(codec sipAudioCodec, pt uint8) {
 	if r == nil {
 		return
 	}
-	if pt == 0 && (codec == sipCodecG722 || codec == sipCodecOpus) {
-		pt = codec.payloadType()
-	}
 	r.mu.Lock()
 	r.remoteCodec = codec
 	r.remotePT = pt
-	if codec == sipCodecG722 && r.g722Dec == nil && r.ua != nil && r.ua.media != nil {
-		r.g722Dec, _ = newFFmpegG722Decoder(r.ua.media.ffmpegPath)
-	}
 	r.mu.Unlock()
 }
 
@@ -163,6 +147,7 @@ func (r *sipRTP) write(b []byte) {
 		atomic.AddUint64(&r.txDroppedNoRemote, 1)
 		return
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
 	n, err := conn.WriteToUDP(b, addr)
 	if err == nil {
 		r.mu.Lock()
@@ -211,55 +196,6 @@ func (r *sipRTP) sendRFC4733(digit string) {
 	}
 }
 
-func (r *sipRTP) writeRTPPacket(pkt *rtp.Packet) {
-	if r == nil || pkt == nil {
-		return
-	}
-	raw, err := pkt.Marshal()
-	if err != nil {
-		return
-	}
-	r.write(raw)
-}
-
-func (r *sipRTP) writePCMU(b []byte) {
-	if r == nil || len(b) == 0 {
-		return
-	}
-	pkt := &rtp.Packet{}
-	if err := pkt.Unmarshal(b); err != nil {
-		r.write(b)
-		return
-	}
-	if pkt.PayloadType == 101 {
-		r.write(b)
-		return
-	}
-	r.mu.Lock()
-	toPT := r.remotePT
-	r.mu.Unlock()
-	if r.ua != nil && r.ua.media != nil {
-		pl, pt := r.ua.media.encodePCMUForSIPLeg(r, pkt.Payload)
-		pkt.Payload = pl
-		pkt.PayloadType = pt
-	} else {
-		fromPT := pkt.PayloadType
-		if fromPT != 0 && fromPT != 8 {
-			fromPT = 0
-		}
-		pkt.Payload = transcodeG711(fromPT, toPT, pkt.Payload)
-		pkt.PayloadType = toPT
-	}
-	pkt.Extension = false
-	pkt.Extensions = nil
-	pkt.Padding = false
-	raw, err := pkt.Marshal()
-	if err != nil {
-		return
-	}
-	r.write(raw)
-}
-
 func (r *sipRTP) localPort() int {
 	if r == nil {
 		return 0
@@ -276,37 +212,42 @@ func (r *sipRTP) localPort() int {
 	return a.Port
 }
 
-func applyRemoteSDP(rtpSess *sipRTP, media sdpMedia) {
+func applyRemoteSDP(rtpSess *sipRTP, media sdpMedia) error {
 	if rtpSess == nil {
-		return
+		return fmt.Errorf("SIP RTP session missing")
+	}
+	if !media.hasAudioCodec() {
+		return fmt.Errorf("no common audio codec: PCMA/PCMU required")
 	}
 	if media.IP != "" && media.Port > 0 {
 		rtpSess.latch(&net.UDPAddr{IP: net.ParseIP(media.IP), Port: media.Port})
 	}
-	preferWB := rtpSess.ua != nil && rtpSess.ua.cfg.PreferWideband
-	preferOpus := false
 	audioProfile := ""
 	if rtpSess.ua != nil && rtpSess.ua.media != nil && rtpSess.callID != "" {
-		wb, opus := rtpSess.ua.media.sdpNegotiatePrefs(rtpSess.callID)
-		preferWB = preferWB || wb
-		preferOpus = opus
 		audioProfile = rtpSess.ua.media.roomAudioProfile(rtpSess.callID)
 	}
-	codec, pt := media.negotiateCodec(preferWB, preferOpus)
+	codec, pt := media.negotiateCodec()
 	rtpSess.setRemoteCodec(codec, pt)
-	logCodecNegotiation(rtpSess, media, codec, pt, preferWB, preferOpus, audioProfile, "sdp")
+	if ua := rtpSess.ua; ua != nil && ua.media != nil {
+		if room := ua.media.getRoom(rtpSess.callID); room != nil {
+			room.mu.RLock()
+			mixer := room.mixer
+			room.mu.RUnlock()
+			mixer.removeLeg(rtpSess.legID)
+		}
+	}
+	logCodecNegotiation(rtpSess, media, codec, pt, audioProfile, "sdp")
+	return nil
 }
 
 func codecName(c sipAudioCodec) string {
 	switch c {
-	case sipCodecG722:
-		return "G722"
-	case sipCodecOpus:
-		return "OPUS"
+	case sipCodecPCMU:
+		return "PCMU"
 	case sipCodecPCMA:
 		return "PCMA"
 	default:
-		return "PCMU"
+		return "UNKNOWN"
 	}
 }
 
@@ -387,45 +328,28 @@ func (s *Service) sipReadLoop(callID string, rtpSess *sipRTP) {
 		if rtpSess.blocked() {
 			continue
 		}
-		pcmu := s.rtpAudioToPCMU(rtpSess, pkt.PayloadType, pkt.Payload)
-		if len(pcmu) == 0 {
+		if pkt.PayloadType != rtpSess.currentPT() {
 			continue
 		}
-		pkt.Payload = pcmu
-		pkt.PayloadType = 0
-		pkt.Extension = false
-		pkt.Extensions = nil
-		pkt.Padding = false
-		raw, err := pkt.Marshal()
-		if err != nil {
-			raw = buf[:n]
+		codec := rtpSess.currentCodec()
+		if codec != sipCodecPCMU && codec != sipCodecPCMA {
+			continue
+		}
+		if codec == sipCodecPCMA {
+			pkt.PayloadType = 8
+		} else {
+			pkt.PayloadType = 0
 		}
 		r := s.getRoom(callID)
 		if r == nil {
 			continue
 		}
 		r.mu.RLock()
-		rec := r.rec
-		if r.mixer != nil && r.mixAudio {
-			pcm := pcmuPayloadToPCM(pcmu)
-			if rec != nil && rec.tapRecording() {
-				role := r.legRoles[rtpSess.legID]
-				rec.TapUplink(rtpSess.legID, role, pcm, 8000)
-			}
-			r.mixer.ingest(rtpSess.legID, pkt.SequenceNumber, pkt.Timestamp, pkt.SSRC, 8000, pcm)
-		} else {
-			for legID, p := range r.peers {
-				if p.audioOut != nil && !p.held && r.mediaForwardAllowed(rtpSess.legID, legID) {
-					_, _ = p.audioOut.Write(raw)
-				}
-			}
-		}
-		for dst := range r.sipRTP {
-			if dst != rtpSess && !dst.blocked() && r.mediaForwardAllowed(rtpSess.legID, dst.legID) {
-				dst.writePCMU(raw)
-			}
-		}
+		mix := r.mixer
 		r.mu.RUnlock()
+		if mix != nil {
+			mix.ingestPacket(rtpSess.legID, pkt)
+		}
 	}
 }
 

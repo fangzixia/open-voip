@@ -59,9 +59,7 @@ sip:
   #     allowed_cidrs: ["192.168.10.0/24"]
   tls_cert_file: ""
   tls_key_file: ""
-  prefer_wideband: false
   preferred_codecs:
-    - G722
     - PCMA
     - PCMU
   # gateway_device: "100163800"  # 模组注册名；PSTN 外呼走网关（无 trunk 时自动）
@@ -71,5 +69,3 @@ sip:
 media:
   queue_answer_grace_ms: 500
   queue_answer_fade_ms: 150
-  # 采样记录 RTP Δtimestamp 与载荷样本数不一致（排查非 20ms 包）
-  log_rtp_ptime_mismatch: false

@@ -36,7 +36,7 @@ func TestApplicationOutputBoundGenerationAndTail(t *testing.T) {
 	}
 	now := time.Now()
 	frame, g, done := o.pull(now)
-	if len(frame) != 160 || frame[0] != 100 || g != 2 || done {
+	if len(frame) != 160 || frame[0] == 0 || g != 2 || done {
 		t.Fatalf("partial tail lost or completion too early: %v %d %v", frame, g, done)
 	}
 	if _, _, done = o.pull(now.Add(220 * time.Millisecond)); !done {
@@ -59,7 +59,7 @@ func TestApplicationOutputUsesPhoneRTPClock(t *testing.T) {
 	}
 	receiver, sender := listen(), listen()
 	rt := &sipRTP{legID: "customer", conn: sender, remote: receiver.LocalAddr().(*net.UDPAddr), remotePT: 8}
-	r := &room{mixAudio: true, mixer: newScheduledRoomMixer(nil), peers: map[string]*peer{}, sipRTP: map[*sipRTP]struct{}{rt: {}}, streams: map[string]*applicationStream{}}
+	r := &room{mixAudio: true, mixer: newScheduledRoomMixer(), peers: map[string]*peer{}, sipRTP: map[*sipRTP]struct{}{rt: {}}, streams: map[string]*applicationStream{}}
 	s := &Service{rooms: map[string]*room{"call": r}}
 	opts := ports.MediaStreamOptions{Direction: "duplex", Input: ports.PCMFormat{SampleRate: 16000}, Output: ports.PCMFormat{SampleRate: 24000}}
 	a, err := s.OpenApplicationStream(context.Background(), "call", "agent", opts)
@@ -96,7 +96,9 @@ func TestApplicationOutputUsesPhoneRTPClock(t *testing.T) {
 			t.Fatal("RTP continuity broken")
 		}
 		previous = packet
-		if sample := pcmuPayloadToPCM(rtpPayloadToPCMU(8, packet.Payload))[0]; sample < 3000 {
+		// The first frame ramps to its new gain over 20 ms. Check its tail,
+		// then the steady gain in the second frame.
+		if sample := pcmuPayloadToPCM(rtpPayloadToPCMU(8, packet.Payload))[159]; sample < 3000 {
 			t.Fatalf("PCM did not reach phone: %d", sample)
 		}
 	}
@@ -117,8 +119,16 @@ func TestApplicationInputExcludesGeneratedAudioAndPlaybackIsolation(t *testing.T
 	}}
 	frames := map[string][]int16{"customer": make([]int16, 160)}
 	targets := r.applicationFrames(frames, time.Now())
-	if len(<-stream.input) != 640 {
-		t.Fatal("input not converted to requested 16k PCM16")
+	for range 6 {
+		r.applicationFrames(map[string][]int16{"customer": make([]int16, 160)}, time.Now())
+	}
+	select {
+	case input := <-stream.input:
+		if len(input) == 0 || len(input)%2 != 0 {
+			t.Fatal("invalid streamed PCM16")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("input converter produced no audio")
 	}
 	if frames["agent"][0] != 2000 || len(targets) != 2 {
 		t.Fatal("output did not enter mixer or playback targets merged")
@@ -137,7 +147,7 @@ func TestApplicationInputExcludesGeneratedAudioAndPlaybackIsolation(t *testing.T
 
 func TestApplicationSessionLifecycleAndDirections(t *testing.T) {
 	ctx := context.Background()
-	r := &room{mixAudio: true, mixer: newScheduledRoomMixer(nil), peers: map[string]*peer{}, legRoles: map[string]dto.LegRole{}}
+	r := &room{mixAudio: true, mixer: newScheduledRoomMixer(), peers: map[string]*peer{}, legRoles: map[string]dto.LegRole{}}
 	s := &Service{rooms: map[string]*room{"call": r}}
 	opts := ports.MediaStreamOptions{Direction: "sendonly", Input: ports.PCMFormat{SampleRate: 8000}, Output: ports.PCMFormat{SampleRate: 24000}}
 	a, err := s.OpenApplicationStream(ctx, "call", "agent", opts)

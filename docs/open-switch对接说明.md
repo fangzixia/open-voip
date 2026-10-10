@@ -244,7 +244,7 @@ GET  /configuration/active/summary
 | `overflow_queue_id` | 溢出目标队列（action=`queue` 时） | — |
 | `ivr_flow_id` | 绑定已发布 IVR | — |
 | `post_call_ivr_flow_id` | 后续交互流程标识；评价等业务用途由业务系统定义 | — |
-| `audio_profile` | `narrowband` \| `wideband` \| `hd_webrtc` | `narrowband` |
+| `audio_profile` | 本期仅接受 `narrowband`；`wideband` / `hd_webrtc` 发布或激活明确拒绝 | `narrowband` |
 | `wait_prompt` / `announce_recording` / `priority_enabled` | 等候与录音告知、优先级 | — |
 | `business_hours_json` / `after_hours_action` | 营业时间与非工作动作 | after=`hangup` |
 | `force_hangup_on_checkout` / `listen_announce` | 签出强挂 / 监听告知 | false |
@@ -409,9 +409,12 @@ open-call 草稿可保留业务节点 `csat`，发布与整包导入时编译为
 
 | type | payload 要点 |
 |------|----------------|
-| `recording.notice` / `started` / `stopped` / `failed` | 录音过程 |
-| `recording.saved` | `id`, `call_id`, `file_path`, `media_type`, `started_at`, `ended_at?`, `retain_until?`, `file_size` |
+| `recording.notice` / `started` / `stopped` | 录音过程 |
+| `recording.failed` | 启动或运行中失败；运行中包含 `recording_id`, `failure_reason`, `status=failed` 及部分文件元数据，通话继续 |
+| `recording.saved` | `id`, `call_id`, `file_path`, `media_type`, `started_at`, `ended_at?`, `retain_until?`, `file_size`, `recording_semantics`, `channels`, `duration_samples`, `status`, `failure_reason`, `sample_rate_hz`, `leg_paths` |
 | `cdr.updated` | `call_id`, `direction`, `queue_id`, `agent_id`, `caller`, `callee`, `session_type`, `result`（answered/abandoned/failed）, `started_at`, `answered_at?`, `ended_at?`, `video_*`, `screen_share_count`… |
+
+新音频主录采用 `conversation_mono_v1`：完整双方与应记录提示音、单声道 PCM16 WAV、8 kHz，各源计一次；分轨包含同一播放时间轴上的解码/PLC 后声音，晚加入和保持补零。历史文件标为 `legacy`，不覆盖。录音队列上限 5 秒、停录等待上限 5 秒，失败保留部分文件并明确标记。详细规则见 [媒体契约](audio-quality.md)。升级将现有活动宽带配置迁移为新的窄带版本，原配置历史与校验和保留。
 
 #### 业务动作（必须处理）
 

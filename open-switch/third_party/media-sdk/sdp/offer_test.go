@@ -1,0 +1,1378 @@
+// Copyright 2024 LiveKit, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package sdp_test
+
+import (
+	"encoding/base64"
+	"fmt"
+	"net"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	prtp "github.com/pion/rtp"
+	"github.com/pion/sdp/v3"
+	"github.com/stretchr/testify/require"
+
+	"github.com/livekit/media-sdk"
+	"github.com/livekit/media-sdk/amrwb"
+	"github.com/livekit/media-sdk/dtmf"
+	"github.com/livekit/media-sdk/g711"
+	"github.com/livekit/media-sdk/g722"
+	"github.com/livekit/media-sdk/rtp"
+	. "github.com/livekit/media-sdk/sdp"
+	"github.com/livekit/media-sdk/srtp"
+	"github.com/livekit/protocol/logger"
+)
+
+func getInline(s string) string {
+	const word = "inline:"
+	i := strings.Index(s, word)
+	if i < 0 {
+		return s
+	}
+	return s[i+len(word):]
+}
+
+func codecSet() *media.CodecSet {
+	g := media.GlobalCodecs().NewSet()
+	g.SetEnabled(amrwb.SDPNameAndRate, true)
+	return g
+}
+
+func TestSDPMediaOffer(t *testing.T) {
+	g := codecSet()
+
+	const port = 12345
+	_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+	require.NoError(t, err)
+	require.Equal(t, &sdp.MediaDescription{
+		MediaName: sdp.MediaName{
+			Media:   "audio",
+			Port:    sdp.RangedPort{Value: port},
+			Protos:  []string{"RTP", "AVP"},
+			Formats: []string{"101", "9", "0", "8", "102", "103"},
+		},
+		Attributes: []sdp.Attribute{
+			{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+			{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
+			{Key: "rtpmap", Value: "9 G722/8000"},
+			{Key: "rtpmap", Value: "0 PCMU/8000"},
+			{Key: "rtpmap", Value: "8 PCMA/8000"},
+			{Key: "rtpmap", Value: "102 telephone-event/8000"},
+			{Key: "fmtp", Value: "102 0-16"},
+			{Key: "rtpmap", Value: "103 telephone-event/16000"},
+			{Key: "fmtp", Value: "103 0-16"},
+			{Key: "ptime", Value: "20"},
+			{Key: "sendrecv"},
+		},
+	}, offer)
+
+	_, offer, err = OfferMediaWith(g, port, EncryptionRequire)
+	require.NoError(t, err)
+	i := slices.IndexFunc(offer.Attributes, func(a sdp.Attribute) bool {
+		return a.Key == "crypto"
+	})
+	require.True(t, i > 0)
+	require.Equal(t, &sdp.MediaDescription{
+		MediaName: sdp.MediaName{
+			Media:   "audio",
+			Port:    sdp.RangedPort{Value: port},
+			Protos:  []string{"RTP", "SAVP"},
+			Formats: []string{"101", "9", "0", "8", "102", "103"},
+		},
+		Attributes: []sdp.Attribute{
+			{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+			{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
+			{Key: "rtpmap", Value: "9 G722/8000"},
+			{Key: "rtpmap", Value: "0 PCMU/8000"},
+			{Key: "rtpmap", Value: "8 PCMA/8000"},
+			{Key: "rtpmap", Value: "102 telephone-event/8000"},
+			{Key: "fmtp", Value: "102 0-16"},
+			{Key: "rtpmap", Value: "103 telephone-event/16000"},
+			{Key: "fmtp", Value: "103 0-16"},
+			{Key: "crypto", Value: "1 AES_CM_128_HMAC_SHA1_80 inline:" + getInline(offer.Attributes[i+0].Value)},
+			{Key: "crypto", Value: "2 AES_CM_128_HMAC_SHA1_32 inline:" + getInline(offer.Attributes[i+1].Value)},
+			{Key: "crypto", Value: "3 AES_256_CM_HMAC_SHA1_80 inline:" + getInline(offer.Attributes[i+2].Value)},
+			{Key: "crypto", Value: "4 AES_256_CM_HMAC_SHA1_32 inline:" + getInline(offer.Attributes[i+3].Value)},
+			{Key: "ptime", Value: "20"},
+			{Key: "sendrecv"},
+		},
+	}, offer)
+
+	g2 := g.NewSet()
+	g2.SetEnabled(g722.SDPNameAndRate, false)
+	g2.SetEnabled(amrwb.SDPNameAndRate, false)
+	g2.SetEnabled("opus", false)
+
+	_, offer, err = OfferMediaWith(g2, port, EncryptionNone)
+	require.NoError(t, err)
+	require.Equal(t, &sdp.MediaDescription{
+		MediaName: sdp.MediaName{
+			Media:   "audio",
+			Port:    sdp.RangedPort{Value: port},
+			Protos:  []string{"RTP", "AVP"},
+			Formats: []string{"0", "8", "101"},
+		},
+		Attributes: []sdp.Attribute{
+			{Key: "rtpmap", Value: "0 PCMU/8000"},
+			{Key: "rtpmap", Value: "8 PCMA/8000"},
+			{Key: "rtpmap", Value: "101 telephone-event/8000"},
+			{Key: "fmtp", Value: "101 0-16"},
+			{Key: "ptime", Value: "20"},
+			{Key: "sendrecv"},
+		},
+	}, offer)
+}
+
+func getCodec(s *media.CodecSet, name string) media.CodecType {
+	return CodecByNameWith(s, name)
+}
+
+func dtmfCodec(s *media.CodecSet, typ byte, rate, ch int) *CodecInfo {
+	const name = dtmf.SDPNameOnly
+	c := getCodec(s, name)
+	ci := c.Info()
+	return &CodecInfo{
+		Type:  typ,
+		Codec: c,
+		Info: media.CodecInfo{
+			CodecTypeInfo: media.CodecTypeInfo{
+				Name:     name,
+				Kind:     media.Data,
+				Priority: ci.Priority - rate/8000,
+				FileExt:  ci.FileExt,
+			},
+			CodecConfig: media.CodecConfig{
+				SampleRate: rate,
+				Channels:   ch,
+				Params:     media.CodecParams{{Key: "0-16"}},
+			},
+			RTPClockRate: rate,
+		},
+	}
+}
+
+func staticCodec(s *media.CodecSet, typ byte, name string, rtpRate int, cc media.CodecConfig) CodecInfo {
+	c := getCodec(s, name)
+	ci := c.Info()
+	return CodecInfo{
+		Type:  typ,
+		Codec: c,
+		Info: media.CodecInfo{
+			CodecTypeInfo: media.CodecTypeInfo{
+				Name:        name,
+				Kind:        media.Audio,
+				RTPDefType:  typ,
+				RTPIsStatic: true,
+				Priority:    ci.Priority,
+				FileExt:     ci.FileExt,
+			},
+			CodecConfig:  cc,
+			RTPClockRate: rtpRate,
+		},
+	}
+}
+func dynamicCodec(s *media.CodecSet, typ byte, name string, rtpRate int, cc media.CodecConfig) CodecInfo {
+	c := getCodec(s, name)
+	ci := c.Info()
+	return CodecInfo{
+		Type:  typ,
+		Codec: c,
+		Info: media.CodecInfo{
+			CodecTypeInfo: media.CodecTypeInfo{
+				Name:     name,
+				Kind:     media.Audio,
+				Priority: ci.Priority,
+				FileExt:  ci.FileExt,
+			},
+			CodecConfig:  cc,
+			RTPClockRate: rtpRate,
+		},
+	}
+}
+
+func TestSDPMediaAnswer(t *testing.T) {
+	g := codecSet()
+	const port = 12345
+
+	cases := []struct {
+		name  string
+		offer sdp.MediaDescription
+		exp   *AudioConfig
+	}{
+		{
+			name: "default",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"9", "0", "8", "101"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "9 G722/8000"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+					{Key: "rtpmap", Value: "101 telephone-event/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
+			},
+		},
+		{
+			name: "lowercase",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"9", "0", "101"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "9 g722/8000"},
+					{Key: "rtpmap", Value: "0 pcmu/8000"},
+					{Key: "rtpmap", Value: "101 telephone-event/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
+			},
+		},
+		{
+			name: "no dtmf",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"9", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "9 G722/8000"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+			},
+		},
+		{
+			name: "custom dtmf",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"9", "0", "103"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "9 G722/8000"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+					{Key: "rtpmap", Value: "103 telephone-event/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 103, 8000, 0),
+			},
+		},
+		{
+			name: "only ulaw",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"0", "101", "102"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+					{Key: "rtpmap", Value: "101 telephone-event/8000"},
+					{Key: "rtpmap", Value: "102 telephone-event/16000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
+			},
+		},
+		{
+			name: "only g722",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"9", "101", "102"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "9 G722/8000"},
+					{Key: "rtpmap", Value: "101 telephone-event/8000"},
+					{Key: "rtpmap", Value: "102 telephone-event/16000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 9, g722.SDPNameOnly, 8000, media.CodecConfig{SampleRate: 16000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
+			},
+		},
+		{
+			name: "unsupported",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "102"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 telephone-event/8000"},
+					{Key: "rtpmap", Value: "102 FOOBAR/8000"},
+				},
+			},
+			exp: nil,
+		},
+		{
+			name: "format only",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"0", "101"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 telephone-event/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+				DTMF:      dtmfCodec(g, 101, 8000, 0),
+			},
+		},
+		{
+			name: "explicit mono channel",
+			offer: sdp.MediaDescription{
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "0 PCMU/8000/1"},
+					{Key: "rtpmap", Value: "101 telephone-event/8000/1"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000, Channels: 1}),
+				DTMF:      dtmfCodec(g, 101, 8000, 1),
+			},
+		},
+		{
+			name: "changed order g722",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"0", "9"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+					{Key: "rtpmap", Value: "9 G722/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+			},
+		},
+		{
+			name: "changed order g711",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"8", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "8 PCMA/8000"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				CodecInfo: staticCodec(g, 8, g711.ALawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+			},
+		},
+		{
+			name: "amrwb no params",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				// Pick AMR-WB, assume missing parameter matches ours.
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
+			},
+		},
+		{
+			name: "amrwb dtmf",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0", "103", "104"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+					{Key: "rtpmap", Value: "103 telephone-event/8000"},
+					{Key: "rtpmap", Value: "104 telephone-event/16000"},
+				},
+			},
+			exp: &AudioConfig{
+				// Pick AMR-WB, assume missing parameter matches ours.
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
+				DTMF: dtmfCodec(g, 104, 16000, 0),
+			},
+		},
+		{
+			name: "amrwb low",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0", "103"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+					{Key: "rtpmap", Value: "103 telephone-event/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				// Pick AMR-WB, assume missing parameter matches ours.
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
+				DTMF: dtmfCodec(g, 103, 8000, 0),
+			},
+		},
+		{
+			name: "amrwb bandwidth efficient",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "fmtp", Value: "101 octet-align=0;mode-change-capability=2"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				// Pick AMR-WB, encoding matches, ignore other params.
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "8"},
+				}}),
+			},
+		},
+		{
+			name: "amrwb octet aligned",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "fmtp", Value: "101 octet-align=1;mode-change-capability=2"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				// Pick PCMU, AMR-WB encoding doesn't match.
+				CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+			},
+		},
+		{
+			name: "amrwb mode set",
+			offer: sdp.MediaDescription{
+				MediaName: sdp.MediaName{
+					Formats: []string{"101", "0"},
+				},
+				Attributes: []sdp.Attribute{
+					{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+					{Key: "fmtp", Value: "101 octet-align=0;mode-set=0,1,2;mode-change-capability=2"},
+					{Key: "rtpmap", Value: "0 PCMU/8000"},
+				},
+			},
+			exp: &AudioConfig{
+				// Pick AMR-WB and the highest mode available.
+				CodecInfo: dynamicCodec(g, 101, amrwb.SDPNameOnly, 16000, media.CodecConfig{SampleRate: 16000, Params: media.CodecParams{
+					{Key: "octet-align", Val: "0"}, {Key: "mode-set", Val: "2"},
+				}}),
+			},
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			m, err := ParseMediaWith(g, &c.offer)
+			require.NoError(t, err)
+			got, err := SelectAudio(*m, true)
+			if c.exp == nil {
+				require.Error(t, err)
+				return
+			}
+			require.NotNil(t, c.exp.Codec)
+			require.NoError(t, err)
+			require.Equal(t, c.exp, got)
+		})
+	}
+
+	t.Run("default offer and answer", func(t *testing.T) {
+		desc, offer, err := OfferMediaWith(g, port, EncryptionNone)
+		require.NoError(t, err)
+		require.Equal(t, &sdp.MediaDescription{
+			MediaName: sdp.MediaName{
+				Media:   "audio",
+				Port:    sdp.RangedPort{Value: port},
+				Protos:  []string{"RTP", "AVP"},
+				Formats: []string{"101", "9", "0", "8", "102", "103"},
+			},
+			Attributes: []sdp.Attribute{
+				{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+				{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
+				{Key: "rtpmap", Value: "9 G722/8000"},
+				{Key: "rtpmap", Value: "0 PCMU/8000"},
+				{Key: "rtpmap", Value: "8 PCMA/8000"},
+				{Key: "rtpmap", Value: "102 telephone-event/8000"},
+				{Key: "fmtp", Value: "102 0-16"},
+				{Key: "rtpmap", Value: "103 telephone-event/16000"},
+				{Key: "fmtp", Value: "103 0-16"},
+				{Key: "ptime", Value: "20"},
+				{Key: "sendrecv"},
+			},
+		}, offer)
+
+		var audioCodecs []string
+		for _, c := range desc.Audio {
+			name := ""
+			rate := c.Info.RTPClockRate
+			if cc := c.Codec; cc != nil {
+				name = cc.SDPName()
+			}
+			audioCodecs = append(audioCodecs, fmt.Sprintf("%d = %s/%d", int(c.Type), name, rate))
+		}
+		require.Equal(t, []string{
+			"101 = AMR-WB/16000",
+			"9 = G722/8000",
+			"0 = PCMU/8000",
+			"8 = PCMA/8000",
+		}, audioCodecs)
+
+		ac, err := SelectAudio(desc, true)
+		require.NoError(t, err)
+		const port2 = 9000
+		answer := AnswerMedia(port2, ac, nil)
+		require.Equal(t, &sdp.MediaDescription{
+			MediaName: sdp.MediaName{
+				Media:   "audio",
+				Port:    sdp.RangedPort{Value: port2},
+				Protos:  []string{"RTP", "AVP"},
+				Formats: []string{"101", "103"},
+			},
+			Attributes: []sdp.Attribute{
+				{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+				{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
+				{Key: "rtpmap", Value: "103 telephone-event/16000"},
+				{Key: "fmtp", Value: "103 0-16"},
+				{Key: "ptime", Value: "20"},
+				{Key: "sendrecv"},
+			},
+		}, answer)
+	})
+
+	t.Run("legacy offer", func(t *testing.T) {
+		// Check compatibility path - offer DTMF at 8000, even if codec is 16000.
+		dtmf.OfferLegacyRate = true
+		defer func() { dtmf.OfferLegacyRate = false }()
+		g := media.NewCodecSet()
+		g.SetEnabled(amrwb.SDPNameOnly, true)
+		g.SetEnabled(dtmf.SDPNameOnly, true)
+
+		_, offer, err := OfferMediaWith(g, port, EncryptionNone)
+		require.NoError(t, err)
+		require.Equal(t, &sdp.MediaDescription{
+			MediaName: sdp.MediaName{
+				Media:   "audio",
+				Port:    sdp.RangedPort{Value: port},
+				Protos:  []string{"RTP", "AVP"},
+				Formats: []string{"101", "102", "103"},
+			},
+			Attributes: []sdp.Attribute{
+				{Key: "rtpmap", Value: "101 AMR-WB/16000"},
+				{Key: "fmtp", Value: "101 octet-align=0;mode-set=8"},
+				{Key: "rtpmap", Value: "102 telephone-event/8000"},
+				{Key: "fmtp", Value: "102 0-16"},
+				{Key: "rtpmap", Value: "103 telephone-event/16000"},
+				{Key: "fmtp", Value: "103 0-16"},
+				{Key: "ptime", Value: "20"},
+				{Key: "sendrecv"},
+			},
+		}, offer)
+	})
+}
+
+func TestSDPMediaAnswerOneDisabled(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	offer := sdp.MediaDescription{
+		MediaName: sdp.MediaName{
+			Formats: []string{"9", "0", "8", "101"},
+		},
+		Attributes: []sdp.Attribute{
+			{Key: "rtpmap", Value: "9 G722/8000"},
+			{Key: "rtpmap", Value: "0 PCMU/8000"},
+			{Key: "rtpmap", Value: "101 telephone-event/8000"},
+		},
+	}
+	exp := &AudioConfig{
+		CodecInfo: staticCodec(g, 0, g711.ULawSDPNameOnly, 8000, media.CodecConfig{SampleRate: 8000}),
+		DTMF:      dtmfCodec(g, 101, 8000, 0),
+	}
+
+	noG722 := g.NewSet()
+	noG722.SetEnabled(g722.SDPNameAndRate, false)
+
+	m, err := ParseMediaWith(noG722, &offer)
+	require.NoError(t, err)
+	got, err := SelectAudio(*m, false)
+	require.NoError(t, err)
+	require.NotNil(t, exp.Codec)
+	require.Equal(t, exp, got)
+}
+
+func TestSDPMediaAnswerAllDisabled(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	offer := sdp.MediaDescription{
+		MediaName: sdp.MediaName{
+			Formats: []string{"9", "0", "101"},
+		},
+		Attributes: []sdp.Attribute{
+			{Key: "rtpmap", Value: "9 G722/8000"},
+			{Key: "rtpmap", Value: "0 PCMU/8000"},
+			{Key: "rtpmap", Value: "101 telephone-event/8000"},
+		},
+	}
+
+	allOff := g.NewSet()
+	allOff.SetEnabled(g722.SDPNameAndRate, false)
+	allOff.SetEnabled(g711.ULawSDPNameAndRate, false)
+
+	m, err := ParseMediaWith(allOff, &offer)
+	require.NoError(t, err)
+	_, err = SelectAudio(*m, false)
+	require.Error(t, err)
+	require.Equal(t, ErrNoCommonMedia, err)
+}
+
+func TestParseOffer(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	tests := []struct {
+		name    string
+		sdp     string
+		wantErr bool
+	}{
+		{
+			name: "media level c= only",
+			sdp: `v=0
+o=Test 1 1 IN IP4 127.0.0.1
+s=Stream1
+t=0 0
+m=audio 59236 RTP/AVP 0 101
+c=IN IP4 127.0.0.1
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=sendrecv
+a=rtcp:59237
+a=ptime:20
+`,
+			wantErr: false,
+		},
+		{
+			name: "invalid network type",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4 1.2.3.4
+s=LiveKit
+c=FOO IP4 1.2.3.4
+t=0 0
+m=audio 1234 RTP/AVP 9 0 8 101
+a=rtpmap:9 G722/8000
+a=rtpmap:0 PCMU/8000
+a=rtpmap:8 PCMA/8000
+a=rtpmap:101 telephone-event/8000
+a=fmtp:101 0-16
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: true,
+		},
+		{
+			name: "invalid ip address",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4 1.2.3.4
+s=LiveKit
+c=IN IP4 invalid.ip
+t=0 0
+m=audio 1234 RTP/AVP 9 0 8 101
+a=rtpmap:9 G722/8000
+a=rtpmap:0 PCMU/8000
+a=rtpmap:8 PCMA/8000
+a=rtpmap:101 telephone-event/8000
+a=fmtp:101 0-16
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: true,
+		},
+		{
+			// The media-level c= has no address, so the session-level one is used.
+			name: "media level c= without address",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4 1.2.3.4
+s=LiveKit
+c=IN IP4 1.2.3.4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+c=IN IP4
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: false,
+		},
+		{
+			name: "session level c= without address falls back to o=",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4 1.2.3.4
+s=LiveKit
+c=IN IP4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: false,
+		},
+		{
+			// Neither c= nor o= carries an address. pion defaults the o= address
+			// to 0.0.0.0, so this parses rather than failing.
+			name: "no address in c= or o=",
+			sdp: `v=0
+o=- 1234567890 1234567890 IN IP4
+s=LiveKit
+c=IN IP4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ParseOfferWith(g, []byte(test.sdp))
+			if test.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// An unusable media-level c= must fall through to the session-level c=, not all
+// the way to o=.
+func TestParseOfferConnectionAddressFallback(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	const sdpData = `v=0
+o=- 1234567890 1234567890 IN IP4 5.6.7.8
+s=LiveKit
+c=IN IP4 1.2.3.4
+t=0 0
+m=audio 1234 RTP/AVP 0 101
+c=IN IP4
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=ptime:20
+a=sendrecv
+`
+
+	offer, err := ParseOfferWith(g, []byte(sdpData))
+	require.NoError(t, err)
+	require.Equal(t, netip.MustParseAddrPort("1.2.3.4:1234"), offer.Addr)
+}
+
+func TestParseOfferSRTP(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	vProfiles := []srtp.Profile{
+		{
+			Index:   1,
+			Profile: "AES_CM_128_HMAC_SHA1_80",
+			Key:     []byte{0xa4, 0xc2, 0xf, 0xc6, 0x3c, 0xd8, 0x20, 0x6e, 0x53, 0x42, 0xe2, 0x16, 0x7e, 0x48, 0xd3, 0x9d},
+			Salt:    []byte{0xa0, 0x2, 0x56, 0xbc, 0xe8, 0x86, 0x11, 0x5f, 0x38, 0x68, 0x52, 0x32, 0x5, 0x75},
+		},
+		{
+			Index:   2,
+			Profile: "AES_CM_128_HMAC_SHA1_32",
+			Key:     []byte{0x64, 0xa9, 0x13, 0x41, 0xfb, 0x82, 0xb2, 0x58, 0x9e, 0x81, 0x56, 0x6d, 0x15, 0x2c, 0x9a, 0xdd},
+			Salt:    []byte{0x9e, 0xa8, 0x11, 0x55, 0x2d, 0x4b, 0x8, 0xc6, 0x9, 0xf1, 0xe5, 0x6e, 0xb3, 0x1f},
+		},
+		{
+			Index:   3,
+			Profile: "AES_256_CM_HMAC_SHA1_80",
+			Key:     []byte{0x6, 0xfa, 0xb, 0x79, 0x1b, 0xb9, 0x21, 0xc0, 0x64, 0x80, 0xd3, 0x75, 0xe2, 0xab, 0x6a, 0x6b, 0x18, 0xb4, 0xaf, 0xb7, 0xa2, 0xda, 0xbc, 0x2e, 0x5, 0x2a, 0x1d, 0x77, 0x44, 0x80, 0x36, 0x8},
+			Salt:    []uint8{0x12, 0xf4, 0x91, 0xec, 0xa7, 0x92, 0x14, 0xee, 0x58, 0x44, 0xb3, 0x29, 0xda, 0xd4},
+		},
+		{
+			Index:   4,
+			Profile: "AES_256_CM_HMAC_SHA1_32",
+			Key:     []uint8{0x8f, 0xdd, 0x92, 0xf, 0x23, 0x53, 0x51, 0xed, 0x1, 0x34, 0x69, 0x38, 0x2d, 0xe7, 0x82, 0xb0, 0xfa, 0x97, 0xd2, 0xac, 0xf, 0x3f, 0xf7, 0xbd, 0x4c, 0xb6, 0x9f, 0xbd, 0xde, 0xcb, 0xf7, 0x6},
+			Salt:    []uint8{0x8c, 0xf2, 0xbe, 0x1a, 0xae, 0x3c, 0xe0, 0x52, 0xab, 0x3b, 0xb9, 0x41, 0x11, 0xca},
+		},
+		{
+			Index:   5,
+			Profile: "AEAD_AES_128_GCM",
+			Key:     []uint8{0x80, 0x67, 0xad, 0x12, 0x44, 0x20, 0x1a, 0x4e, 0xd, 0x64, 0x8a, 0xa, 0x8f, 0xf7, 0x1b, 0x16, 0x94, 0x64, 0x1d, 0xda, 0x1c, 0x98, 0xa9, 0x4f, 0xd2, 0xed, 0xd5, 0x33},
+		},
+		{
+			Index:   6,
+			Profile: "AEAD_AES_256_GCM",
+			Key:     []uint8{0x10, 0x51, 0x73, 0x4b, 0x61, 0x4c, 0xc8, 0xda, 0x18, 0x71, 0x57, 0x1a, 0x1, 0x15, 0x3e, 0x9e, 0xf9, 0x3e, 0x26, 0x11, 0xe6, 0x55, 0xbb, 0xdd, 0x16, 0xd4, 0x71, 0x66, 0xe4, 0x62, 0xf6, 0xb0, 0xe6, 0x2d, 0x8a, 0x4b, 0x9a, 0xce, 0x72, 0x4a, 0xff, 0x77, 0x8b, 0x2d},
+		},
+	}
+
+	t.Run("CryptoProfileBase64Padding", func(t *testing.T) {
+		const sdpData = `v=0 
+o=lin 3723 713 IN IP4 192.168.0.2 
+s=Talk 
+c=IN IP4 192.168.0.2 
+t=0 0 
+a=rtcp-xr:rcvr-rtt=all:10000 stat-summary=loss,dup,jitt,TTL voip-metrics 
+a=record:off 
+m=audio 11200 RTP/SAVP 96 0 9 97 101 
+a=rtpmap:96 opus/48000/2 
+a=fmtp:96 useinbandfec=1 
+a=rtpmap:97 telephone-event/48000 
+a=rtpmap:101 telephone-event/8000 
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1 
+a=crypto:2 AES_CM_128_HMAC_SHA1_32 inline:ZKkTQfuCsliegVZtFSya3Z6oEVUtSwjGCfHlbrMf 
+a=crypto:3 AES_256_CM_HMAC_SHA1_80 inline:BvoLeRu5IcBkgNN14qtqaxi0r7ei2rwuBSodd0SANggS9JHsp5IU7lhEsyna1A== 
+a=crypto:4 AES_256_CM_HMAC_SHA1_32 inline:j92SDyNTUe0BNGk4LeeCsPqX0qwPP/e9TLafvd7L9waM8r4arjzgUqs7uUERyg== 
+a=crypto:5 AEAD_AES_128_GCM inline:gGetEkQgGk4NZIoKj/cbFpRkHdocmKlP0u3VMw== 
+a=crypto:6 AEAD_AES_256_GCM inline:EFFzS2FMyNoYcVcaARU+nvk+JhHmVbvdFtRxZuRi9rDmLYpLms5ySv93iy0= 
+a=rtcp-fb:* trr-int 5000 
+a=rtcp-fb:* ccm tmmbr 
+`
+		v, err := ParseOfferWith(g, []byte(sdpData))
+		require.NoError(t, err)
+		require.Equal(t, vProfiles, v.CryptoProfiles)
+	})
+
+	t.Run("CryptoProfileBase64NoPadding", func(t *testing.T) {
+		const sdpData = `v=0 
+o=lin 3723 713 IN IP4 192.168.0.2 
+s=Talk 
+c=IN IP4 192.168.0.2 
+t=0 0 
+a=rtcp-xr:rcvr-rtt=all:10000 stat-summary=loss,dup,jitt,TTL voip-metrics 
+a=record:off 
+m=audio 11200 RTP/SAVP 96 0 9 97 101 
+a=rtpmap:96 opus/48000/2 
+a=fmtp:96 useinbandfec=1 
+a=rtpmap:97 telephone-event/48000 
+a=rtpmap:101 telephone-event/8000 
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1 
+a=crypto:2 AES_CM_128_HMAC_SHA1_32 inline:ZKkTQfuCsliegVZtFSya3Z6oEVUtSwjGCfHlbrMf 
+a=crypto:3 AES_256_CM_HMAC_SHA1_80 inline:BvoLeRu5IcBkgNN14qtqaxi0r7ei2rwuBSodd0SANggS9JHsp5IU7lhEsyna1A
+a=crypto:4 AES_256_CM_HMAC_SHA1_32 inline:j92SDyNTUe0BNGk4LeeCsPqX0qwPP/e9TLafvd7L9waM8r4arjzgUqs7uUERyg 
+a=crypto:5 AEAD_AES_128_GCM inline:gGetEkQgGk4NZIoKj/cbFpRkHdocmKlP0u3VMw 
+a=crypto:6 AEAD_AES_256_GCM inline:EFFzS2FMyNoYcVcaARU+nvk+JhHmVbvdFtRxZuRi9rDmLYpLms5ySv93iy0 
+a=rtcp-fb:* trr-int 5000 
+a=rtcp-fb:* ccm tmmbr 
+`
+		v, err := ParseOfferWith(g, []byte(sdpData))
+		require.NoError(t, err)
+		require.Equal(t, vProfiles, v.CryptoProfiles)
+	})
+}
+
+// TestParseOfferLifetimeAndMKI verifies that lifetime and MKI are correctly parsed from an SDP offer
+func TestParseOfferLifetimeAndMKI(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	// Create an SDP offer with lifetime and MKI in the crypto attribute
+	// Format: crypto:tag crypto-suite inline:base64-key-salt|lifetime|value:length
+	// lifetime: 2^48 (281474976710656)
+	// MKI: 66051:4 which decodes to [0x00, 0x01, 0x02, 0x03] in big-endian (66051 = 0x00010203)
+	const sdpData = `v=0 
+o=Test 1 1 IN IP4 127.0.0.1 
+s=Stream1 
+t=0 0 
+m=audio 5000 RTP/SAVP 0 101 
+c=IN IP4 127.0.0.1 
+a=rtpmap:0 PCMU/8000 
+a=rtpmap:101 telephone-event/8000 
+a=sendrecv 
+a=ptime:20 
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1|2^48|66051:4 
+`
+
+	offer, err := ParseOfferWith(g, []byte(sdpData))
+	require.NoError(t, err)
+	require.NotEmpty(t, offer.CryptoProfiles)
+
+	// Verify the first crypto profile has the correct lifetime and MKI
+	profile := offer.CryptoProfiles[0]
+	require.Equal(t, 1, profile.Index)
+	require.Equal(t, srtp.ProtectionProfile("AES_CM_128_HMAC_SHA1_80"), profile.Profile)
+
+	// Verify lifetime: 2^48 = 281474976710656
+	expectedLifetime := uint64(1 << 48)
+	require.Equal(t, expectedLifetime, profile.Lifetime, "Lifetime should be 2^48")
+
+	// Verify MKI: 66051:4 should decode to [0x00, 0x01, 0x02, 0x03] in big-endian
+	// 66051 = 0x00010203 in hex
+	expectedMKI := []byte{0x00, 0x01, 0x02, 0x03}
+	require.Equal(t, expectedMKI, profile.MKI, "MKI should be [0x00, 0x01, 0x02, 0x03]")
+	require.Equal(t, 4, len(profile.MKI), "MKI length should be 4 bytes")
+}
+
+// TestParseOfferSRTPSessionParams verifies that crypto lines carrying RFC 4568
+// session parameters (which we don't support, e.g. UNENCRYPTED_SRTCP) are
+// skipped rather than misparsed, while other offered ciphers are still
+// accepted.
+func TestParseOfferSRTPSessionParams(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	const header = `v=0
+o=Test 1 1 IN IP4 127.0.0.1
+s=Stream1
+t=0 0
+m=audio 5000 RTP/SAVP 0 101
+c=IN IP4 127.0.0.1
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=sendrecv
+a=ptime:20
+`
+
+	t.Run("AcceptsOther", func(t *testing.T) {
+		sdpData := header +
+			"a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1|2^48 UNENCRYPTED_SRTCP \n" +
+			"a=crypto:2 AES_CM_128_HMAC_SHA1_32 inline:ZKkTQfuCsliegVZtFSya3Z6oEVUtSwjGCfHlbrMf \n"
+
+		offer, err := ParseOfferWith(g, []byte(sdpData))
+		require.NoError(t, err)
+		require.Len(t, offer.CryptoProfiles, 1, "only the plain crypto line should be accepted")
+		require.Equal(t, 2, offer.CryptoProfiles[0].Index)
+		require.Equal(t, srtp.ProtectionProfile("AES_CM_128_HMAC_SHA1_32"), offer.CryptoProfiles[0].Profile)
+
+		// The surviving cipher is usable for a required-encryption answer.
+		_, conf, err := offer.Answer(netip.MustParseAddr("127.0.0.1"), 5001, EncryptionRequire)
+		require.NoError(t, err)
+		require.NotNil(t, conf.Crypto)
+	})
+
+	t.Run("RejectAll", func(t *testing.T) {
+		sdpData := header +
+			"a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:pMIPxjzYIG5TQuIWfkjTnaACVrzohhFfOGhSMgV1|2^48 UNENCRYPTED_SRTCP \n" +
+			"a=crypto:2 AES_CM_128_HMAC_SHA1_32 inline:ZKkTQfuCsliegVZtFSya3Z6oEVUtSwjGCfHlbrMf KDR=1 \n"
+
+		offer, err := ParseOfferWith(g, []byte(sdpData))
+		require.NoError(t, err)
+		require.Empty(t, offer.CryptoProfiles, "no cipher should survive session-param filtering")
+
+		_, _, err = offer.Answer(netip.MustParseAddr("127.0.0.1"), 5001, EncryptionRequire)
+		require.Error(t, err)
+	})
+}
+
+// TestSelectCryptoSuiteTag ensures that when selecting a crypto suite from an offer/answer pair,
+// the answer uses the same crypto suite tag as the offer, per RFC 4568 section 5.1.2 and 5.1.3.
+func TestSelectCryptoSuiteTag(t *testing.T) {
+	answerProfiles := []srtp.Profile{
+		{Index: 1, Profile: "AES_CM_128_HMAC_SHA1_80"},
+		{Index: 2, Profile: "AES_CM_128_HMAC_SHA1_32"},
+		{Index: 3, Profile: "AES_256_CM_HMAC_SHA1_80"},
+		{Index: 4, Profile: "AES_256_CM_HMAC_SHA1_32"},
+	}
+
+	cases := []struct {
+		name   string
+		offer  []srtp.Profile
+		answer []srtp.Profile
+		exp    *srtp.Profile
+	}{
+		{
+			name: "First",
+			offer: []srtp.Profile{
+				{Index: 1, Profile: "AES_CM_128_HMAC_SHA1_80"},
+				{Index: 2, Profile: "AES_CM_128_HMAC_SHA1_32"},
+				{Index: 3, Profile: "AES_256_CM_HMAC_SHA1_80"},
+				{Index: 4, Profile: "AES_256_CM_HMAC_SHA1_32"},
+			},
+			answer: answerProfiles,
+			exp:    &srtp.Profile{Index: 1, Profile: "AES_CM_128_HMAC_SHA1_80"},
+		},
+		{
+			name: "Fifth",
+			offer: []srtp.Profile{
+				{Index: 1, Profile: "AEAD_AES_256_GCM"},
+				{Index: 2, Profile: "AEAD_AES_128_GCM"},
+				{Index: 3, Profile: "AES_256_CM_HMAC_SHA1_80"},
+				{Index: 4, Profile: "AES_256_CM_HMAC_SHA1_32"},
+				{Index: 5, Profile: "AES_CM_128_HMAC_SHA1_80"},
+			},
+			answer: answerProfiles,
+			exp:    &srtp.Profile{Index: 5, Profile: "AES_CM_128_HMAC_SHA1_80"},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, got, err := SelectCrypto(c.offer, c.answer, true)
+			require.NoError(t, err)
+			require.Equal(t, *c.exp, *got)
+		})
+	}
+}
+
+// packetCaptureConn wraps a net.Conn to capture written packets
+type packetCaptureConn struct {
+	net.Conn
+	captured [][]byte
+	mu       sync.Mutex
+}
+
+func (c *packetCaptureConn) Write(b []byte) (int, error) {
+	copyData := make([]byte, len(b))
+	copy(copyData, b)
+	c.mu.Lock()
+	c.captured = append(c.captured, copyData)
+	c.mu.Unlock()
+	return c.Conn.Write(b)
+}
+
+func (c *packetCaptureConn) GetCaptured() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.captured
+}
+
+// extractMKIFromSRTPPacket extracts MKI from an SRTP packet.
+// SRTP packet format: [RTP header][encrypted payload][MKI][auth tag]
+// For AES_CM_128_HMAC_SHA1_80, auth tag is 10 bytes, so MKI is before the auth tag.
+func extractMKIFromSRTPPacket(packet []byte, mkiLength int, authTagSize int) []byte {
+	if len(packet) < mkiLength+authTagSize {
+		return nil
+	}
+	packet = packet[:len(packet)-authTagSize]
+	return packet[len(packet)-mkiLength:]
+}
+
+// Test actually using the MKI in an offer with outgoing RTP packets
+func TestSRTPIntegration(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	log := logger.GetLogger()
+	stop := make(chan struct{})
+	defer close(stop)
+
+	// Generate offer
+	offer, err := NewOfferWith(g, netip.MustParseAddr("127.0.0.1"), 5000, EncryptionRequire)
+	require.NoError(t, err)
+	require.NotEmpty(t, offer.CryptoProfiles)
+
+	// Add MKI to offer's crypto profile
+	offerMKI := []byte{0x01, 0x02, 0x03, 0x04} // 4-byte MKI
+	offer.CryptoProfiles[0].MKI = offerMKI
+
+	// Generate answer
+	_, conf, err := offer.Answer(netip.MustParseAddr("127.0.0.1"), 5001, EncryptionRequire)
+	require.NoError(t, err)
+	require.NotNil(t, conf)
+	require.NotNil(t, conf.Crypto)
+	require.Empty(t, conf.Crypto.LocalOptions, "Answerer's LocalOptions should be empty (no MKI)")
+	require.NotEmpty(t, conf.Crypto.RemoteOptions, "Answerer's RemoteOptions should have MKI (from offerer)")
+
+	// Create bidirectional connection pair using net.Pipe
+	offerPipe, answerPipe := net.Pipe()
+	defer offerPipe.Close()
+	defer answerPipe.Close()
+	offerCapturePipe := &packetCaptureConn{Conn: offerPipe}
+	answerCapturePipe := &packetCaptureConn{Conn: answerPipe}
+
+	// Create offerer session
+	offererCrypto := *conf.Crypto
+	offererCrypto.Keys.LocalMasterKey, offererCrypto.Keys.RemoteMasterKey = offererCrypto.Keys.RemoteMasterKey, offererCrypto.Keys.LocalMasterKey
+	offererCrypto.Keys.LocalMasterSalt, offererCrypto.Keys.RemoteMasterSalt = offererCrypto.Keys.RemoteMasterSalt, offererCrypto.Keys.LocalMasterSalt
+	offererCrypto.LocalOptions, offererCrypto.RemoteOptions = offererCrypto.RemoteOptions, offererCrypto.LocalOptions
+	offerSession, err := srtp.NewSession(log, offerCapturePipe, &offererCrypto)
+	require.NoError(t, err)
+	defer offerSession.Close()
+
+	// Create answerer session
+	answererSession, err := srtp.NewSession(log, answerCapturePipe, conf.Crypto)
+	require.NoError(t, err)
+	defer answererSession.Close()
+
+	// Open write streams
+	offerStream, err := offerSession.OpenWriteStream()
+	require.NoError(t, err)
+	answerStream, err := answererSession.OpenWriteStream()
+	require.NoError(t, err)
+
+	const rtpHeaderSize = 12
+	const authTagSize = 10
+	const offerSSRC = uint32(0x12345678)
+	const answerSSRC = uint32(0x87654321)
+
+	readAndCompare := func(session rtp.Session, compareHeader *prtp.Header, comparePayload []byte, stop <-chan struct{}) {
+		readBuf := make([]byte, 1500)
+		readHeader := &prtp.Header{}
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			readStream, ssrc, err := session.AcceptStream()
+			if err != nil {
+				return
+			}
+			require.Equal(t, compareHeader.SSRC, ssrc)
+			readLen, err := readStream.ReadRTP(readHeader, readBuf)
+			require.NoError(t, err)
+			require.Equal(t, compareHeader.SSRC, readHeader.SSRC)
+			require.Equal(t, comparePayload, readBuf[:readLen])
+		}
+	}
+
+	// Send packet from offerer
+	offerHeader := &prtp.Header{
+		Version:        2,
+		PayloadType:    0,
+		SequenceNumber: 1,
+		Timestamp:      1000,
+		SSRC:           offerSSRC,
+	}
+	offerPayload := []byte{0x01, 0x02, 0x03, 0x04}
+
+	// Send packet from answerer
+	answerHeader := &prtp.Header{
+		Version:        2,
+		PayloadType:    0,
+		SequenceNumber: 1,
+		Timestamp:      2000,
+		SSRC:           answerSSRC,
+	}
+	answerPayload := []byte{0x05, 0x06, 0x07, 0x08, 0x09}
+
+	go readAndCompare(offerSession, answerHeader, answerPayload, stop)
+	go readAndCompare(answererSession, offerHeader, offerPayload, stop)
+
+	_, err = offerStream.WriteRTP(offerHeader, offerPayload)
+	require.NoError(t, err)
+	_, err = answerStream.WriteRTP(answerHeader, answerPayload)
+	require.NoError(t, err)
+
+	// Verify NO MKI in answerer's captured packet
+	answerCaptured := answerCapturePipe.GetCaptured()
+	require.Equal(t, len(answerCaptured), 1, "Answerer should have captured one packet")
+	require.Equal(t, len(answerCaptured[0]), rtpHeaderSize+len(answerPayload)+authTagSize, "Answerer packet size should be correct")
+
+	// Verify MKI in offerer's captured packet
+	offerCaptured := offerCapturePipe.GetCaptured()
+	require.Equal(t, len(offerCaptured), 1, "Offerer should have captured one packet")
+	require.Equal(t, len(offerCaptured[0]), rtpHeaderSize+len(offerPayload)+authTagSize+len(offerMKI), "Offerer packet size should be correct")
+	packetMKI := extractMKIFromSRTPPacket(offerCaptured[0], len(offerMKI), authTagSize)
+	require.Equal(t, offerMKI, packetMKI, "MKI %v does not match expected value %v", packetMKI, offerMKI)
+}
+
+func TestParseDirection(t *testing.T) {
+	g := media.GlobalCodecs()
+
+	const head = `v=0
+o=- 1 1 IN IP4 203.0.113.5
+s=LiveKit
+c=IN IP4 203.0.113.5
+t=0 0
+`
+
+	tests := []struct {
+		name string
+		sdp  string
+		want sdp.Direction
+	}{
+		{
+			name: "media-level sendonly (hold)",
+			sdp: head + `m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendonly
+`,
+			want: sdp.DirectionSendOnly,
+		},
+		{
+			name: "no attribute defaults to sendrecv",
+			sdp: head + `m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+`,
+			want: sdp.DirectionSendRecv,
+		},
+		{
+			name: "session-level applies when media omits",
+			sdp: head + `a=sendonly
+m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+`,
+			want: sdp.DirectionSendOnly,
+		},
+		{
+			name: "media overrides session",
+			sdp: head + `a=inactive
+m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendonly
+`,
+			want: sdp.DirectionSendOnly,
+		},
+		{
+			name: "inactive media level",
+			sdp: head + `m=audio 10000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+`,
+			want: sdp.DirectionInactive,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := ParseWith(g, []byte(test.sdp))
+			require.NoError(t, err)
+			require.Equal(t, test.want, d.Direction)
+		})
+	}
+}
+
+// AnswerWith must advertise exactly the local key material it configures, and must
+// keep both stable when the same profiles are passed for a re-offer.
+func TestAnswerWithLocalProfiles(t *testing.T) {
+	g := codecSet()
+	ip := netip.MustParseAddr("127.0.0.1")
+
+	offer, err := NewOfferWith(g, netip.MustParseAddr("1.1.1.1"), 5000, EncryptionRequire)
+	require.NoError(t, err)
+	offerData, err := offer.SDP.Marshal()
+	require.NoError(t, err)
+
+	local, err := srtp.DefaultProfiles()
+	require.NoError(t, err)
+
+	answer := func(offerData []byte, opts []srtp.Profile) (sdp.SessionDescription, *MediaConfig) {
+		t.Helper()
+		// Re-parse the offer each time: a re-INVITE arrives on the wire, not as the same object.
+		off, err := ParseOfferWith(g, offerData)
+		require.NoError(t, err)
+		answer, mc, err := off.Answer(ip, 5001, EncryptionRequire, WithLocalProfiles(opts))
+		require.NoError(t, err)
+		require.NotNil(t, mc.Crypto)
+		return answer.SDP, mc
+	}
+
+	answer1, mc1 := answer(offerData, local)
+	answer2, mc2 := answer(offerData, local)
+	answer3, mc3 := answer(offerData, nil)
+
+	require.Equal(t, answer1, answer2, "reusing the same profile must re-derive the same answer")
+	require.NotEqual(t, answer1, answer3, "using different profiles must result in different answers")
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterKey, mc2.Crypto.Keys.RemoteMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterSalt, mc2.Crypto.Keys.RemoteMasterSalt)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterKey, mc3.Crypto.Keys.RemoteMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.RemoteMasterSalt, mc3.Crypto.Keys.RemoteMasterSalt)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterKey, mc2.Crypto.Keys.LocalMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterSalt, mc2.Crypto.Keys.LocalMasterSalt)
+	require.NotEqual(t, mc1.Crypto.Keys.LocalMasterKey, mc3.Crypto.Keys.LocalMasterKey)
+	require.NotEqual(t, mc1.Crypto.Keys.LocalMasterSalt, mc3.Crypto.Keys.LocalMasterSalt)
+
+	// The a=crypto we send must carry the key we configured locally.
+	audio := GetAudio(&answer1)
+	require.NotNil(t, audio)
+	i := slices.IndexFunc(audio.Attributes, func(a sdp.Attribute) bool { return a.Key == "crypto" })
+	require.True(t, i >= 0, "no crypto attribute in answer")
+	inline, err := base64.StdEncoding.DecodeString(strings.TrimSpace(getInline(audio.Attributes[i].Value)))
+	require.NoError(t, err)
+	require.Equal(t, append(slices.Clone(mc1.Crypto.Keys.LocalMasterKey), mc1.Crypto.Keys.LocalMasterSalt...), inline)
+}
+
+func cryptoAttrs(t testing.TB, s *sdp.SessionDescription) []string {
+	t.Helper()
+	audio := GetAudio(s)
+	require.NotNil(t, audio)
+	var out []string
+	for _, a := range audio.Attributes {
+		if a.Key == "crypto" {
+			out = append(out, a.Value)
+		}
+	}
+	require.NotEmpty(t, out)
+	return out
+}
+
+// NewOfferWithOpts must advertise exactly the local key material it was given, so that a
+// re-offer keeps the keys of a running session instead of re-keying the peer.
+func TestNewOfferWithLocalProfiles(t *testing.T) {
+	g := codecSet()
+	ip := netip.MustParseAddr("1.1.1.1")
+
+	local, err := srtp.DefaultProfiles()
+	require.NoError(t, err)
+
+	offer := func(profiles []srtp.Profile) *Offer {
+		t.Helper()
+		o, err := NewOfferWith(g, ip, 5000, EncryptionRequire, WithLocalProfiles(profiles))
+		require.NoError(t, err)
+		return o
+	}
+
+	offer1, offer2, offer3 := offer(local), offer(local), offer(nil)
+
+	require.Equal(t, local, offer1.CryptoProfiles)
+	require.Equal(t, cryptoAttrs(t, &offer1.SDP), cryptoAttrs(t, &offer2.SDP), "reusing the same profiles must offer the same keys")
+	require.NotEqual(t, cryptoAttrs(t, &offer1.SDP), cryptoAttrs(t, &offer3.SDP), "without options each offer re-keys")
+
+	// Full round trip: the offerer's negotiated local key must survive a re-offer, even
+	// though the answerer picks new keys of its own each time.
+	negotiate := func(o *Offer) *MediaConfig {
+		t.Helper()
+		offerData, err := o.SDP.Marshal()
+		require.NoError(t, err)
+		parsed, err := ParseOfferWith(g, offerData)
+		require.NoError(t, err)
+		answer, _, err := parsed.Answer(netip.MustParseAddr("2.2.2.2"), 5001, EncryptionRequire)
+		require.NoError(t, err)
+		answerData, err := answer.SDP.Marshal()
+		require.NoError(t, err)
+		parsedAnswer, err := ParseAnswerWith(g, answerData)
+		require.NoError(t, err)
+		mc, err := parsedAnswer.Apply(o, EncryptionRequire)
+		require.NoError(t, err)
+		require.NotNil(t, mc.Crypto)
+		return mc
+	}
+
+	mc1, mc2 := negotiate(offer1), negotiate(offer2)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterKey, mc2.Crypto.Keys.LocalMasterKey)
+	require.Equal(t, mc1.Crypto.Keys.LocalMasterSalt, mc2.Crypto.Keys.LocalMasterSalt)
+	require.NotEqual(t, mc1.Crypto.Keys.RemoteMasterKey, mc2.Crypto.Keys.RemoteMasterKey)
+}

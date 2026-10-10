@@ -1,6 +1,7 @@
 package media
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -26,40 +27,35 @@ func TestMediaForwardAllowedBlocksAgentToCustomerDuringGrace(t *testing.T) {
 }
 
 func TestPromptHandoffKeepsSeqUntilFadeCompletes(t *testing.T) {
+	socket := udpSocket(t)
+	rt := &sipRTP{legID: "cust", conn: socket, remote: socket.LocalAddr().(*net.UDPAddr)}
 	r := &room{
 		peers:           map[string]*peer{},
 		legRoles:        map[string]dto.LegRole{},
 		promptFadeTotal: 3,
+		sipRTP:          map[*sipRTP]struct{}{rt: {}},
 	}
 	seq := r.promptSeq.Add(1)
 	r.promptStopAt = time.Now().Add(-time.Millisecond)
-	gain, cont := r.promptGainAndContinue(seq)
-	if gain != 32767 || !cont {
-		t.Fatalf("first frame after stopAt: gain=%d cont=%v", gain, cont)
+	pcm := make([]int16, 8000)
+	for i := range pcm {
+		pcm[i] = 9000
 	}
-	if r.promptSeq.Load() != seq {
-		t.Fatal("seq should not advance before fade")
-	}
-	for i := 0; i < 2; i++ {
-		_, cont = r.promptGainAndContinue(seq)
-		if !cont {
-			t.Fatalf("fade frame %d ended early", i)
+	r.prompt = &roomPrompt{target: "cust", generation: seq, pcm: pcm, loop: true, readySince: time.Now().Add(-time.Second)}
+	s := &Service{}
+	for i, expected := range []int16{9000, 6000, 3000} {
+		frame, target := s.promptFrameLocked("call", r, time.Now())
+		if len(frame) != 160 || target != "cust" || frame[159] < expected-1 || frame[159] > expected {
+			t.Fatalf("fade did not use room PCM frame: frame=%d expected=%d", i, expected)
 		}
-	}
-	_, cont = r.promptGainAndContinue(seq)
-	if cont {
-		t.Fatal("expected last fade frame to end playback")
+		if i < 2 && r.promptSeq.Load() != seq {
+			t.Fatal("generation advanced before fade completed")
+		}
 	}
 	if r.promptSeq.Load() == seq {
 		t.Fatal("seq should advance after fade")
 	}
-}
-
-func TestScaleMulawFrameReducesLevel(t *testing.T) {
-	in := pcmToG711([]int16{10000, -10000}, 0)
-	out := scaleMulawFrame(in, 16384)
-	pcm := pcmuPayloadToPCM(out)
-	if pcm[0] == 10000 && pcm[1] == -10000 {
-		t.Fatal("expected attenuated samples")
+	if frame, _ := s.promptFrameLocked("call", r, time.Now()); len(frame) != 0 {
+		t.Fatal("cancelled prompt generation resumed")
 	}
 }

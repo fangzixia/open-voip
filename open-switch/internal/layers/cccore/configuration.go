@@ -165,8 +165,8 @@ func validateBundle(bundle ports.ConfigBundle) error {
 		if q.MaxWaitSec <= 0 {
 			return errs.InvalidRequest("max_wait_sec 必须大于 0")
 		}
-		if q.AudioProfile != ports.AudioProfileNarrowband && q.AudioProfile != ports.AudioProfileWideband && q.AudioProfile != ports.AudioProfileHDWebRTC {
-			return errs.InvalidRequest("audio_profile 须为 narrowband、wideband 或 hd_webrtc")
+		if q.AudioProfile != ports.AudioProfileNarrowband {
+			return errs.InvalidRequest("当前媒体版本仅支持 narrowband；wideband 和 hd_webrtc 尚未通过质量验收")
 		}
 		if q.DispatchStrategy != "longest_idle" && q.DispatchStrategy != "round_robin" {
 			return errs.InvalidRequest("队列分配策略无效")

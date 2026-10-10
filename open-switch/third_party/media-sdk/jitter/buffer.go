@@ -1,0 +1,629 @@
+// Copyright 2025 LiveKit, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package jitter
+
+import (
+	"sync"
+	"time"
+
+	"github.com/frostbyte73/core"
+	"github.com/go-logr/logr"
+	"github.com/pion/rtp"
+
+	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/utils/mono"
+)
+
+type ExtPacket struct {
+	ReceivedAt time.Time
+	*rtp.Packet
+}
+
+type Buffer struct {
+	depacketizer rtp.Depacketizer
+	latency      time.Duration
+	logger       logger.Logger
+	onPacket     PacketFunc
+	onPacketLoss PacketLossFunc
+	onStats      StatsFunc
+
+	mu     sync.Mutex
+	closed core.Fuse
+
+	initialized bool
+	prevSN      uint16
+	ssrc        uint32
+	hasSSRC     bool
+
+	detectRestarts bool   // see WithSequenceRestartDetection
+	restartRun     int    // consecutive expired packets, ascending
+	restartPrevSN  uint16 // sequence number of the last expired packet
+	restartFar     bool   // the run started beyond the reorder window
+	head           *packet
+	tail           *packet
+
+	stats          *BufferStats
+	timer          *time.Timer
+	startupDelay   bool
+	startupUntil   time.Time
+	startupLatency time.Duration
+	batchDelivery bool
+
+	pool *packet
+	size int
+}
+
+type Option func(*Buffer)
+
+// WithBatchDelivery emits all ordered packets ready in one deadline pass.
+// Audio uses this to commit samples atomically; video keeps sample boundaries.
+func WithBatchDelivery() Option { return func(b *Buffer) { b.batchDelivery=true } }
+
+// WithStartupDelay keeps the initial reorder window open. Audio packets are
+// individually complete; without this the first Push irreversibly emits the
+// first arrival and discards an earlier packet arriving inside the latency.
+func WithStartupDelay(delay ...time.Duration) Option {
+	return func(b *Buffer) {
+		b.startupDelay = true
+		b.startupLatency = b.latency
+		if len(delay) > 0 {
+			b.startupLatency = delay[0]
+		}
+	}
+}
+
+type BufferStats struct {
+	PacketsPushed    uint64 // total packets pushed
+	PaddingPushed    uint64 // padding packets pushed
+	PacketsLost      uint64 // packets lost
+	PacketsDropped   uint64 // packets dropped (incomplete)
+	PacketsPopped    uint64 // packets sent to handler
+	SamplesPopped    uint64 // samples sent to handler
+	SSRCSwitches     uint64 // times the buffer re-synced onto a new SSRC
+	PacketsReordered uint64 // packets put back in sequence
+	PacketsDuplicate uint64 // duplicate of the last emitted or currently buffered packet
+	PacketsExpired   uint64 // arrived after the reorder deadline
+	SequenceRestarts uint64 // sender restarted its sequence, same SSRC
+}
+
+type PacketFunc func(packets []ExtPacket)
+
+// StatsFunc is called when a notable buffer event occurs (a stream switch or a reordered packet)
+type StatsFunc func(stats *BufferStats)
+
+// PacketLossFunc is called when packet loss or drops are detected.
+// packetsLost and packetsDropped represent the number of packets lost and dropped up to the point of the call.
+type PacketLossFunc func(packetsLost, packetsDropped uint64)
+
+func NewBuffer(
+	depacketizer rtp.Depacketizer,
+	latency time.Duration,
+	fnc PacketFunc,
+	opts ...Option,
+) *Buffer {
+	b := &Buffer{
+		depacketizer: depacketizer,
+		latency:      latency,
+		logger:       logger.LogRLogger(logr.Discard()),
+		stats:        &BufferStats{},
+		timer:        time.NewTimer(latency),
+		onPacket:     fnc,
+	}
+	for _, opt := range opts {
+		opt(b)
+	}
+
+	go func() {
+		for {
+			select {
+			case <-b.timer.C:
+				b.mu.Lock()
+				b.popReady()
+				b.mu.Unlock()
+			case <-b.closed.Watch():
+				return
+			}
+		}
+	}()
+
+	return b
+}
+
+func WithLogger(logger logger.Logger) Option {
+	return func(b *Buffer) {
+		b.logger = logger
+	}
+}
+
+func WithPacketLossHandler(handler PacketLossFunc) Option {
+	return func(b *Buffer) {
+		b.onPacketLoss = handler
+	}
+}
+
+func WithStatsHandler(handler StatsFunc) Option {
+	return func(b *Buffer) {
+		b.onStats = handler
+	}
+}
+
+// WithSequenceRestartDetection re-syncs when the sender restarts its sequence
+// numbering on the same SSRC, instead of discarding the new sequence until it
+// catches up to prevSN.
+//
+// Detection counts packets, so it is only safe at audio packet rates. On video,
+// a late burst of retransmits (e.g. NACKs for a lost keyframe) can arrive
+// back-to-back with no live packet in between and be mistaken for a restart,
+// which drops the frame being assembled and stalls output for one latency.
+func WithSequenceRestartDetection() Option {
+	return func(b *Buffer) {
+		b.detectRestarts = true
+	}
+}
+
+func (b *Buffer) WithLogger(logger logger.Logger) *Buffer {
+	b.logger = logger
+	return b
+}
+
+func (b *Buffer) UpdateLatency(latency time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.latency = latency
+	if b.head != nil {
+		b.timer.Reset(b.head.extPacket.ReceivedAt.Add(latency).Sub(mono.Now()))
+	}
+}
+
+func (b *Buffer) Push(pkt *rtp.Packet) {
+	b.PushAt(pkt, mono.Now())
+}
+
+func (b *Buffer) PushExtPacket(extPkt ExtPacket) {
+	b.PushAt(extPkt.Packet, extPkt.ReceivedAt)
+}
+
+func (b *Buffer) PushExtPacketBatch(extPktBatch []ExtPacket) {
+	for _, extPkt := range extPktBatch {
+		b.PushAt(extPkt.Packet, extPkt.ReceivedAt)
+	}
+}
+
+func (b *Buffer) PushAt(pkt *rtp.Packet, receivedAt time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed.IsBroken() {
+		return
+	}
+
+	b.push(pkt, receivedAt)
+	if b.head == nil {
+		return
+	}
+
+	b.popReady()
+}
+
+func (b *Buffer) Size() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.size
+}
+
+func (b *Buffer) Stats() *BufferStats {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.statsLocked()
+}
+
+// notifyStats reports a stats snapshot. Caller must hold b.mu.
+func (b *Buffer) notifyStats() {
+	if b.onStats != nil {
+		b.onStats(b.statsLocked())
+	}
+}
+
+// statsLocked is Stats with b.mu already held.
+func (b *Buffer) statsLocked() *BufferStats {
+	return &BufferStats{
+		PacketsPushed:    b.stats.PacketsPushed,
+		PaddingPushed:    b.stats.PaddingPushed,
+		PacketsLost:      b.stats.PacketsLost,
+		PacketsDropped:   b.stats.PacketsDropped,
+		PacketsPopped:    b.stats.PacketsPopped,
+		SamplesPopped:    b.stats.SamplesPopped,
+		SSRCSwitches:     b.stats.SSRCSwitches,
+		PacketsReordered: b.stats.PacketsReordered,
+		PacketsDuplicate: b.stats.PacketsDuplicate,
+		PacketsExpired:   b.stats.PacketsExpired,
+		SequenceRestarts: b.stats.SequenceRestarts,
+	}
+}
+
+func (s *BufferStats) PacketLoss() float64 {
+	if s.PacketsPushed == 0 {
+		return 0
+	}
+
+	return float64(s.PacketsDropped) / float64(s.PacketsPushed)
+}
+
+func (b *Buffer) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed.IsBroken() {
+		return
+	}
+	b.closed.Break()
+	b.timer.Stop()
+	b.flushLocked()
+}
+
+// shouldSwitch reports whether a packet from a new SSRC should take over.
+// Isolated so a stricter policy (hysteresis, quiet-gate) can be added here.
+func (b *Buffer) shouldSwitch(pkt *rtp.Packet) bool {
+	return true
+}
+
+// switchStream re-syncs onto a new SSRC, emitting anything already buffered.
+func (b *Buffer) switchStream(ssrc uint32) {
+	b.resetStream()
+
+	b.ssrc = ssrc
+	b.stats.SSRCSwitches++
+	b.notifyStats()
+}
+
+// restartStream re-syncs after a sequence restart on the same SSRC.
+func (b *Buffer) restartStream() {
+	b.resetStream()
+
+	b.stats.SequenceRestarts++
+	b.notifyStats()
+}
+
+// resetStream emits what is buffered and clears sequence tracking.
+// Caller must hold b.mu.
+func (b *Buffer) resetStream() {
+	b.flushLocked()
+
+	b.initialized = false
+	b.startupUntil = time.Time{}
+	b.prevSN = 0
+	b.restartRun = 0
+	b.restartPrevSN = 0
+	b.restartFar = false
+}
+
+// reordered records a packet that arrived out of sequence and is being placed
+// back in order. Caller must hold b.mu.
+func (b *Buffer) reordered() {
+	b.stats.PacketsReordered++
+	b.notifyStats()
+}
+
+// sequenceRestart reports whether the expired packets so far look like a sender
+// restarting its sequence numbering. A restart keeps counting up with nothing
+// accepted in between; late packets stop expiring once they pass prevSN.
+// A run that starts beyond the reorder window cannot be late packets, so it
+// needs only farSequenceRestartRun.
+// Caller must hold b.mu.
+func (b *Buffer) sequenceRestart(sn uint16) bool {
+	if b.restartRun > 0 && !before(sn, b.restartPrevSN) && withinRange(sn, b.restartPrevSN) {
+		b.restartRun++
+	} else {
+		b.restartRun = 1
+		b.restartFar = !withinRange(sn, b.prevSN)
+	}
+	b.restartPrevSN = sn
+
+	if b.restartFar {
+		return b.restartRun >= farSequenceRestartRun
+	}
+	return b.restartRun >= sequenceRestartRun
+}
+
+// push adds a packet to the buffer
+func (b *Buffer) push(pkt *rtp.Packet, receivedAt time.Time) {
+	b.stats.PacketsPushed++
+	if pkt.Padding {
+		b.stats.PaddingPushed++
+		if !b.initialized {
+			return
+		}
+	}
+
+	// A new SSRC is an unrelated sequence space. Without this, the expiry check
+	// below would discard it until it caught up to prevSN - up to 32767 packets.
+	switch {
+	case !b.hasSSRC:
+		b.ssrc, b.hasSSRC = pkt.SSRC, true
+	case pkt.SSRC != b.ssrc && b.shouldSwitch(pkt):
+		b.switchStream(pkt.SSRC)
+	}
+	if b.initialized && pkt.SequenceNumber == b.prevSN {
+		b.stats.PacketsDuplicate++
+		return
+	}
+	for c := b.head; c != nil; c = c.next {
+		if c.extPacket.SequenceNumber == pkt.SequenceNumber && c.extPacket.SSRC == pkt.SSRC {
+			b.stats.PacketsDuplicate++
+			return
+		}
+	}
+
+	if b.initialized && before(pkt.SequenceNumber, b.prevSN) {
+		if !b.detectRestarts || !b.sequenceRestart(pkt.SequenceNumber) {
+			// packet expired
+			if !pkt.Padding {
+				b.stats.PacketsExpired++
+				b.stats.PacketsDropped++
+				if b.onPacketLoss != nil {
+					b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+				}
+			}
+			return
+		}
+		b.restartStream()
+	}
+	// an accepted packet ends any run of expired ones
+	b.restartRun = 0
+
+	p := b.newPacket(pkt, receivedAt)
+
+	discont := !b.initialized || !withinRange(pkt.SequenceNumber, b.prevSN)
+
+	if b.head == nil {
+		p.discont = discont && p.start
+		b.head = p
+		b.tail = p
+		return
+	}
+
+	beforeHead := before(pkt.SequenceNumber, b.head.extPacket.SequenceNumber)
+	afterTail := !before(pkt.SequenceNumber, b.tail.extPacket.SequenceNumber)
+	withinHeadRange := withinRange(pkt.SequenceNumber, b.head.extPacket.SequenceNumber)
+	withinTailRange := withinRange(pkt.SequenceNumber, b.tail.extPacket.SequenceNumber)
+
+	switch {
+	case beforeHead && withinHeadRange:
+		// prepend
+		b.reordered()
+		p.discont = discont && p.start
+		b.head.prev = p
+		p.next = b.head
+		b.head = p
+
+	case afterTail && withinTailRange:
+		// append
+		p.prev = b.tail
+		b.tail.next = p
+		b.tail = p
+
+	case withinTailRange:
+		// insert, search from tail
+		b.reordered()
+		for c := b.tail.prev; c != nil; c = c.prev {
+			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
+			if !before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {
+				// insert after c
+				p.discont = discont && p.start
+				p.prev = c
+				p.next = c.next
+				c.next.prev = p
+				c.next = p
+				return
+			}
+		}
+
+	case withinHeadRange:
+		// insert, search from head
+		b.reordered()
+		for c := b.head.next; c != nil; c = c.next {
+			discont = !withinRange(pkt.SequenceNumber, c.extPacket.SequenceNumber)
+			if before(pkt.SequenceNumber, c.extPacket.SequenceNumber) || discont {
+				// insert before c
+				p.prev = c.prev
+				p.next = c
+				c.prev.next = p
+				c.prev = p
+				return
+			}
+		}
+
+	default:
+		// append (discont)
+		p.discont = p.start
+		p.prev = b.tail
+		b.tail.next = p
+		b.tail = p
+	}
+}
+
+// popReady pushes all ready samples to the out channel
+func (b *Buffer) popReady() {
+	if b.startupDelay && !b.initialized && b.head != nil {
+		if b.startupUntil.IsZero() {
+			b.startupUntil = mono.Now().Add(b.startupLatency)
+		}
+		if remaining := b.startupUntil.Sub(mono.Now()); remaining > 0 {
+			b.timer.Reset(remaining)
+			return
+		}
+	}
+	expiry := mono.Now().Add(-b.latency)
+
+	b.dropIncompleteExpired(expiry)
+
+	loss := false
+	var ready []ExtPacket
+	for b.head != nil &&
+		b.head.isComplete() {
+
+		if b.head.extPacket.SequenceNumber == b.prevSN+1 || b.head.discont || !b.initialized {
+			// normal
+		} else if !expiry.Before(b.head.extPacket.ReceivedAt) {
+			// max latency reached
+			loss = true
+			b.stats.PacketsLost += missingBetween(b.head.extPacket.SequenceNumber, b.prevSN)
+		} else {
+			break
+		}
+
+		if sample := b.popSample(); len(sample) > 0 {
+			if b.batchDelivery { ready=append(ready,sample...) } else { b.onPacket(sample) }
+		}
+	}
+	if len(ready) > 0 {
+		b.onPacket(ready)
+	}
+
+	if loss && b.onPacketLoss != nil {
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+	}
+
+	if b.head != nil {
+		b.timer.Reset(b.head.extPacket.ReceivedAt.Add(b.latency).Sub(mono.Now()))
+	}
+}
+
+// dropIncompleteExpired drops incomplete expired packets
+func (b *Buffer) dropIncompleteExpired(expiry time.Time) {
+	dropped := b.dropIncomplete(expiry, false)
+
+	if dropped && b.onPacketLoss != nil {
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+	}
+}
+
+// dropIncomplete drops incomplete packets at the head of the buffer.
+// If force is false, only drops packets that arrived before expiry.
+func (b *Buffer) dropIncomplete(expiry time.Time, force bool) bool {
+	dropped := false
+
+	for b.head != nil && !b.head.isComplete() && (force || b.head.extPacket.ReceivedAt.Before(expiry)) {
+		if b.initialized && !b.head.discont {
+			b.stats.PacketsLost += missingBetween(b.head.extPacket.SequenceNumber, b.prevSN)
+		}
+
+		b.free(b.popHead())
+
+		dropped = true
+		b.stats.PacketsDropped++
+	}
+
+	return dropped
+}
+
+// Flush drops all incomplete samples and emits any complete samples immediately.
+// Useful when no more packets will arrive (e.g. track unsubscribed).
+func (b *Buffer) Flush() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.flushLocked()
+}
+
+// flushLocked is Flush with b.mu already held.
+func (b *Buffer) flushLocked() {
+	dropped := b.dropIncomplete(time.Time{}, true)
+	loss := false
+
+	for b.head != nil && b.head.isComplete() {
+		if b.head.extPacket.SequenceNumber == b.prevSN+1 || b.head.discont || !b.initialized {
+			// normal
+		} else {
+			// missing packets between prevSN and current head
+			loss = true
+			b.stats.PacketsLost += missingBetween(b.head.extPacket.SequenceNumber, b.prevSN)
+		}
+
+		if sample := b.popSample(); len(sample) > 0 {
+			b.onPacket(sample)
+		}
+
+		if b.dropIncomplete(time.Time{}, true) {
+			dropped = true
+		}
+	}
+
+	if (loss || dropped) && b.onPacketLoss != nil {
+		b.onPacketLoss(b.stats.PacketsLost, b.stats.PacketsDropped)
+	}
+}
+
+func (b *Buffer) popSample() []ExtPacket {
+	sample := make([]ExtPacket, 0, b.size)
+	end := false
+	for !end {
+		c := b.popHead()
+		end = c.end
+
+		if !c.extPacket.Padding {
+			sample = append(sample, c.extPacket)
+		}
+
+		b.stats.PacketsPopped++
+		b.free(c)
+	}
+
+	b.initialized = true
+	b.stats.SamplesPopped++
+
+	return sample
+}
+
+func (b *Buffer) popHead() *packet {
+	c := b.head
+	b.prevSN = c.extPacket.SequenceNumber
+	b.head = c.next
+	if b.head == nil {
+		b.tail = nil
+	} else {
+		b.head.prev = nil
+	}
+	return c
+}
+
+// sequenceRestartRun is how many consecutive ascending expired packets are read
+// as a sequence restart. At 20ms audio packets, a run this long needs the live
+// stream to go silent for ~400ms while old packets arrive in order, since any
+// accepted packet zeroes the run. At video rates it does not, hence opt-in.
+const sequenceRestartRun = 20
+
+// farSequenceRestartRun is the run needed when it starts beyond the reorder
+// window of prevSN. At audio rates a packet that far behind (~60s) is not late,
+// but a lone stale one should not rewind the stream, so it still takes a second
+// packet to confirm.
+const farSequenceRestartRun = 2
+
+// missingBetween returns how many packets are missing between prevSN and sn.
+// sn must be ahead of prevSN; equal or behind wraps the subtraction to ~65535.
+// push drops anything at or behind prevSN, and callers skip this while
+// !initialized, so neither case reaches here.
+func missingBetween(sn, prevSN uint16) uint64 {
+	return uint64(sn - prevSN - 1)
+}
+
+func before(a, b uint16) bool {
+	return (b-a)&0x8000 == 0
+}
+
+func withinRange(a, b uint16) bool {
+	return a-b < 3000 || b-a < 3000
+}

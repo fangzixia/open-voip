@@ -5,6 +5,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/pion/sdp/v3"
 )
 
 func sipHeader(raw []byte, name string) string {
@@ -79,39 +81,47 @@ type sdpMedia struct {
 	IP     string
 	Port   int
 	Types  []int
+	rtpmap map[int]string
 	opusPT int // 动态 PT；-1 表示 offer 未含 Opus
 }
 
 func parseSDP(body string) sdpMedia {
-	var out sdpMedia
-	out.opusPT = -1
-	sessIP := ""
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		switch {
-		case strings.HasPrefix(line, "c=IN IP4 "):
-			ip := strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4 "))
-			if ip == "" || ip == "0.0.0.0" {
-				continue
+	out := sdpMedia{opusPT: -1, rtpmap: map[int]string{}}
+	var session sdp.SessionDescription
+	if session.UnmarshalString(body) != nil {
+		return out
+	}
+	var audio *sdp.MediaDescription
+	for _, media := range session.MediaDescriptions {
+		if media.MediaName.Media == "audio" {
+			// One SIP leg has one audio input and one output producer.
+			if audio != nil {
+				return out
 			}
-			if out.Port == 0 {
-				sessIP = ip
-			}
-			out.IP = ip
-		case strings.HasPrefix(line, "m=audio "):
-			f := strings.Fields(line)
-			if len(f) >= 2 {
-				out.Port, _ = strconv.Atoi(f[1])
-			}
-			out.Types = nil
-			for i := 3; i < len(f); i++ {
-				if n, err := strconv.Atoi(f[i]); err == nil {
-					out.Types = append(out.Types, n)
-				}
-			}
-		case strings.HasPrefix(line, "a=rtpmap:"):
-			rest := strings.TrimPrefix(line, "a=rtpmap:")
-			f := strings.Fields(rest)
+			audio = media
+		}
+	}
+	if audio == nil || strings.Join(audio.MediaName.Protos, "/") != "RTP/AVP" {
+		return out
+	}
+	out.Port = audio.MediaName.Port.Value
+	connection := audio.ConnectionInformation
+	if connection == nil {
+		connection = session.ConnectionInformation
+	}
+	if connection != nil && connection.Address != nil && connection.NetworkType == "IN" && connection.AddressType == "IP4" {
+		out.IP = connection.Address.Address
+	}
+	for _, format := range audio.MediaName.Formats {
+		if pt, err := strconv.Atoi(format); err == nil {
+			out.Types = append(out.Types, pt)
+		}
+	}
+	// Attribute scope belongs to Pion. A video c= or rtpmap can never replace
+	// the selected audio address, codec or clock.
+	for _, attr := range audio.Attributes {
+		if attr.Key == "rtpmap" {
+			f := strings.Fields(attr.Value)
 			if len(f) < 2 {
 				continue
 			}
@@ -119,13 +129,15 @@ func parseSDP(body string) sdpMedia {
 			if err != nil {
 				continue
 			}
+			mapping := strings.ToUpper(f[1])
+			if previous, ok := out.rtpmap[pt]; ok && previous != mapping {
+				mapping = "INVALID"
+			}
+			out.rtpmap[pt] = mapping
 			if strings.HasPrefix(strings.ToLower(f[1]), "opus/") {
 				out.opusPT = pt
 			}
 		}
-	}
-	if out.IP == "" {
-		out.IP = sessIP
 	}
 	return out
 }
@@ -141,36 +153,40 @@ func (m sdpMedia) hasPT(pt int) bool {
 
 func (m sdpMedia) hasAudioCodec() bool {
 	if len(m.Types) == 0 {
-		return true
+		return false
 	}
 	for _, t := range m.Types {
-		if t == 0 || t == 8 || t == 9 {
+		if m.validG711PT(t) {
 			return true
-		}
-	}
-	if m.opusPT >= 0 {
-		for _, t := range m.Types {
-			if t == m.opusPT {
-				return true
-			}
 		}
 	}
 	return false
 }
 
-func (m sdpMedia) negotiateCodec(preferWideband, preferOpus bool) (sipAudioCodec, uint8) {
-	if preferOpus && m.opusPT >= 0 && m.hasPT(m.opusPT) {
-		return sipCodecOpus, uint8(m.opusPT)
+func (m sdpMedia) validG711PT(pt int) bool {
+	name := ""
+	switch pt {
+	case 0:
+		name = "PCMU"
+	case 8:
+		name = "PCMA"
+	default:
+		return false
 	}
-	if preferWideband && m.hasPT(9) {
-		return sipCodecG722, 9
-	}
+	mapping, explicit := m.rtpmap[pt]
+	return !explicit || mapping == name+"/8000" || mapping == name+"/8000/1"
+}
+
+func (m sdpMedia) negotiateCodec() (sipAudioCodec, uint8) {
 	pt := m.preferG711()
 	return codecFromPT(pt), pt
 }
 
 func (m sdpMedia) preferG711() uint8 {
 	for _, t := range m.Types {
+		if !m.validG711PT(t) {
+			continue
+		}
 		if t == 8 {
 			return 8
 		}
@@ -185,36 +201,23 @@ func (m sdpMedia) preferG711() uint8 {
 }
 
 func buildAudioSDP(ip string, port int, codecs []string) string {
-	offerU, offerA, offer722, offerOpus := true, true, false, false
+	offerU, offerA := true, true
 	if len(codecs) > 0 {
-		offerU, offerA, offer722, offerOpus = false, false, false, false
+		offerU, offerA = false, false
 		for _, c := range codecs {
 			switch strings.ToUpper(strings.TrimSpace(c)) {
 			case "PCMU":
 				offerU = true
 			case "PCMA":
 				offerA = true
-			case "G722":
-				offer722 = true
-			case "OPUS":
-				offerOpus = true
 			}
 		}
 	}
-	if !offerU && !offerA && !offer722 && !offerOpus {
-		offerU = true
+	if !offerU && !offerA {
+		return ""
 	}
 	pts := make([]string, 0, 6)
 	var b strings.Builder
-	if offerOpus {
-		pts = append(pts, "111")
-		b.WriteString("a=rtpmap:111 opus/48000/2\r\n")
-		b.WriteString("a=fmtp:111 maxplaybackrate=48000; sprop-maxcapturerate=48000; stereo=0; useinbandfec=1; maxaveragebitrate=96000\r\n")
-	}
-	if offer722 {
-		pts = append(pts, "9")
-		b.WriteString("a=rtpmap:9 G722/8000\r\n")
-	}
 	if offerU {
 		pts = append(pts, "0")
 		b.WriteString("a=rtpmap:0 PCMU/8000\r\n")
@@ -241,30 +244,18 @@ func buildPCMUSDP(ip string, port int) string {
 }
 
 func (u *sipUA) buildAnswerForCall(callID string, rtpPort int, offer sdpMedia) string {
-	preferWB := u.cfg.PreferWideband
-	preferOpus := false
-	if u.media != nil {
-		wb, opus := u.media.sdpNegotiatePrefs(callID)
-		preferWB = preferWB || wb
-		preferOpus = opus
-	}
-	return buildAnswerSDP(u.cfg.AdvertiseHost(), rtpPort, offer, preferWB, preferOpus)
+	return buildAnswerSDP(u.cfg.AdvertiseHost(), rtpPort, offer)
 }
 
 // buildAnswerSDP 按 RFC 3264 对 offer 取子集：应答单一音频 PT，telephone-event 仅在 offer 中出现时带回。
-func buildAnswerSDP(ip string, port int, offer sdpMedia, preferWideband, preferOpus bool) string {
+func buildAnswerSDP(ip string, port int, offer sdpMedia) string {
 	if !offer.hasAudioCodec() {
 		return ""
 	}
-	codec, pt := offer.negotiateCodec(preferWideband, preferOpus)
+	codec, pt := offer.negotiateCodec()
 	var b strings.Builder
 	pts := []string{strconv.Itoa(int(pt))}
 	switch codec {
-	case sipCodecOpus:
-		b.WriteString(fmt.Sprintf("a=rtpmap:%d opus/48000/2\r\n", pt))
-		b.WriteString(fmt.Sprintf("a=fmtp:%d maxplaybackrate=48000; sprop-maxcapturerate=48000; stereo=0; useinbandfec=1; maxaveragebitrate=96000\r\n", pt))
-	case sipCodecG722:
-		b.WriteString("a=rtpmap:9 G722/8000\r\n")
 	case sipCodecPCMA:
 		b.WriteString("a=rtpmap:8 PCMA/8000\r\n")
 	default:

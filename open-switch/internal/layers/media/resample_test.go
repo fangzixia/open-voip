@@ -7,7 +7,11 @@ func TestDownsample16kTo8kHalvesLength(t *testing.T) {
 	for i := range in {
 		in[i] = int16(i * 100)
 	}
-	out, rate := downsamplePCMTo8k(in, 16000)
+	out, err := resamplePCM(in, 16000, 8000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rate := 8000
 	if rate != 8000 || len(out) != 160 {
 		t.Fatalf("rate=%d len=%d", rate, len(out))
 	}

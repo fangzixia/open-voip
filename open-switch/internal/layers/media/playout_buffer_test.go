@@ -1,65 +1,109 @@
 package media
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
 
-func TestPlayoutPreservesLongFrame(t *testing.T) {
-	leg := newLegPlayoutBuffer(defaultPlayoutCap)
-	long := make([]int16, 240) // 30 ms @ 8 kHz
-	for i := range long {
-		long[i] = 1000
-	}
-	leg.ingest(1, 1, 0, long)
-	frame := leg.pullFrame()
-	if len(frame) != mixInternalFrameSamples {
-		t.Fatalf("frame len=%d", len(frame))
-	}
-	if frame[0] != 1000 || frame[mixInternalFrameSamples-1] != 1000 {
-		t.Fatalf("expected first 20ms of long frame, got %d..%d", frame[0], frame[mixInternalFrameSamples-1])
-	}
-	second := leg.pullFrame()
-	if second[0] != 1000 {
-		t.Fatalf("second frame should continue long payload, got %d", second[0])
+func waitPlayout(t *testing.T, b *legPlayoutBuffer) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		b.mu.Lock()
+		ready := b.anchored && !time.Now().Before(b.readyAt)
+		b.mu.Unlock()
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("playout never ready")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
-
-func TestPlayoutDeduplicateSeq(t *testing.T) {
-	leg := newLegPlayoutBuffer(defaultPlayoutCap)
-	a := make([]int16, mixInternalFrameSamples)
-	a[0] = 500
-	leg.ingest(10, 1, 0, a)
-	leg.ingest(10, 1, uint32(mixInternalFrameSamples), a) // duplicate seq
-	leg.ingest(11, 1, uint32(mixInternalFrameSamples), func() []int16 {
-		b := make([]int16, mixInternalFrameSamples)
-		b[0] = 900
-		return b
-	}())
-	f1 := leg.pullFrame()
-	f2 := leg.pullFrame()
-	if f1[0] != 500 || f2[0] != 900 {
-		t.Fatalf("duplicate seq should be ignored: %d %d", f1[0], f2[0])
+func TestPlayoutPacketization(t *testing.T) {
+	for _, n := range []int{80, 160, 240, 320} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			b := newLegPlayoutBuffer(defaultPlayoutCap)
+			defer b.close()
+			for i := 0; i < 4; i++ {
+				pcm := make([]int16, n)
+				for j := range pcm {
+					pcm[j] = int16(1000 + i*n + j)
+				}
+				b.ingest(uint16(i), 1, uint32(i*n), pcm)
+			}
+			waitPlayout(t, b)
+			for samples := 0; samples < 4*n; samples += 160 {
+				frame := b.pullFrame()
+				if len(frame) != 160 {
+					t.Fatal("output framing")
+				}
+				for j, v := range frame {
+					if v != int16(1000+samples+j) {
+						t.Fatalf("sample truncated or duplicated: %d", v)
+					}
+				}
+			}
+		})
 	}
 }
-
-func TestPlayoutSSRCRestart(t *testing.T) {
-	leg := newLegPlayoutBuffer(defaultPlayoutCap)
-	a := make([]int16, mixInternalFrameSamples)
-	a[0] = 111
-	leg.ingest(1, 1, 0, a)
-	leg.ingest(1, 2, 0, a) // new SSRC
-	f := leg.pullFrame()
-	if f[0] != 111 {
-		t.Fatalf("after ssrc restart expected fresh anchor, got %d", f[0])
+func TestPlayoutFirstReorderAndWrap(t *testing.T) {
+	b := newLegPlayoutBuffer(defaultPlayoutCap)
+	defer b.close()
+	a := make([]int16, 160)
+	z := make([]int16, 160)
+	for i := range a {
+		a[i] = 1200
+		z[i] = 2400
+	}
+	b.ingest(0, 1, 80, z)
+	b.ingest(65535, 1, 0xffffffb0, a)
+	waitPlayout(t, b)
+	if b.pullFrame()[0] != 1200 || b.pullFrame()[0] != 2400 {
+		t.Fatal("first reorder/timestamp wrap lost audio")
+	}
+	if rtpSampleIndex(1000, 1160) != -160 {
+		t.Fatal("negative timestamp delta became a future epoch")
 	}
 }
-
-func TestRecordingTimelineNoOverlapWrite(t *testing.T) {
-	m := newPCMMix(8000, time.Now())
-	m.writeLinearAtSampleIdx(0, []int16{100, 200}, 8000)
-	m.writeLinearAtSampleIdx(0, []int16{300, 400}, 8000)
-	if m.samples[0] != 300 || m.samples[1] != 400 {
-		t.Fatalf("leg track should overwrite not add: %v", m.samples[:2])
+func TestPlayoutReceivedSilenceIsNotLoss(t *testing.T) {
+	b := newLegPlayoutBuffer(defaultPlayoutCap)
+	defer b.close()
+	a := make([]int16, 160)
+	for i := range a {
+		a[i] = 1000
+	}
+	b.ingest(1, 1, 0, a)
+	b.ingest(2, 1, 160, make([]int16, 160))
+	waitPlayout(t, b)
+	b.pullFrame()
+	for _, v := range b.pullFrame() {
+		if v != 0 {
+			t.Fatal("received silence concealed")
+		}
+	}
+	if b.plcSamples != 0 {
+		t.Fatal("PLC was invoked for real silence")
+	}
+}
+func TestPlayoutDuplicateAndSSRCReset(t *testing.T) {
+	b := newLegPlayoutBuffer(defaultPlayoutCap)
+	defer b.close()
+	a := make([]int16, 160)
+	for i := range a {
+		a[i] = 111
+	}
+	b.ingest(1, 1, 0, a)
+	b.ingest(1, 1, 0, a)
+	waitPlayout(t, b)
+	if b.pullFrame()[0] != 111 {
+		t.Fatal("initial audio")
+	}
+	b.ingest(1, 2, 10000, a)
+	waitPlayout(t, b)
+	if b.pullFrame()[0] != 111 {
+		t.Fatal("SSRC did not reset stream")
 	}
 }

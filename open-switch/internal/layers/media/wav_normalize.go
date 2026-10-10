@@ -30,10 +30,16 @@ func NormalizePromptUpload(ctx context.Context, ffmpegPath string, raw []byte) (
 	if err != nil {
 		return nil, nil, err
 	}
-	pcm8, _ := downsamplePCMTo8k(pcm, rate)
+	pcm8, err := resamplePCM(pcm, rate, 8000)
+	if err != nil {
+		return nil, nil, err
+	}
 	pcm8 = preparePromptPCM(pcm8)
 	narrow = encodePCM16WAV(pcm8, 8000)
-	pcm48 := resamplePCM(pcm, rate, 48000)
+	pcm48, err := resamplePCM(pcm, rate, 48000)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(pcm48) > 0 {
 		hd = encodePCM16WAV(pcm48, 48000)
 	}

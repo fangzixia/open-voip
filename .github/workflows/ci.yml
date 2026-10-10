@@ -30,6 +30,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.1"
+      - name: Native narrowband dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsoxr-dev libspandsp-dev pkg-config
       - name: Go test & build
         env:
           OPEN_VOIP_TEST_DSN: "host=127.0.0.1 user=openvoip password=change_me dbname=openvoip_switch port=5432 sslmode=disable"
@@ -38,6 +40,9 @@ jobs:
           go vet ./...
           go test -race -cover ./...
           go build -o /dev/null ./cmd/open-switch
+      - name: Frozen media component regression
+        working-directory: open-switch/third_party/media-sdk
+        run: go test -race . ./jitter ./mixer ./ring -count=1
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:

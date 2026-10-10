@@ -19,7 +19,7 @@ UI **不得**用本地 `call` 对象是否存在推断「已接通」，必须�
 | 类型 | 典型场景 | 载荷 |
 |------|----------|------|
 | `command.failed` | IVR 跳数超限等 | `message`, `error_code`, `reason`, `call_id` |
-| `recording.failed` | 录音启动失败 | `message`, `call_id` |
+| `recording.failed` | 录音启动或运行中失败，通话继续 | 启动失败：`message`, `call_id`；运行中：录音 ID、`failure_reason` 和部分文件元数据 |
 | `leg.failed` | Direct SIP 拨号失败 | `message`, `error_code`, `leg_id`, `call_id` |
 | `call.outbound_progress` | PSTN 出局阶段 | `phase`: `dialing` / `connected` / `failed`, `message?` |
 | `call.device_failed` | SIP 坐席设备不可达 | `call_id`（配合后续 `call.ended`） |
@@ -53,7 +53,7 @@ open-call 仅将 `result_key=csat` 且 `input` 为单个 `1–5` 的事件解释
 1. 网关未注册外呼：`result=failed`，`message` 含网关/SIP 说明，坐席不显示「已接通」。
 2. SIP 486/480：message 含忙/不可用。
 3. IVR 素材缺失：`command.failed` + `call.ended` 带 `IVR_PROMPT_FAILED`。
-4. 录音目录不可写：`recording.failed` toast。
+4. 录音目录不可写、磁盘满或写盘积压：`recording.failed`，通话继续，录音页面明确显示失败及部分文件。
 5. Direct `leg.failed`：管理 runtime 可见 `end_message` 或 leg 失败提示。
 
 
@@ -62,3 +62,9 @@ open-call 仅将 `result_key=csat` 且 `input` 为单个 `1–5` 的事件解释
 `leg.playback_started/finished/stopped/failed` 携带 `call_id`、`leg_id`、`playback_id`。完成事件的 `completion_scope=server_output` 只表示服务器输出完成及尾帧余量结束，不代表对端听见。call 的通知任务按播放结果决定完成或失败并请求挂断，Switch 不解释通知业务。
 
 PCM WebSocket 的 `output.finished` 是连接内媒体事件，不属于业务通知结果。机器人按模型回复及 generation 推进对话，普通坐席仍使用原通话事件与终端媒体协议。
+
+### 录音元数据及运行中失败
+
+`recording.saved` 的元数据新增 `recording_semantics`、`channels`、`duration_samples`、`status`、`failure_reason`，继续包含 `sample_rate_hz`、`leg_paths`、路径、文件大小及时间。新音频主录为 `conversation_mono_v1`、8 kHz、PCM16、单声道，包含允许录制的客户、坐席/AI 和提示音各一次；各腿共享房间播放时间轴，静音、保持、晚加入和离开不压缩时长。历史录音为 `legacy`，文件不改写。
+
+运行中 `recording.failed` 包含 `id`、`recording_id`、`call_id`、`failure_reason`、`status=failed` 及当前部分文件元数据。录音队列满、磁盘失败或停录超过 5 秒均发布失败；失败不挂断通话，部分文件不可显示为正常完成。投影必须保持失败状态，合并同一 ID 的分轨并保留最大的已写样本数，避免乱序事件缩短录音或丢失文件。未带录音 ID 的启动失败只作过程通知，不能生成一条空 ID 录音。

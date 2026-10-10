@@ -28,21 +28,47 @@ func TestTwoSIPLegsBridgeAndRejectForeignRTP(t *testing.T) {
 	ra := &sipRTP{conn: a, remote: peerA.LocalAddr().(*net.UDPAddr), legID: "customer"}
 	rb := &sipRTP{conn: b, remote: peerB.LocalAddr().(*net.UDPAddr), legID: "agent"}
 	s := &Service{rooms: map[string]*room{"c": {peers: map[string]*peer{}, sipRTP: map[*sipRTP]struct{}{ra: {}, rb: {}}, dtmf: map[string]ports.DTMFHandler{}}}}
+	r := s.rooms["c"]
+	r.mixAudio = true
+	r.mixer = newScheduledRoomMixer()
+	t.Cleanup(r.mixer.stop)
 	go s.sipReadLoop("c", ra)
 	go s.sipReadLoop("c", rb)
-	raw, _ := (&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SequenceNumber: 7, Timestamp: 160, SSRC: 42}, Payload: []byte{1, 2, 3}}).Marshal()
+	pcm := make([]int16, 160)
+	for i := range pcm {
+		pcm[i] = 4000
+	}
+	raw, _ := (&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SequenceNumber: 7, Timestamp: 160, SSRC: 42}, Payload: pcmToPCMU(pcm)}).Marshal()
 	if _, err := peerA.WriteToUDP(raw, a.LocalAddr().(*net.UDPAddr)); err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(time.Second)
+	var input *legPlayoutBuffer
+	for input == nil {
+		r.mixer.mu.Lock()
+		input = r.mixer.legs["customer"]
+		r.mixer.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("input not attached")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	waitPlayout(t, input)
+	go s.runRoomMixLoop("c", r, r.mixer)
 	peerB.SetReadDeadline(time.Now().Add(time.Second))
 	buf := make([]byte, 1500)
-	n, _, err := peerB.ReadFromUDP(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var packet rtp.Packet
-	if err := packet.Unmarshal(buf[:n]); err != nil || string(packet.Payload) != "\x01\x02\x03" {
-		t.Fatalf("bridge failed: %v %+v", err, packet)
+	for {
+		n, _, err := peerB.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = packet.Unmarshal(buf[:n]); err != nil || len(packet.Payload) != 160 {
+			t.Fatalf("invalid output: %v", err)
+		}
+		if pcmuPayloadToPCM(packet.Payload)[80] > 3000 {
+			break
+		}
 	}
 	if ra.acceptSource(&net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 4444}) {
 		t.Fatal("foreign source hijacked RTP")

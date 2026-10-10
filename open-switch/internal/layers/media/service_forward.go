@@ -9,128 +9,76 @@ import (
 	"open-switch/internal/ports/dto"
 )
 
-// forward 处理某一 leg 的入站 RTP。
-//
-// 若房间开启 mixAudio（典型：SIP 主叫 + WebRTC 坐席/AI）：
-//   各 leg PCM 进入 RTP 时间轴缓冲，20 ms 调度混音后下发「除自己外的混音」，避免回声。
-// 否则：原样转发 RTP 包。录音侧始终 writeRTP，由 recorder 解码为线性 PCM 混音。
+// forward validates the negotiated codec before handing packets to the common
+// pipeline. Independent video rooms retain their packet forwarding contract.
 func (s *Service) forward(callID, fromLeg string, remote *webrtc.TrackRemote) {
-	buf := make([]byte, 1500)
-	pkt := &rtp.Packet{}
+	buf := make([]byte, 65535)
 	for {
-		n, _, err := remote.Read(buf)
-		if err != nil {
+		n, _, e := remote.Read(buf)
+		if e != nil {
 			return
+		}
+		pkt := &rtp.Packet{}
+		if pkt.Unmarshal(buf[:n]) != nil {
+			continue
 		}
 		r := s.getRoom(callID)
 		if r == nil {
 			return
 		}
 		r.mu.RLock()
-		unmarshaled := pkt.Unmarshal(buf[:n]) == nil
 		from := r.peers[fromLeg]
-		muted := false
-		held := false
+		muted, held := false, false
 		if from != nil {
 			held = from.held
 			if remote.Kind() == webrtc.RTPCodecTypeAudio {
-				muted = from.audioMuted
+				muted = from.audioMuted || from.role == dto.LegRoleSupervisor
 			} else {
 				muted = from.videoMuted
 			}
-			if from.role == dto.LegRoleSupervisor {
-				muted = true
-			}
 		}
-		if unmarshaled && !muted && !held && remote.Kind() == webrtc.RTPCodecTypeAudio && r.mixer != nil && r.mixAudio {
-			if pkt.PayloadType != 101 { // 101=telephone-event，不参与语音混音
-				pcmu := rtpPayloadToPCMUForLeg(fromLeg, pkt.PayloadType, append([]byte(nil), pkt.Payload...))
-				if len(pcmu) == 0 {
-					r.mu.RUnlock()
+		mix, mixAudio, rec := r.mixer, r.mixAudio, r.rec
+		var tracks []*webrtc.TrackLocalStaticRTP
+		if !mixAudio || remote.Kind() != webrtc.RTPCodecTypeAudio {
+			for id, p := range r.peers {
+				if id == fromLeg || muted || held || p.held || !r.mediaForwardAllowed(fromLeg, id) {
 					continue
 				}
-				pcm := pcmuPayloadToPCM(pcmu)
-				clock := 8000
-				if len(pcm) > 0 {
-					if r.rec != nil && r.rec.tapRecording() {
-						role := dto.LegRole("")
-						if from != nil {
-							role = from.role
-						}
-						if role == "" {
-							role = r.legRoles[fromLeg]
-						}
-						r.rec.TapUplink(fromLeg, role, pcm, clock)
-					}
-					r.mixer.ingest(fromLeg, pkt.SequenceNumber, pkt.Timestamp, pkt.SSRC, clock, pcm)
+				out := p.videoOut
+				if remote.Kind() == webrtc.RTPCodecTypeAudio {
+					out = p.audioOut
 				}
-			}
-			r.mu.RUnlock()
-			continue
-		}
-		var bridgePCM []int16
-		bridgeTap := unmarshaled && !muted && !held && remote.Kind() == webrtc.RTPCodecTypeAudio &&
-			!r.mixAudio && r.rec != nil && r.rec.tapRecording() && pkt.PayloadType != 101
-		if bridgeTap {
-			pcmu := rtpPayloadToPCMUForLeg(fromLeg, pkt.PayloadType, append([]byte(nil), pkt.Payload...))
-			if len(pcmu) > 0 {
-				bridgePCM = pcmuPayloadToPCM(pcmu)
-				role := dto.LegRole("")
-				if from != nil {
-					role = from.role
-				}
-				if role == "" {
-					role = r.legRoles[fromLeg]
-				}
-				r.rec.TapUplink(fromLeg, role, bridgePCM, 8000)
-			} else {
-				bridgeTap = false
-			}
-		}
-		for id, p := range r.peers {
-			if id == fromLeg || muted || held || p.held || !r.mediaForwardAllowed(fromLeg, id) {
-				continue
-			}
-			var out *webrtc.TrackLocalStaticRTP
-			if remote.Kind() == webrtc.RTPCodecTypeAudio {
-				out = p.audioOut
-			} else {
-				out = p.videoOut
-			}
-			if out != nil {
-				if bridgeTap && len(bridgePCM) > 0 {
-					destRole := p.role
-					if destRole == "" {
-						destRole = r.legRoles[id]
-					}
-					r.rec.TapMainMixed(destRole, bridgePCM, 8000)
-				}
-				_, _ = out.Write(buf[:n])
-			}
-		}
-		if unmarshaled && !muted && !held && remote.Kind() == webrtc.RTPCodecTypeAudio && r.sipRTP != nil {
-			if pkt.PayloadType == 101 {
-				r.mu.RUnlock()
-				continue
-			}
-			pcmu := rtpPayloadToPCMU(pkt.PayloadType, append([]byte(nil), pkt.Payload...))
-			if len(pcmu) == 0 {
-				r.mu.RUnlock()
-				continue
-			}
-			outPkt := rtp.Packet{
-				Header: rtp.Header{Version: 2, PayloadType: 0, SequenceNumber: pkt.SequenceNumber, Timestamp: pkt.Timestamp, SSRC: pkt.SSRC},
-				Payload: pcmu,
-			}
-			if raw, err := outPkt.Marshal(); err == nil {
-				for rt := range r.sipRTP {
-					if !rt.blocked() && r.canForward(fromLeg, rt.legID) {
-						rt.writePCMU(raw)
-					}
+				if out != nil {
+					tracks = append(tracks, out)
 				}
 			}
 		}
 		r.mu.RUnlock()
+		if muted || held {
+			continue
+		}
+		if remote.Kind() == webrtc.RTPCodecTypeAudio && mixAudio && mix != nil {
+			codec := remote.Codec()
+			if codec.ClockRate != 8000 || pkt.PayloadType != uint8(codec.PayloadType) {
+				continue
+			}
+			switch codec.MimeType {
+			case webrtc.MimeTypePCMU:
+				pkt.PayloadType = 0
+			case webrtc.MimeTypePCMA:
+				pkt.PayloadType = 8
+			default:
+				continue
+			}
+			mix.ingestPacket(fromLeg, pkt)
+			continue
+		}
+		if rec != nil {
+			rec.writeRTP(fromLeg, remote.Kind(), remote.Codec().MimeType, pkt)
+		}
+		for _, out := range tracks {
+			_, _ = out.Write(buf[:n])
+		}
 	}
 }
 

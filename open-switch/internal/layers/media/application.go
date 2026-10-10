@@ -4,26 +4,28 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/pion/webrtc/v4/pkg/media"
 	"open-switch/internal/errs"
 	"open-switch/internal/ports"
 )
 
-const maxOutputSamples = 5 * mixInternalRate
+const maxOutputSamples = mixInternalRate / 5
 
 // audioOutput is consumed only by the room's existing 20 ms mixer clock.
 // Generation changes invalidate both buffered and subsequently arriving old audio.
 type audioOutput struct {
-	mu         sync.Mutex
-	pcm        []int16
-	generation uint64
-	finished   bool
-	completed  bool
-	drainAt    time.Time
-	remainder  []int16
+	mu             sync.Mutex
+	pcm            []int16
+	generation     uint64
+	finished       bool
+	completed      bool
+	drainAt        time.Time
+	resampler      *streamingResampler
+	rate           int
+	pendingSamples float64 // accepted samples retained inside libsoxr
 }
 
 func (o *audioOutput) write(g uint64, pcm []int16) error {
@@ -39,15 +41,34 @@ func (o *audioOutput) writeRate(g uint64, pcm []int16, rate int) error {
 	if o.finished {
 		return errors.New("output already finished")
 	}
-	combined := append(append([]int16(nil), o.remainder...), pcm...)
-	ratio := rate / mixInternalRate
-	whole := len(combined) / ratio * ratio
-	converted := resamplePCM(combined[:whole], rate, mixInternalRate)
-	if len(o.pcm)+len(converted) > maxOutputSamples {
+	if rate <= 0 {
+		return errors.New("invalid sample rate")
+	}
+	expected := float64(len(pcm)) * mixInternalRate / float64(rate)
+	if float64(len(o.pcm))+o.pendingSamples+expected > maxOutputSamples {
 		return ports.ErrAudioBackpressure
 	}
+	if o.rate != 0 && o.rate != rate {
+		return errors.New("sample rate changed inside generation")
+	}
+	o.rate = rate
+	converted := pcm
+	if rate != mixInternalRate {
+		if o.resampler == nil {
+			r, e := newStreamingResampler(rate, mixInternalRate, false)
+			if e != nil {
+				return e
+			}
+			o.resampler = r
+		}
+		var e error
+		converted, e = o.resampler.process(pcm, false)
+		if e != nil {
+			return e
+		}
+	}
 	o.pcm = append(o.pcm, converted...)
-	o.remainder = append([]int16(nil), combined[whole:]...)
+	o.pendingSamples = max(0, o.pendingSamples+expected-float64(len(converted)))
 	return nil
 }
 
@@ -58,7 +79,10 @@ func (o *audioOutput) clear(g uint64) error {
 		return errors.New("generation must increase")
 	}
 	o.generation, o.pcm, o.finished, o.completed, o.drainAt = g, nil, false, false, time.Time{}
-	o.remainder = nil
+	o.resampler.close()
+	o.resampler = nil
+	o.rate = 0
+	o.pendingSamples = 0
 	return nil
 }
 
@@ -69,9 +93,18 @@ func (o *audioOutput) finish(g uint64) error {
 		return errors.New("stale output generation")
 	}
 	o.finished = true
-	if len(o.remainder) > 0 {
-		o.pcm = append(o.pcm, o.remainder[len(o.remainder)-1])
-		o.remainder = nil
+	if o.resampler != nil {
+		tail, e := o.resampler.process(nil, true)
+		o.resampler.close()
+		o.resampler = nil
+		if e != nil {
+			return e
+		}
+		o.pcm = append(o.pcm, tail...)
+		o.pendingSamples = 0
+		if len(o.pcm) > maxOutputSamples {
+			return errors.New("resampler tail exceeded output limit")
+		}
 	}
 	return nil
 }
@@ -99,16 +132,17 @@ func (o *audioOutput) pull(now time.Time) ([]int16, uint64, bool) {
 }
 
 type applicationStream struct {
-	output audioOutput
-	opts   ports.MediaStreamOptions
-	input  chan []byte
-	events chan ports.MediaOutputEvent
-	done   chan struct{}
-	once   sync.Once
-	errMu  sync.Mutex
-	err    error
-	held   bool // guarded by room.mu
-	muted  bool
+	inputConverter pcmConverter
+	output         audioOutput
+	opts           ports.MediaStreamOptions
+	input          chan []byte
+	events         chan ports.MediaOutputEvent
+	done           chan struct{}
+	once           sync.Once
+	errMu          sync.Mutex
+	err            error
+	held           bool // guarded by room.mu
+	muted          bool
 }
 
 func (a *applicationStream) Input() <-chan []byte                  { return a.input }
@@ -116,7 +150,19 @@ func (a *applicationStream) Events() <-chan ports.MediaOutputEvent { return a.ev
 func (a *applicationStream) Done() <-chan struct{}                 { return a.done }
 func (a *applicationStream) Err() error                            { a.errMu.Lock(); defer a.errMu.Unlock(); return a.err }
 func (a *applicationStream) fail(err error) {
-	a.once.Do(func() { a.errMu.Lock(); a.err = err; a.errMu.Unlock(); close(a.done) })
+	a.once.Do(func() {
+		a.errMu.Lock()
+		a.err = err
+		a.errMu.Unlock()
+		close(a.done)
+		a.inputConverter.close()
+		a.output.mu.Lock()
+		a.output.resampler.close()
+		a.output.resampler = nil
+		a.output.pcm = nil
+		a.output.finished = true
+		a.output.mu.Unlock()
+	})
 }
 func (a *applicationStream) Close() { a.fail(nil) }
 func (a *applicationStream) Write(g uint64, raw []byte) error {
@@ -154,6 +200,9 @@ func (s *Service) OpenApplicationStream(ctx context.Context, callID, legID strin
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return nil, errs.NotFound("媒体房间已关闭")
+	}
 	if !r.mixAudio || r.mixer == nil {
 		return nil, errs.Conflict("应用音频需要混音房间，请在建立直接桥接前接入", "")
 	}
@@ -201,14 +250,21 @@ func (s *Service) StartPlayback(ctx context.Context, callID, legID, id, asset st
 	if err != nil {
 		return errs.InvalidRequest("素材不存在或 WAV 无效")
 	}
+	pcm, err = resamplePCM(pcm, rate, mixInternalRate)
+	if err != nil {
+		return fmt.Errorf("prepare playback: %w", err)
+	}
 	r := s.getRoom(callID)
 	if r == nil {
 		return errs.NotFound("媒体房间不存在")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return errs.NotFound("媒体房间已关闭")
+	}
 	if r.mixer == nil {
-		r.mixer = newScheduledRoomMixer(s.rtpPtimeDiag)
+		r.mixer = newScheduledRoomMixer()
 		go s.runRoomMixLoop(callID, r, r.mixer)
 	}
 	if !r.hasPlaybackTarget(legID) {
@@ -227,7 +283,7 @@ func (s *Service) StartPlayback(ctx context.Context, callID, legID, id, asset st
 		}
 	}
 	p := &assetPlayback{legID: legID, done: done, validateTarget: true}
-	p.output = audioOutput{pcm: resamplePCM(pcm, rate, mixInternalRate), generation: 1, finished: true}
+	p.output = audioOutput{pcm: pcm, generation: 1, finished: true}
 	r.playbacks[id] = p
 	return nil
 }
@@ -258,7 +314,7 @@ func encodePCM16(pcm []int16) []byte {
 
 // applicationFrames is called under room.mu. Input excludes all local output,
 // and each output frame enters the same codec/RTP/recording path as other legs.
-func (r *room) applicationFrames(frames map[string][]int16, now time.Time) map[string][]int16 {
+func (r *room) applicationFrames(frames map[string][]int16, now time.Time) map[string]map[string][]int16 {
 	for id, a := range r.streams {
 		select {
 		case <-a.done:
@@ -270,12 +326,28 @@ func (r *room) applicationFrames(frames map[string][]int16, now time.Time) map[s
 			continue
 		}
 		if a.opts.Direction != "sendonly" {
-			pcm := mixPCMFramesLimited(frames, id)
-			raw := encodePCM16(resamplePCM(pcm, mixInternalRate, a.opts.Input.SampleRate))
-			select {
-			case a.input <- raw:
-			default:
-				a.fail(errors.New("application input stalled for 2 seconds"))
+			allowed := map[string][]int16{}
+			for from, pcm := range frames {
+				if from != id && r.mediaForwardAllowed(from, id) {
+					allowed[from] = pcm
+				}
+			}
+			pcm := mixPCMFramesLimited(allowed, id)
+			converted, e := a.inputConverter.convert(pcm, mixInternalRate, a.opts.Input.SampleRate)
+			if e != nil {
+				a.fail(e)
+				continue
+			}
+			if len(converted) == 0 {
+				continue
+			}
+			frameSize := a.opts.Input.SampleRate / 50
+			for start := 0; start < len(converted); start += frameSize {
+				select {
+				case a.input <- encodePCM16(converted[start : start+frameSize]):
+				default:
+					a.fail(errors.New("application input stalled for 2 seconds"))
+				}
 			}
 		}
 	}
@@ -295,7 +367,7 @@ func (r *room) applicationFrames(frames map[string][]int16, now time.Time) map[s
 			}
 		}
 	}
-	targeted := map[string][]int16{}
+	targeted := map[string]map[string][]int16{}
 	for id, p := range r.playbacks {
 		if p.validateTarget && !r.hasPlaybackTarget(p.legID) {
 			delete(r.playbacks, id)
@@ -307,7 +379,10 @@ func (r *room) applicationFrames(frames map[string][]int16, now time.Time) map[s
 		}
 		pcm, _, done := p.output.pull(now)
 		if len(pcm) > 0 {
-			targeted[p.legID] = pcm
+			if targeted[p.legID] == nil {
+				targeted[p.legID] = map[string][]int16{}
+			}
+			targeted[p.legID]["asset:"+id] = pcm
 		}
 		if done {
 			delete(r.playbacks, id)
@@ -315,40 +390,6 @@ func (r *room) applicationFrames(frames map[string][]int16, now time.Time) map[s
 		}
 	}
 	return targeted
-}
-
-func addTargetAudio(mixed, extra []int16) []int16 {
-	if len(extra) == 0 {
-		return mixed
-	}
-	return mixPCMFramesLimited(map[string][]int16{"mixed": mixed, "playback": extra}, "")
-}
-
-// Direct calls retain forwarding; native playback uses the same output clock
-// and the dedicated PCMU prompt track when the voice track negotiated Opus.
-func (r *room) dispatchDirectPlayback(mix *scheduledRoomMixer, targeted map[string][]int16) {
-	for id, pcm := range targeted {
-		data := pcmToPCMU(pcm)
-		if p := r.peers[id]; p != nil && !p.held {
-			if p.audioSamp != nil {
-				_ = p.audioSamp.WriteSample(media.Sample{Data: data, Duration: rtpFrameDur})
-			} else if p.audioOut != nil {
-				pkt := mix.nextRTP(id, data)
-				if raw, err := pkt.Marshal(); err == nil {
-					_, _ = p.audioOut.Write(raw)
-				}
-			}
-		}
-		for rt := range r.sipRTP {
-			if rt.legID == id && !rt.blocked() {
-				pkt := mix.nextRTP(id, data)
-				if raw, err := pkt.Marshal(); err == nil {
-					rt.writePCMU(raw)
-				}
-			}
-		}
-		recordPromptToMix(r.rec, data)
-	}
 }
 
 func (r *room) hasPlaybackTarget(id string) bool {

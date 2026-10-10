@@ -419,7 +419,7 @@ func (u *sipUA) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		_ = dlg.Respond(sip.StatusRinging, "Ringing", nil)
 	}
 
-	applyRemoteSDP(rtpSess, offer)
+	_ = applyRemoteSDP(rtpSess, offer) // buildAnswer below rejects unsupported offers.
 	sdp := u.buildAnswerForCall(callID, rtpSess.localPort(), offer)
 	if sdp == "" {
 		_ = dlg.Respond(sip.StatusNotAcceptableHere, "Not Acceptable Here", nil)
@@ -473,7 +473,10 @@ func (u *sipUA) handleReInvite(d *sipSession, req *sip.Request, tx sip.ServerTra
 		d.mu.Unlock()
 		if len(req.Body()) > 0 {
 			offer := parseSDP(string(req.Body()))
-			applyRemoteSDP(rtpSess, offer)
+			if err := applyRemoteSDP(rtpSess, offer); err != nil {
+				_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotAcceptableHere, "Not Acceptable Here", nil))
+				return
+			}
 			if confirmed && rtpSess != nil {
 				sdp := u.buildAnswerForCall(d.callID, rtpSess.localPort(), offer)
 				if sdp == "" {
@@ -571,7 +574,12 @@ func (u *sipUA) onAck(req *sip.Request, tx sip.ServerTransaction) {
 	rtpSess := d.rtp
 	d.mu.Unlock()
 	if rtpSess != nil && len(req.Body()) > 0 {
-		applyRemoteSDP(rtpSess, parseSDP(string(req.Body())))
+		if err := applyRemoteSDP(rtpSess, parseSDP(string(req.Body()))); err != nil {
+			u.endCall(d.callID, true)
+			if u.onBye != nil {
+				u.onBye(context.Background(), d.callID)
+			}
+		}
 	}
 }
 
@@ -676,7 +684,10 @@ func (u *sipUA) onUpdate(req *sip.Request, tx sip.ServerTransaction) {
 	var body []byte
 	if confirmed && rtpSess != nil && len(req.Body()) > 0 {
 		offer := parseSDP(string(req.Body()))
-		applyRemoteSDP(rtpSess, offer)
+		if err := applyRemoteSDP(rtpSess, offer); err != nil {
+			_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotAcceptableHere, "Not Acceptable Here", nil))
+			return
+		}
 		sdp := u.buildAnswerForCall(d.callID, rtpSess.localPort(), offer)
 		body = []byte(sdp)
 	}

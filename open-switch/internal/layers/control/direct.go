@@ -500,6 +500,8 @@ func (s *Service) StopDirectRecording(ctx context.Context, callID string) (ports
 	rt.recordingID = ""
 	s.mu.Unlock()
 	payload := map[string]any{"call_id": callID, "recording_id": id, "file_path": meta.FilePath, "file_size": meta.FileSize}
+	payload["recording_semantics"], payload["channels"], payload["duration_samples"] = meta.RecordingSemantics, meta.Channels, meta.DurationSamples
+	payload["status"], payload["failure_reason"] = meta.Status, meta.FailureReason
 	if meta.SampleRateHz > 0 {
 		payload["sample_rate_hz"] = meta.SampleRateHz
 	}
