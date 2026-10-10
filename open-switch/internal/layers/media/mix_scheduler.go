@@ -292,7 +292,7 @@ func (s *Service) dispatchMixFrames(callID string, r *room, mix *scheduledRoomMi
 			g = &routeGain{}
 			mix.gains[id] = g
 		}
-		out := g.mix(sources)
+		out := g.mixWithTransitions(sources, frames)
 		mix.mu.Unlock()
 		return out
 	}
@@ -305,7 +305,9 @@ func (s *Service) dispatchMixFrames(callID string, r *room, mix *scheduledRoomMi
 			}
 			continue
 		}
-		if p.audioOut == nil || (p.held && len(targeted[id]) == 0) {
+		// Held narrowband legs still receive a room-clock frame. With no
+		// targeted prompt, routed fades the previous sources and emits silence.
+		if p.audioOut == nil {
 			continue
 		}
 		track := p.audioOut
@@ -313,9 +315,9 @@ func (s *Service) dispatchMixFrames(callID string, r *room, mix *scheduledRoomMi
 	}
 	for rt := range r.sipRTP {
 		rt.mu.Lock()
-		held, ready := rt.held, rt.conn != nil
+		ready := rt.conn != nil
 		rt.mu.Unlock()
-		if !ready || (held && len(targeted[rt.legID]) == 0) {
+		if !ready {
 			continue
 		}
 		pt := rt.currentPT()

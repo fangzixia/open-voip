@@ -42,5 +42,5 @@ for package in libsoxr-dev libspandsp-dev; do
   cp -- "$copyright_file" "$output_dir/licenses/$package.copyright"
 done
 cp -- third_party/media-sdk/OPEN_VOIP_PATCHES.md "$output_dir/media-sdk-patches.md"
-sha256sum "$output_dir/open-switch" > "$output_dir/SHA256SUMS"
+(cd -- "$output_dir" && sha256sum open-switch) > "$output_dir/SHA256SUMS"
 printf 'Built %s\n' "$output_dir/open-switch"

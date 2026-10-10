@@ -117,6 +117,7 @@ func TestMediaCapacity(t *testing.T) {
 	var submitted uint64
 	var sourceScheduling durationHistogram
 	var sourceLateMax time.Duration
+	var sourceDeliveryLateMax time.Duration
 	var healthyStartPLC, healthyEndPLC uint64
 	healthyStarted := false
 	nextProgress := start.Add(time.Minute)
@@ -132,12 +133,17 @@ func TestMediaCapacity(t *testing.T) {
 		// of silently slowing its RTP clock when a producer wake-up is late.
 		wanted := uint64(time.Since(start) / rtpFrameDur)
 		for submitted < wanted {
+			due := start.Add(time.Duration(submitted+1) * rtpFrameDur)
 			for _, m := range mixes {
 				for j, payload := range payloads {
 					m.ingestPacket(fmt.Sprint(j), &rtp.Packet{Header: rtp.Header{SSRC: uint32(j + 1), SequenceNumber: uint16(submitted), Timestamp: uint32(submitted * 160), PayloadType: uint8(j * 8)}, Payload: payload})
 				}
 			}
+			sourceDeliveryLateMax = max(sourceDeliveryLateMax, time.Since(due))
 			submitted++
+		}
+		if sourceDeliveryLateMax > 40*time.Millisecond {
+			t.Fatalf("controlled source delivery exceeded 40 ms jitter: wake_max_ms=%.2f delivery_max_ms=%.2f elapsed=%s; capacity gate cannot be established", float64(sourceLateMax)/float64(time.Millisecond), float64(sourceDeliveryLateMax)/float64(time.Millisecond), time.Since(start))
 		}
 		if time.Since(sampled) >= time.Second {
 			nowCPU := usage()
@@ -150,7 +156,7 @@ func TestMediaCapacity(t *testing.T) {
 				for _, st := range q.Streams {
 					concealed += st.PLCSamples
 					if st.OverflowSamples != 0 || st.Resyncs != 0 || st.NativeError != "" || st.BufferedSamples > defaultPlayoutCap {
-						t.Fatalf("call %d exhausted bounded pipeline: %+v", i, st)
+						t.Fatalf("call %d exhausted bounded pipeline: %+v producer_wake_max_ms=%.2f delivery_max_ms=%.2f", i, st, float64(sourceLateMax)/float64(time.Millisecond), float64(sourceDeliveryLateMax)/float64(time.Millisecond))
 					}
 				}
 				if q.RecordingStatus == "failed" {
@@ -168,7 +174,7 @@ func TestMediaCapacity(t *testing.T) {
 				healthyEndPLC = concealed
 			}
 			if time.Now().After(nextProgress) {
-				t.Logf("progress elapsed=%s latest_cpu_percent=%.2f plc_samples=%d submitted_frames=%d", time.Since(start).Round(time.Second), cpu[len(cpu)-1], concealed, submitted)
+				t.Logf("progress elapsed=%s latest_cpu_percent=%.2f plc_samples=%d submitted_frames=%d producer_wake_max_ms=%.2f delivery_max_ms=%.2f", time.Since(start).Round(time.Second), cpu[len(cpu)-1], concealed, submitted, float64(sourceLateMax)/float64(time.Millisecond), float64(sourceDeliveryLateMax)/float64(time.Millisecond))
 				nextProgress = time.Now().Add(time.Minute)
 			}
 		}
@@ -211,7 +217,7 @@ func TestMediaCapacity(t *testing.T) {
 	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &u)
 	t.Logf("calls=%d duration=%s vcpu_affinity_external gomaxprocs=4 cpu_p95_percent=%.2f scheduler_worst_call_p99_ms=%d udp_packets=%d bad_packets=%d plc_samples=%d peak_rss_kb=%d", calls, duration, p95, maxP99, received.Load(), badPackets.Load(), plc, u.Maxrss)
 	t.Logf("first_voice_loopback_delay_p95_ms=%.2f p99_ms=%.2f streams=%d healthy_interval_plc_samples=%d", delayP95, delayP99, len(firstVoice), healthyEndPLC-healthyStartPLC)
-	t.Logf("producer_lateness_p99_ms=%d max_ms=%.2f submitted_frames=%d", sourceScheduling.percentile(.99), float64(sourceLateMax)/float64(time.Millisecond), submitted)
+	t.Logf("producer_lateness_p99_ms=%d max_ms=%.2f delivery_max_ms=%.2f submitted_frames=%d", sourceScheduling.percentile(.99), float64(sourceLateMax)/float64(time.Millisecond), float64(sourceDeliveryLateMax)/float64(time.Millisecond), submitted)
 	if sourceLateMax > 40*time.Millisecond {
 		t.Fatal("controlled producer exceeded 40 ms jitter budget; this run cannot establish the loss-free capacity gate")
 	}

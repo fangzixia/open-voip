@@ -73,6 +73,12 @@ func newLegPlayoutBuffer(capSamples int) *legPlayoutBuffer {
 	return b
 }
 func rtpSampleIndex(ts, anchor uint32) int64 { return int64(int32(ts - anchor)) }
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
 func (b *legPlayoutBuffer) resetLocked() {
 	b.generation++
 	b.anchored = false
@@ -144,6 +150,13 @@ func (b *legPlayoutBuffer) accept(packets []jitter.ExtPacket) {
 		}
 		start := b.position
 		end := start + int64(len(pcm))
+		// Before playback starts, use all ordered arrivals to estimate the RTP
+		// clock's earliest observed phase. A delayed first packet must not add
+		// its network jitter permanently on top of the shared reserve.
+		if b.cursor == 0 && !b.readyAt.IsZero() && !ext.ReceivedAt.IsZero() && start >= 0 && start <= int64(b.capSamples) {
+			phase := ext.ReceivedAt.Add(-time.Duration(start) * time.Second / mixClockRate)
+			b.readyAt = minTime(b.readyAt, phase.Add(inputPCMReserve))
+		}
 		// A persistent latency step can leave every subsequent ordered packet
 		// behind the cursor. Rate correction handles clock drift, not a new
 		// network phase. Discard expired audio and re-anchor future playback.

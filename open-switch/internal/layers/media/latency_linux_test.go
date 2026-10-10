@@ -91,6 +91,7 @@ func TestMediaContinuousLatencyWithJitter(t *testing.T) {
 			_ = receiver.Close()
 			<-done
 			var delays []float64
+			previousPosition := -1
 			for _, observation := range observations {
 				center := int(observation.at.Sub(start).Seconds()*8000) - 480
 				low, high := max(0, center-800), min(len(reference)-160, center+320)
@@ -123,11 +124,17 @@ func TestMediaContinuousLatencyWithJitter(t *testing.T) {
 				if best < .97 || position < 1600 || position >= len(reference)-1600 {
 					continue
 				}
+				if previousPosition >= 0 && (position-previousPosition < 140 || position-previousPosition > 180) {
+					t.Fatalf("steady PCM repeated or skipped: sample positions %d -> %d", previousPosition, position)
+				}
+				previousPosition = position
 				delays = append(delays, float64(observation.at.UnixNano()-arrivalTimes[position/160].Load())/1e6)
-				if len(delays) < 4 { t.Logf("matched at=%s sample=%d packet_arrival=%s score=%.4f", observation.at.Sub(start), position, time.Unix(0,arrivalTimes[position/160].Load()).Sub(start), best) }
+				if len(delays) < 4 {
+					t.Logf("matched at=%s sample=%d packet_arrival=%s score=%.4f", observation.at.Sub(start), position, time.Unix(0, arrivalTimes[position/160].Load()).Sub(start), best)
+				}
 			}
 			sort.Float64s(delays)
-			if len(delays) < count-30 {
+			if len(delays) < count-24 {
 				t.Fatalf("insufficient correlated steady windows: %d/%d", len(delays), count)
 			}
 			p95, p99 := delays[int(math.Ceil(float64(len(delays))*.95))-1], delays[int(math.Ceil(float64(len(delays))*.99))-1]

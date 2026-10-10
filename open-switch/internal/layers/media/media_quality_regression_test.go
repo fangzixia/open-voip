@@ -65,6 +65,26 @@ func TestPlayoutDuplicateDoesNotBecomeHugeLoss(t *testing.T) {
 		t.Fatalf("duplicate incorrectly counted as loss: %+v", stats)
 	}
 }
+
+func TestPlayoutStartupReserveUsesOrderedArrivalClock(t *testing.T) {
+	b := newLegPlayoutBuffer(defaultPlayoutCap)
+	defer b.close()
+	base := time.Now()
+	b.readyAt = base.Add(34*time.Millisecond + inputPCMReserve)
+	for i, arrival := range []time.Duration{34 * time.Millisecond, 40 * time.Millisecond, 54 * time.Millisecond} {
+		b.accept([]jitter.ExtPacket{{Packet: &rtp.Packet{Header: rtp.Header{SSRC: 1, SequenceNumber: uint16(i), Timestamp: uint32(i * 160), PayloadType: 127}, Payload: encodePCM16(constantPCM(1000))}, ReceivedAt: base.Add(arrival)}})
+	}
+	if want := base.Add(14*time.Millisecond + inputPCMReserve); !b.readyAt.Equal(want) {
+		t.Fatalf("first network delay stacked with reserve: got %s want %s", b.readyAt.Sub(base), want.Sub(base))
+	}
+	// Once samples are consumed, a late arrival cannot move the playback epoch.
+	b.cursor = 160
+	ready := b.readyAt
+	b.accept([]jitter.ExtPacket{{Packet: &rtp.Packet{Header: rtp.Header{SSRC: 1, SequenceNumber: 3, Timestamp: 480, PayloadType: 127}, Payload: encodePCM16(constantPCM(1000))}, ReceivedAt: base.Add(60 * time.Millisecond)}})
+	if !b.readyAt.Equal(ready) {
+		t.Fatal("active epoch moved during playback")
+	}
+}
 func TestOutputHeadroomAndRouteTransition(t *testing.T) {
 	g := &routeGain{}
 	one := g.mix(map[string][]int16{"a": constantPCM(32767)})
