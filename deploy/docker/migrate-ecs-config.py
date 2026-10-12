@@ -73,6 +73,9 @@ switch = set_scalar(switch, "events_callback_url",
 
 call = set_scalar(call, "listen", f"0.0.0.0:{args.call_port}")
 call = set_scalar(call, "switch_base_url", f"http://127.0.0.1:{args.switch_port}")
+# Removed in current open-call; legacy configs fail YAML parse in new images.
+call = re.sub(r"(?m)^  username:.*\n", "", call)
+call = re.sub(r"(?m)^  password:.*\n", "", call)
 
 switch_dst.parent.mkdir(parents=True, exist_ok=True)
 call_dst.parent.mkdir(parents=True, exist_ok=True)
