@@ -55,6 +55,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Avoid stale embed/migration layers mismatching production DB checksums.
+          no-cache: ${{ matrix.name == 'open-switch' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |

@@ -52,11 +52,20 @@ for svc in open-switch open-call; do
   fi
 done
 
-echo "==> Pulling images..."
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull open-switch open-call
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE=(docker compose)
+else
+  COMPOSE=(docker-compose)
+fi
+
+echo "==> Pulling images (skip if building locally)..."
+if ! "${COMPOSE[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull open-switch open-call; then
+  echo "Pull failed; building images on host..."
+  "${COMPOSE[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" build open-switch open-call
+fi
 
 echo "==> Starting containers..."
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d open-switch open-call
+"${COMPOSE[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d open-switch open-call
 
 echo "==> Health checks..."
 for _ in $(seq 1 30); do
