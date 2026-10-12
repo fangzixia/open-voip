@@ -34,3 +34,10 @@ Thumbs.db
 /open-call/logs/
 /open-switch/logs/
 /scripts/
+
+# Container runtime configuration, credentials and release artifacts
+/.env
+/runtime/
+/deploy/docker/runtime/
+/deploy/docker/releases/
+deploy/docker/__pycache__/

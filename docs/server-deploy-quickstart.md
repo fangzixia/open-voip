@@ -2,6 +2,8 @@
 
 目标主机默认：`8.153.98.134`（可通过环境变量 `DEPLOY_HOST` 覆盖）。
 
+**Docker 部署（推荐新方案）**：后端改用 Compose + GHCR 镜像，数据库与 Nginx 仍在宿主机，见 [server-deploy-docker-ecs.md](./server-deploy-docker-ecs.md)。下文主要为 **systemd 二进制 + push.py** 流程。
+
 ## 目录约定（服务器）
 
 | 路径 | 说明 |
