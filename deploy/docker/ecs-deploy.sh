@@ -6,6 +6,11 @@ set -euo pipefail
 ROOT="${OPEN_VOIP_ROOT:-/opt/open-voip/src}"
 ENV_FILE="${ENV_FILE:-/opt/open-voip/.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-${ROOT}/compose.yml}"
+COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE:-${ROOT}/deploy/docker/compose.ecs-prod-binary.override.yml}"
+COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+if [[ -f "${COMPOSE_OVERRIDE}" ]]; then
+  COMPOSE_ARGS+=(-f "${COMPOSE_OVERRIDE}")
+fi
 
 if [[ ! -f "${COMPOSE_FILE}" ]]; then
   echo "compose file not found: ${COMPOSE_FILE}" >&2
@@ -59,13 +64,13 @@ else
 fi
 
 echo "==> Pulling images (skip if building locally)..."
-if ! "${COMPOSE[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull open-switch open-call; then
+if ! "${COMPOSE[@]}" --env-file "${ENV_FILE}" "${COMPOSE_ARGS[@]}" pull open-switch open-call; then
   echo "Pull failed; building images on host..."
-  "${COMPOSE[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" build open-switch open-call
+  "${COMPOSE[@]}" --env-file "${ENV_FILE}" "${COMPOSE_ARGS[@]}" build open-switch open-call
 fi
 
 echo "==> Starting containers..."
-"${COMPOSE[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d open-switch open-call
+"${COMPOSE[@]}" --env-file "${ENV_FILE}" "${COMPOSE_ARGS[@]}" up -d open-switch open-call
 
 echo "==> Health checks..."
 for _ in $(seq 1 30); do

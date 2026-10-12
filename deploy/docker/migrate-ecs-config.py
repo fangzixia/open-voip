@@ -30,8 +30,12 @@ def set_server_listen(text, port):
     return text
 
 
-def write_private(path, text):
+def write_private(path, text, overwrite=False):
     path.parent.mkdir(parents=True, exist_ok=True)
+    if overwrite and path.exists():
+        path.write_text(text, encoding="utf-8", newline="\n")
+        os.chmod(path, 0o600)
+        return
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as out:
         out.write(text)
@@ -60,9 +64,11 @@ if not Path(args.switch_src).is_file():
 if not Path(args.call_src).is_file():
     parser.error(f"Call config not found: {args.call_src}")
 
-for dst in (switch_dst, call_dst, env_file):
+for dst in (switch_dst, call_dst):
     if dst.exists() and not args.force:
         parser.error(f"{dst} exists; pass --force to overwrite")
+if env_file.exists() and not args.force:
+    parser.error(f"{env_file} exists; pass --force to overwrite")
 
 switch = Path(args.switch_src).read_text(encoding="utf-8")
 call = Path(args.call_src).read_text(encoding="utf-8")
@@ -127,6 +133,6 @@ CALL_GID={gid}
 SWITCH_HEALTH_URL=http://127.0.0.1:{args.switch_port}/health
 CALL_HEALTH_URL=http://127.0.0.1:{args.call_port}/health/ready
 """
-write_private(env_file, env)
+write_private(env_file, env, overwrite=args.force)
 print(f"Migrated configs to {runtime} and wrote {env_file}")
 print("database.dsn unchanged. Ensure security group blocks public 8080/8082.")
