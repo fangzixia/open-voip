@@ -18,6 +18,8 @@ open-switch/**/*.test
 open-switch/coverage.out
 open-switch/data/
 
+/call-bin
+
 open-call-web/node_modules/
 open-call-web/dist/
 open-call-web/.env
