@@ -179,7 +179,8 @@ wait_call_health() {
 ecs_switch() {
   require_env_file
   load_env
-  export PULL=1
+  PULL="${PULL:-1}"
+  export PULL
 
   local backup_dir="/opt/open-voip/backups/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "${backup_dir}"
@@ -205,7 +206,8 @@ ecs_switch() {
 ecs_call() {
   require_env_file
   load_env
-  export PULL=1
+  PULL="${PULL:-1}"
+  export PULL
 
   local backup_dir="/opt/open-voip/backups/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "${backup_dir}"
