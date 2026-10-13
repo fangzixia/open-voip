@@ -17,4 +17,4 @@ open-voip/
 
 - 双服务边界、SIP 中继与坐席配置、上线验收：[SIP 上线验收](docs/sip-production-acceptance.md)。
 - 服务器一键发布与 SSH 调试：[server-deploy-quickstart.md](docs/server-deploy-quickstart.md)。
-- ECS Docker（Switch + Call 容器，宿主机 Postgres/Nginx）：[server-deploy-docker-ecs.md](docs/server-deploy-docker-ecs.md)。
+- ECS Docker（Switch + Call 两容器、`docker run`，Call 内嵌 Web，宿主机 Postgres/Nginx）：[server-deploy-docker-ecs.md](docs/server-deploy-docker-ecs.md)。

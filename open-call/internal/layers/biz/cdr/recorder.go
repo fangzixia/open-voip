@@ -21,13 +21,18 @@ import (
 
 // RecordingSummary 通话关联的录音元数据（嵌在话单列表项中）。
 type RecordingSummary struct {
-	ID        string     `json:"id"`
-	CallID    string     `json:"call_id"`
-	MediaType string     `json:"media_type"`
-	Format    string     `json:"format"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	FileSize  int64      `json:"file_size"`
+	RecordingSemantics string     `json:"recording_semantics"`
+	Status             string     `json:"status"`
+	FailureReason      string     `json:"failure_reason,omitempty"`
+	DurationSamples    int64      `json:"duration_samples"`
+	SampleRateHz       int        `json:"sample_rate_hz,omitempty"`
+	ID                 string     `json:"id"`
+	CallID             string     `json:"call_id"`
+	MediaType          string     `json:"media_type"`
+	Format             string     `json:"format"`
+	StartedAt          time.Time  `json:"started_at"`
+	EndedAt            *time.Time `json:"ended_at,omitempty"`
+	FileSize           int64      `json:"file_size"`
 }
 
 // Item 话单列表项。
@@ -284,13 +289,18 @@ func escapeLike(s string) string {
 
 func recordingSummary(r models.Recording) RecordingSummary {
 	return RecordingSummary{
-		ID:        r.ID,
-		CallID:    r.CallID,
-		MediaType: r.MediaType,
-		Format:    strings.TrimPrefix(strings.ToLower(filepath.Ext(r.FilePath)), "."),
-		StartedAt: r.StartedAt,
-		EndedAt:   r.EndedAt,
-		FileSize:  r.FileSize,
+		RecordingSemantics: r.RecordingSemantics,
+		Status:             r.Status,
+		FailureReason:      r.FailureReason,
+		DurationSamples:    r.DurationSamples,
+		SampleRateHz:       r.SampleRateHz,
+		ID:                 r.ID,
+		CallID:             r.CallID,
+		MediaType:          r.MediaType,
+		Format:             strings.TrimPrefix(strings.ToLower(filepath.Ext(r.FilePath)), "."),
+		StartedAt:          r.StartedAt,
+		EndedAt:            r.EndedAt,
+		FileSize:           r.FileSize,
 	}
 }
 

@@ -8,6 +8,7 @@ export function adminViewActions(host, operations) {
         host.dispatchEvent(new CustomEvent("staff-navigate", { detail: { id }, bubbles: true, composed: true }));
         return;
       }
+      operations.closePlayer?.();
       if (host.feedback) host.feedback.begin();
       else { host.error = ""; host.notice = ""; }
       host.nav = id;

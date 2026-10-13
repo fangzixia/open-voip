@@ -5,11 +5,11 @@ ENV CGO_ENABLED=1 GOPROXY=${GOPROXY}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libsoxr-dev libspandsp-dev \
     && rm -rf /var/lib/apt/lists/*
-WORKDIR /src/open-switch
-COPY open-switch/go.mod open-switch/go.sum ./
-COPY open-switch/third_party/media-sdk ./third_party/media-sdk
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY third_party/media-sdk ./third_party/media-sdk
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY open-switch/ ./
+COPY . ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     bash tools/build-linux.sh /out
 

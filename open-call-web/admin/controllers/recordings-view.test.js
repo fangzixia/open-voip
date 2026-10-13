@@ -9,12 +9,29 @@ function text(value) {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
-test("partial recordings expose failure and their actual sample duration", () => {
-  const output = text(renderRecs({ recs: [{ id: "partial", recording_semantics: "conversation_mono_v1", status: "failed", failure_reason: "磁盘写入失败", duration_samples: 9600, sample_rate_hz: 8000, format: "wav" }] }, {}));
+test("recording table exposes four media columns and status", () => {
+  const output = text(renderRecs({
+    me: { permissions: ["recordings.download"] },
+    recs: [{
+      id: "partial",
+      recording_semantics: "conversation_mono_v1",
+      status: "failed",
+      failure_reason: "磁盘写入失败",
+      duration_samples: 9600,
+      sample_rate_hz: 8000,
+      format: "wav",
+      file_size: 2048,
+    }],
+  }, {}));
+  assert.match(output, /录音格式/);
+  assert.match(output, /录音大小/);
+  assert.match(output, /录音时长/);
   assert.match(output, /完整通话（单声道）/);
   assert.match(output, /失败 · 磁盘写入失败/);
   assert.match(output, /1\.20 秒/);
-  assert.doesNotMatch(output, /已完成/);
+  assert.match(output, /2\.0 KB/);
+  assert.match(output, /WAV/);
+  assert.match(output, /播放/);
 });
 
 test("legacy content and ongoing or unknown status remain distinguishable", () => {

@@ -97,6 +97,71 @@ export const componentStyles = css`
     margin-top: var(--ov-space-3);
   }
 
+  .recording-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ov-space-2);
+  }
+
+  .recording-stack__row {
+    min-height: var(--ov-control-height);
+    display: flex;
+    align-items: center;
+  }
+
+  .recording-play-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ov-space-1);
+  }
+
+  .recording-play-actions .recording-dl {
+    font-size: 12px;
+    padding: 2px 6px;
+  }
+
+  .recording-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--ov-space-6);
+  }
+
+  .recording-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    background: rgba(32, 37, 56, 0.45);
+    cursor: pointer;
+  }
+
+  .recording-modal__panel {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 720px;
+    padding: var(--ov-space-5);
+    border-radius: var(--ov-radius-lg);
+    background: var(--ov-surface);
+    box-shadow: var(--ov-shadow-md);
+  }
+
+  .recording-modal__media {
+    margin-top: 0;
+  }
+
+  .recording-modal__actions {
+    margin-top: var(--ov-space-4);
+    display: flex;
+    justify-content: flex-end;
+  }
+
   .page-ivr {
     min-height: 0;
   }

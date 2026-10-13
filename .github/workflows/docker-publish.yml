@@ -19,9 +19,11 @@ jobs:
       matrix:
         include:
           - name: open-switch
-            dockerfile: open-switch/Dockerfile
+            context: open-switch
+            dockerfile: Dockerfile
             image: open-voip-open-switch
           - name: open-call
+            context: .
             dockerfile: open-call/Dockerfile
             image: open-voip-open-call
     steps:
@@ -50,7 +52,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}

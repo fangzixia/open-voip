@@ -15,6 +15,7 @@ import { renderQueues } from "./queues.js";
 import { renderHooks } from "./webhooks.js";
 import { renderIdentity } from "./identity.js";
 import { renderRuntime } from "./runtime.js";
+import { renderRecordingPlayerModal } from "../../shared/components/recording-player-modal.js";
 
 export const NAV = [
   { id: "overview", label: "总览", group: "功能导航" },
@@ -32,8 +33,18 @@ export const NAV = [
 export function renderAppContent(host, actions) {
   const page = (render, stateKeys, actionKeys) =>
     render(project(host, stateKeys), project(actions, actionKeys));
+  const player = {
+    open: host.playerOpen,
+    loading: host.playerLoading,
+    error: host.playerError,
+    playUrl: host.playUrl,
+    playType: host.playType || "",
+    onClose: actions.closePlayer,
+    onRetry: host.playerRetryId ? () => actions.playRec(host.playerRetryId) : undefined,
+  };
   return html`
     ${renderFeedback({ error: host.error, notice: host.notice })}
+    ${renderRecordingPlayerModal(player)}
     ${host.nav === "overview" ? page(renderOverview,
       ["agents", "cdr", "cdrCaller", "cdrResult", "hist", "live", "me", "queues", "status"],
       ["exportCdr", "filteredCdr", "idleAgents", "navigate", "resetCdr", "search", "setCdrCaller", "setCdrResult", "waiting"]) : ""}
@@ -49,7 +60,7 @@ export function renderAppContent(host, actions) {
     ${host.nav === "dids" ? page(renderDids,
       ["didForm", "dids", "ivrs", "me", "queues"], ["saveDid", "updateDidForm"]) : ""}
     ${host.nav === "cdr" ? page(renderCdrPage,
-      ["cdrCaller", "cdrPage", "cdrPageSize", "cdrResult", "cdrTotal", "me", "playType", "playUrl", "qaCallId", "qaLabel", "wrapUps"],
+      ["cdrCaller", "cdrPage", "cdrPageSize", "cdrResult", "cdrTotal", "me", "qaCallId", "qaLabel", "wrapUps"],
       ["cdrNext", "cdrPrev", "downloadRec", "exportCdr", "filteredCdr", "playRec", "qa", "resetCdr", "search", "setCdrCaller", "setCdrResult", "setQaCallId", "setQaLabel"]) : ""}
     ${host.nav === "ivr" ? page(renderIvr, ["ivrs", "queues"], ["load"]) : ""}
     ${host.nav === "webhooks" ? page(renderHooks,

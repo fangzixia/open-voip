@@ -104,6 +104,10 @@ export class AdminApp extends LitElement {
     wrapUps: { type: Array },
     playUrl: { type: String },
     playType: { type: String },
+    playerOpen: { type: Boolean },
+    playerLoading: { type: Boolean },
+    playerError: { type: String },
+    playerRetryId: { type: String },
     bindAgentId: { type: String },
     bindSkillId: { type: String },
     nav: { type: String },
@@ -156,6 +160,10 @@ export class AdminApp extends LitElement {
     this.wrapUps = [];
     this.playUrl = "";
     this.playType = "";
+    this.playerOpen = false;
+    this.playerLoading = false;
+    this.playerError = "";
+    this.playerRetryId = "";
     this.bindAgentId = "";
     this.bindSkillId = "";
     this.nav = "overview";
@@ -214,6 +222,7 @@ export class AdminApp extends LitElement {
   }
 
   disconnectedCallback() {
+    this.#closePlayer();
     super.disconnectedCallback();
     this._unbindApi?.();
     clearInterval(this.#clockTimer);
@@ -328,13 +337,37 @@ export class AdminApp extends LitElement {
     });
   }
 
+  #closePlayer() {
+    if (this.playUrl) URL.revokeObjectURL(this.playUrl);
+    this.playUrl = "";
+    this.playType = "";
+    this.playerOpen = false;
+    this.playerLoading = false;
+    this.playerError = "";
+    this.playerRetryId = "";
+  }
+
   async #playRec(id) {
-    await this.#run(async () => {
+    this.playerRetryId = id;
+    this.playerOpen = true;
+    this.playerLoading = true;
+    this.playerError = "";
+    if (this.playUrl) {
+      URL.revokeObjectURL(this.playUrl);
+      this.playUrl = "";
+      this.playType = "";
+    }
+    try {
       const blob = await fetchRecordingBlob(id);
-      if (this.playUrl) URL.revokeObjectURL(this.playUrl);
+      if (this.playerRetryId !== id) return;
       this.playUrl = URL.createObjectURL(blob);
-      this.playType = blob.type;
-    });
+      this.playType = blob.type || "";
+      this.playerLoading = false;
+    } catch (e) {
+      if (this.playerRetryId !== id) return;
+      this.playerLoading = false;
+      this.playerError = e instanceof Error ? e.message : "无法播放录音";
+    }
   }
 
   async #downloadRec(id, format = "") {
@@ -460,6 +493,7 @@ export class AdminApp extends LitElement {
       ...identityActions(this, () => this.#loadNav("identity")),
       logout: (...args) => this.#logout(...args),
       playRec: (...args) => this.#playRec(...args),
+      closePlayer: (...args) => this.#closePlayer(...args),
       qa: (...args) => this.#qa(...args),
       saveDid: (...args) => this.#saveDid(...args),
       toggleVip: (...args) => this.#toggleVip(...args),

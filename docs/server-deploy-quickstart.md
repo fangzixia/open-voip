@@ -2,7 +2,7 @@
 
 目标主机默认：`8.153.98.134`（可通过环境变量 `DEPLOY_HOST` 覆盖）。
 
-**Docker 部署（推荐新方案）**：后端改用 Compose + GHCR 镜像，数据库与 Nginx 仍在宿主机，见 [server-deploy-docker-ecs.md](./server-deploy-docker-ecs.md)。下文主要为 **systemd 二进制 + push.py** 流程。
+**Docker 部署（推荐新方案）**：Switch / Call 各用 `docker run` + GHCR 镜像（Call 内嵌前端），数据库与边缘 Nginx 仍在宿主机，见 [server-deploy-docker-ecs.md](./server-deploy-docker-ecs.md)。下文主要为 **systemd 二进制 + push.py** 流程。
 
 ## 目录约定（服务器）
 
@@ -11,8 +11,7 @@
 | `/opt/open-voip/src` | 从本机同步的完整源码（便于 SSH 上改代码、看日志） |
 | `/opt/open-switch` | 软交换二进制 + `config.yml` + 录音数据 |
 | `/opt/open-call` | 呼叫中心二进制 + `config.yml`（进程用户 `openvoip`） |
-| `/var/www/open-call-web` | 前端 `npm run build` 产物 |
-| `/etc/nginx/conf.d/open-voip.conf` | Nginx 反代 `/api`、`/health` 与静态页 |
+| `/etc/nginx/conf.d/open-voip.conf` | Nginx 反代至 open-call 容器 Web 端口（默认 `127.0.0.1:8088`） |
 
 **注意：** 部署脚本**不会覆盖**服务器上已有的 `config.yml` 与数据库，只更新二进制与前端。
 
