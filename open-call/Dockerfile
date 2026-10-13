@@ -11,6 +11,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go build -trimpath -o /out/open-call ./cmd/open-call
 
 FROM ${NODE_IMAGE} AS web
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
 WORKDIR /src/open-call-web
 COPY open-call-web/package.json open-call-web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
