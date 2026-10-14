@@ -1,0 +1,20 @@
+FROM nginx:1.28-bookworm
+# ECS / 国内构建：默认 Debian 源常超时
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+      /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl tzdata ffmpeg gettext-base gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 openvoip \
+    && useradd --uid 10001 --gid openvoip --no-create-home openvoip \
+    && mkdir -p /opt/open-call /etc/nginx/templates \
+    && rm -f /etc/nginx/sites-enabled/default \
+    && chown openvoip:openvoip /opt/open-call
+COPY open-call-web/docker/default.conf.template /etc/nginx/templates/default.conf.template
+COPY open-call/docker/entrypoint.sh /usr/local/bin/open-call-entrypoint.sh
+COPY open-call-web/dist /usr/share/nginx/html
+COPY call-bin /usr/local/bin/open-call
+RUN chmod 755 /usr/local/bin/open-call-entrypoint.sh /usr/local/bin/open-call
+WORKDIR /opt/open-call
+ENV WEB_LISTEN=0.0.0.0:8088 CALL_HTTP_UPSTREAM=127.0.0.1:8080
+ENTRYPOINT ["/usr/local/bin/open-call-entrypoint.sh"]

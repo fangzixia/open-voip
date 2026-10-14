@@ -46,6 +46,9 @@ require_docker() {
 }
 
 load_env() {
+  local cli_image_tag="${IMAGE_TAG:-}"
+  local cli_pull="${PULL:-}"
+
   ENV_FILE="${ENV_FILE:-/opt/open-voip/.env}"
   if [[ ! -f "${ENV_FILE}" && -f "${REPO_ROOT}/.env" ]]; then
     ENV_FILE="${REPO_ROOT}/.env"
@@ -56,6 +59,9 @@ load_env() {
     source "${ENV_FILE}"
     set +a
   fi
+
+  [[ -n "${cli_image_tag}" ]] && IMAGE_TAG="${cli_image_tag}"
+  [[ -n "${cli_pull}" ]] && PULL="${cli_pull}"
 
   GHCR_REGISTRY="${GHCR_REGISTRY:-ghcr.io/fangzixia}"
   IMAGE_TAG="${IMAGE_TAG:-main}"
